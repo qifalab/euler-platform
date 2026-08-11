@@ -136,7 +136,7 @@ flowchart TB
         direction LR
         MW_NACOS["Nacos<br/>注册+配置(dev/staging/prod)"]
         MW_KAFKA["Kafka<br/>事件/计量管道(cloud.* topic)"]
-        MW_MYSQL["MySQL 分库分表<br/>ShardingSphere(account_id 分片)"]
+        MW_MYSQL["MySQL 分库分表<br/>Vitess (vtgate, account_id 分片)"]
         MW_REDIS["Redis Cluster"]
         MW_ES["ES(搜索)+ trace-ES(OAP 专用,独立集群)"]
     end
@@ -317,7 +317,7 @@ sequenceDiagram
 | **异步写路径** | 业务服务 → Kafka(`cloud.*` topic)→ 下游域消费落库/编排 | Protobuf 消息 | 端到端 ≤ 5s(开通类任务 P95) |
 | **数据面路径** | 租户应用 → 数据面接入点(rc-* 资源节点) | S3/gRPC/TCP/隧道 | 产品级 SLO,与管控面无关 |
 
-南北向统一 HTTP/OpenAPI(JSON),东西向统一 gRPC + Protobuf(IDL-first,跨 Java/Go 生成),与选型决策表一致(《10-research-and-selection-decisions.md》§4.2),落地详见《04-middleware-infrastructure.md》。
+南北向统一 HTTP/OpenAPI(JSON),东西向统一 gRPC + Protobuf(IDL-first,跨 Go 服务生成),与选型决策表一致(《10-research-and-selection-decisions.md》§4.2),落地详见《04-middleware-infrastructure.md》。
 
 ### 2.4 关键选型速览(与全书决策表对齐)
 
@@ -325,8 +325,8 @@ sequenceDiagram
 
 | 层 | 决策(结论) | 核心理由 | 备选 | 改选条件 |
 |---|---|---|---|---|
-| 网关层 | **APISIX** | 全动态配置、插件热加载、语言中立统一承接 Java/Go;限流/认证/灰度插件成熟、K8s 友好 | Spring Cloud Gateway | 想缩减运维面、完全复用 Spring+Nacos 栈时;Kong 仅在需商业支持时 |
-| 后端框架 | **Spring Cloud(业务域)+ Kratos(Go 域)** 双栈 | Java 承载订单/计费等强事务复杂域;Go 承载 BFF/接入/Operator 等高并发资源敏感域;统一注册 Nacos、东西向 gRPC 对齐 | Go-Zero | Go 团队需要开箱即用(内置缓存/限流/代码生成)快速起步 |
+| 网关层 | **APISIX** | 全动态配置、插件热加载、语言中立统一承接 Go 服务;限流/认证/灰度插件成熟、K8s 友好 | Kong | 需商业支持合同时评估 Kong |
+| 后端框架 | **Kratos(统一 Go)** | 单语言收敛运维面与技能栈;统一注册 Nacos、东西向 gRPC 对齐 | Go-Zero | Go 团队需要开箱即用(内置缓存/限流/代码生成)快速起步;一旦定下不允许两框架混用 |
 | 注册/配置 | **Nacos 一体化** | 一套 HA 集群一套权限,运维成本减半;双语言 SDK 成熟;namespace 三套(dev/staging/prod,联调合并入 dev)、Group=应用名覆盖多环境 | Apollo(配置) | 需合规级变更审批 + IP 级灰度 + 数千配置项且已有 Apollo 运维经验(三个条件同时满足) |
 | 前端微前端 | **Wujie** | WebComponent + 沙箱隔离好、框架无关、对 Vite 子应用友好 | qiankun | 已有 qiankun 存量或追求最大社区 |
 | 容器底座 | **Kubernetes** | 同时是管控面运行底座与数据面资源池,一套平台两面复用 | 无(候选池内唯一) | — |
@@ -395,10 +395,10 @@ flowchart LR
 | 分组 | 服务 | 语言/框架 |
 |---|---|---|
 | 接入 | 控制台 BFF(console-bff)、站点 BFF(site-bff) | Go / Kratos |
-| 账号权限 | svc-iam、svc-audit、svc-kms | Java / Spring Cloud |
-| 交易账务 | svc-order、svc-catalog(代金券最小实现)、svc-payment、svc-metering(Go)、svc-billing | Java / Spring Cloud(svc-metering 为 Go) |
-| 资源管控 | svc-orchestrator(资源生命周期唯一所有者)、svc-api-meta、各产品 rc-* 数据面控制器 | Java 编排 + Go(K8s Operator 侧) |
-| 支撑 | svc-notify、svc-ticket、svc-quota、svc-workflow、svc-monitor、alert-engine(Go)、alert-center(Java) | Java / Spring Cloud(alert-engine 为 Go) |
+| 账号权限 | svc-iam、svc-audit、svc-kms | Go / Kratos |
+| 交易账务 | svc-order、svc-catalog(代金券最小实现)、svc-payment、svc-metering、svc-billing | Go / Kratos |
+| 资源管控 | svc-orchestrator(资源生命周期唯一所有者)、svc-api-meta、各产品 rc-* 数据面控制器 | Go / Kratos |
+| 支撑 | svc-notify、svc-ticket、svc-quota、svc-workflow、svc-monitor、alert-engine、alert-center | Go / Kratos |
 
 > OpenAPI 入口由 APISIX + svc-api-meta 承担,**不单设 OpenAPI BFF 服务**;APISIX 完成签名验证/限流/路由后,请求直达对应业务服务。
 
@@ -413,7 +413,7 @@ flowchart LR
 
 | 数据类别 | 典型内容 | 存储选型 | 关键设计点 |
 |---|---|---|---|
-| 交易与账务(OLTP) | 订单、账单、余额流水(ledger 归 trade_db) | MySQL 分库分表(ShardingSphere-JDBC) | account_id 为全局分片键;balance 与余额流水归 trade_db ledger(见《04-middleware-infrastructure.md》§6.3),account 表只存身份属性;余额流水只增不改 |
+| 交易与账务(OLTP) | 订单、账单、余额流水(ledger 归 trade_db) | MySQL 分库分表(Vitess/vtgate) | account_id 为全局分片键;balance 与余额流水归 trade_db ledger(见《04-middleware-infrastructure.md》§6.3),account 表只存身份属性;余额流水只增不改 |
 | 资源元数据 | 全产品资源清单、标签、状态机(resource_instance 台账) | MySQL 分库分表 + Redis 缓存 | 统一资源 ID 格式(见附录 A 全局标识规范);account_id 分片、region_id 必备字段但不作分片键;台账唯一写入口=svc-orchestrator |
 | 计量数据 | 逐资源逐计量项原始记录 | Kafka(`cloud.metering.usage.raw`)→ ClickHouse(明细)+ MySQL(汇总账单) | 幂等键去重;小时级预聚合;topic 清单见《04-middleware-infrastructure.md》§5.4 |
 | 日志 | 应用日志/审计日志/数据面访问日志 | Vector → ClickHouse(分区 + TTL 分层) | 强制携带 trace_id/service/instance;审计合规基线 ≥180 天热存 + MinIO 冷备,付费档 365 天/18 个月 |
@@ -430,7 +430,7 @@ flowchart LR
 
 - **中间件与基础设施**(APISIX、Nacos、Kafka、MySQL、Redis、ES、MinIO、K8s 的部署形态、容量与高可用):见《04-middleware-infrastructure.md》。
 - **K8s 集群规划与云产品产品化**(管理集群/业务集群划分、Operator 模式、ACK 形态):见《06-kubernetes-productization.md》。
-- **可观测性体系**(metrics/logs/trace 三支柱联动与告警:指标 Prometheus 短期热数据 + VictoriaMetrics 长存、日志 ClickHouse、调用链 OTel 埋点 → SkyWalking OAP 接收(存储用独立的 trace-ES 集群,与搜索 ES 物理隔离),Grafana 统一展示、对客告警由 alert-engine(Go)+ alert-center(Java)走对客通道):见《05-data-observability.md》。
+- **可观测性体系**(metrics/logs/trace 三支柱联动与告警:指标 Prometheus 短期热数据 + VictoriaMetrics 长存、日志 ClickHouse、调用链 OTel 埋点 → SkyWalking OAP 接收(存储用独立的 trace-ES 集群,与搜索 ES 物理隔离),Grafana 统一展示、对客告警由 alert-engine + alert-center 走对客通道):见《05-data-observability.md》。
 - **交付体系**(GitLab CI + ArgoCD GitOps、环境规划、发布策略):见《08-devops-delivery.md》。
 
 技术视图的总约束:**候选池闭环**——不引入《全栈技术选型决策表》(《10-research-and-selection-decisions.md》§4.1~§4.2)候选池之外的重型组件;辅助小工具(如 Vector、canal 类 binlog 同步工具)允许使用但必须标注"可选"(决策表 §4.5 辅助工具清单),且需 SRE 评审运维成本,评审流程见《09-roadmap.md》。
@@ -620,11 +620,11 @@ flowchart LR
 | 主域名 | `starcloud.cn` | www.starcloud.cn / console.starcloud.cn / docs.starcloud.cn / scecs.api.starcloud.cn |
 | 品牌/平台前缀 | `sc`(替代 cldp/cps/CPSA) | sc-frontend-platform、@sc/ui、--sc-* CSS 变量、sc:ecs ARN |
 | 产品 code 前缀 | `sc` + 品类缩写(全小写) | scecs、scoss、scrds、scvpc、scbs、sceip、scmon、sceci、sccert |
-| 服务名 | `svc-{domain}`(Java/Go 同构),Nacos Group = 应用名 | svc-iam、svc-order、svc-billing、svc-metering、svc-orchestrator、svc-kms、svc-api-meta、console-bff、site-bff |
+| 服务名 | `svc-{domain}`(统一 Go),Nacos Group = 应用名 | svc-iam、svc-order、svc-billing、svc-metering、svc-orchestrator、svc-kms、svc-api-meta、console-bff、site-bff |
 | 数据面控制器 | `rc-*` | rc-compute、rc-storage、rc-network、rc-database |
-| 租户标识字段 | `account_id`(≡ uid ≡ user_id ≡ tenant_id) | 全书物理列/shardingColumn/Kafka 分区键一律 account_id |
+| 租户标识字段 | `account_id`(≡ uid ≡ user_id ≡ tenant_id) | 全书物理列/Vitess vindex 分片键/Kafka 分区键一律 account_id |
 | 分片键 | account_id 单键(账号/交易/资源/计量四库统一,否决 region+account_id 组合路由) | 资源元数据可携带 region_id 但不作分片键 |
-| 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(倍增扩容) | 8 库×16 表 = 128 片起步 |
+| 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(库×表口径) | Vitess Reshard 承载水平扩容(起步 8 库×16 表) |
 | 资源 ID 格式 | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | scecs-cn-north-1-01-a1b2c3d4 |
 | region 命名 | `cn-north-1`/`cn-east-1`(短横线风格) | cn-north-1-a |
 | 可用区命名 | `{region}-{a/b/...}` | cn-north-1-a |

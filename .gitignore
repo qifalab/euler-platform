@@ -1,0 +1,40 @@
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+target/
+dist/
+
+# Go
+vendor/
+
+# Java
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+*.war
+*.ear
+hs_err_pid*
+
+# Node / frontend
+node_modules/
+.pnpm-store/
+.nuxt/
+.output/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

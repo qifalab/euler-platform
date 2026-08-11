@@ -1,0 +1,209 @@
+# APISIX route definitions — console zone (console.starcloud.cn)
+#
+# Source of truth: 04-middleware-infrastructure.md §3.2/§3.3, 02-frontend §5.
+#
+# Auth differs from the OpenAPI zone: the console is a browser client, so it
+# carries a JWT rather than a CPS1 signature. Token parameters are fixed by
+# adjudication S13 (which overturned 07§2.4's original 12h/Strict scheme):
+#
+#   access_token   RS256 JWT, 15 min, held in memory only (never localStorage)
+#   refresh_token  opaque, 7 days, rotating — old revoked on each refresh
+#   cookie         HttpOnly; Secure; SameSite=Lax; Domain=.starcloud.cn
+#
+# SameSite=Lax rather than Strict is deliberate: Strict blocks the cross-subdomain
+# SSO flow between account.starcloud.cn and console.starcloud.cn. The refresh
+# cookie is scoped to Path=/api/auth so it is not sent on ordinary API calls.
+#
+# The JWT is issued by svc-iam in the account domain; the gateway verifies with
+# the public key published through Nacos, rotated by kid (04§3.4).
+
+routes:
+  # ---------------------------------------------------------------------------
+  # Auth endpoints — deliberately NOT behind sc-auth (they mint the session).
+  # ---------------------------------------------------------------------------
+  - id: console-auth
+    name: console-account-auth
+    desc: Login, refresh, logout. Rate limited hard; no auth plugin by design.
+    hosts: [console.starcloud.cn]
+    uris:
+      - /api/auth/*
+    upstream:
+      service_name: auth-console-bff@@auth-console-bff
+      discovery_type: nacos
+      type: roundrobin
+      timeout: { connect: 2, send: 5, read: 5 }
+    plugins:
+      # Login is the credential-stuffing target: 5 attempts per minute per IP
+      # (04§3.2 console zone baseline). The account-level 5-failure lockout is
+      # enforced in svc-iam (07§2.4); this is the network-level floor.
+      limit-count:
+        count: 5
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+        rejected_code: 429
+        rejected_msg: '{"Code":"Common.Throttling","Message":"too many attempts"}'
+      # CSRF floor for the refresh endpoint: the browser client sets a custom
+      # header, which a cross-site form post cannot forge (02§5.1).
+      request-validation:
+        header_schema:
+          type: object
+          required: ["x-requested-with"]
+          properties:
+            x-requested-with:
+              type: string
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  # ---------------------------------------------------------------------------
+  # Account / RAM / AK management
+  # ---------------------------------------------------------------------------
+  - id: console-account
+    name: console-account-manage
+    hosts: [console.starcloud.cn]
+    uris:
+      - /api/account/*
+    upstream:
+      service_name: svc-iam@@svc-iam
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in user (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_sc_uid
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+        rejected_code: 429
+      sc-auth:
+        mode: jwt
+        # Public key is injected from Nacos config; rotation by kid.
+        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+      sc-authorize:
+        check_access_endpoint: http://svc-iam.business.svc/internal/authz/check
+        action_from_query: Action
+        action_prefix: sciam
+        region: cn-north-1
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  # ---------------------------------------------------------------------------
+  # Trade: orders, billing, fee centre — aggregated by console-bff
+  # ---------------------------------------------------------------------------
+  - id: console-trade
+    name: console-trade-orders
+    hosts: [console.starcloud.cn]
+    uris:
+      - /api/trade/*
+    upstream:
+      service_name: console-bff@@console-bff
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800
+        time_window: 60
+        key_type: var
+        key: http_x_sc_uid
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+        rejected_code: 429
+      sc-auth:
+        mode: jwt
+        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+      sc-authorize:
+        action_from_query: Action
+        action_prefix: sctrade
+        region: cn-north-1
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  # ---------------------------------------------------------------------------
+  # Resource list / lifecycle — aggregated by console-bff
+  # ---------------------------------------------------------------------------
+  - id: console-resource
+    name: console-resource-list
+    hosts: [console.starcloud.cn]
+    uris:
+      - /api/resource/*
+    upstream:
+      service_name: console-bff@@console-bff
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800
+        time_window: 60
+        key_type: var
+        key: http_x_sc_uid
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+        rejected_code: 429
+      sc-auth:
+        mode: jwt
+        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+      sc-authorize:
+        action_from_query: Action
+        action_prefix: scres
+        region: cn-north-1
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  # ---------------------------------------------------------------------------
+  # Per-product console backends: /api/{productCode}/**
+  # Adding a product means adding one route here (01§7.3 step 5).
+  # ---------------------------------------------------------------------------
+  - id: console-product-scecs
+    name: console-compute-scecs
+    hosts: [console.starcloud.cn]
+    uris:
+      - /api/scecs/*
+    upstream:
+      service_name: svc-scecs@@svc-scecs
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800
+        time_window: 60
+        key_type: var
+        key: http_x_sc_uid
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+        rejected_code: 429
+      sc-auth:
+        mode: jwt
+        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+      sc-authorize:
+        action_from_query: Action
+        action_prefix: scecs
+        region: cn-north-1
+        # High-risk operations get fine-grained ARN evaluation at the gateway
+        # rather than relying solely on the service-layer owner check (07§3.4).
+        resource_arn_template: "sc:ecs:$region:$account_id:instance/$arg_InstanceId"
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+global_rules:
+  - id: console-global
+    plugins:
+      real-ip:
+        source: http_x_forwarded_for
+        trusted_addresses: ["10.0.0.0/8"]
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+      prometheus:
+        prefer_name: true
+      http-logger:
+        uri: http://vector.observability.svc:8080/apisix
+        batch_max_size: 1000
+        inactive_timeout: 5

@@ -1,0 +1,4 @@
+# prod overrides for console-bff (values merge on top of the chart defaults).
+image:
+  tag: v0.1.0
+replicas: 3

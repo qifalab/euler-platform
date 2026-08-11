@@ -48,7 +48,7 @@
 | CD | **ArgoCD**(GitOps) | K8s 原生、声明式状态可审计、原生支持回滚与多集群 | Flux | 偏好更轻量的控制器风格且不需要 UI 时 |
 | 镜像仓库 | **Harbor**(辅助工具,候选池外,需评审确认引入) | CNCF 毕业项目;RBAC、复制、保留策略、Trivy 扫描集成、cosign 签名验证一体 | 轻量 Distribution Registry(可选) | 仅内部小规模使用、不需要治理特性时 |
 | 渐进式发布 | Argo Rollouts(辅助工具) | 与 ArgoCD 同源,金丝雀/蓝绿声明式,支持 Prometheus 指标自动分析 | 原生 Deployment 滚动 + APISIX 手动权重 | 团队初期以简化运维为优先时 |
-| 网关配合 | APISIX | 全动态路由/上游,天然支持按权重分流与插件热加载(详见《04-middleware-infrastructure.md》) | Spring Cloud Gateway | 见《10-research-and-selection-decisions.md》§4.2 选型决策总表 |
+| 网关配合 | APISIX | 全动态路由/上游,天然支持按权重分流与插件热加载(详见《04-middleware-infrastructure.md》) | Kong | 见《10-research-and-selection-decisions.md》§4.2 选型决策总表 |
 | 配置/注册 | Nacos | 注册+配置一体,namespace/group 模型覆盖多环境(详见《04-middleware-infrastructure.md》) | Apollo | 需合规级变更审批+IP 级灰度且已有运维经验 |
 | SQL 审核平台 | Archery 或 Bytebase(辅助工具,二选一) | SQL 提交-审核-执行留痕,集成 gh-ost 在线 DDL | 纯人工 DBA 审核 | 早期表少时人工即可 |
 
@@ -125,7 +125,7 @@ flowchart LR
 | 仓库 | 内容 | 说明 |
 |---|---|---|
 | `platform/cloud-console`(前端) | Vue 基座 + 各微前端子应用 | 基座与子应用分目录,monorepo 便于统一依赖;子应用拆分策略见《02-frontend-architecture.md》 |
-| `services/<domain>-*`(后端) | 各微服务,按领域一服务一仓 | 服务划分见《03-backend-services.md》;Java/Go 服务均适用 |
+| `services/<domain>-*`(后端) | 各微服务,按领域一服务一仓 | 服务划分见《03-backend-services.md》;全部 Go/Kratos 服务 |
 | `platform/k8s-operators` | 资源管控 operator(Go) | K8s 产品化组件,见《06-kubernetes-productization.md》 |
 | `deploy/gitops-manifests` | **清单仓库**:所有环境 K8s 清单/Helm values/网关路由/告警规则 | GitOps 唯一事实来源,结构见 4.3 |
 | `platform/ci-templates` | 流水线 include 模板、Dockerfile 基线、lint 规则 | 模板集中升级,各仓库 include 引用 |
@@ -155,7 +155,7 @@ flowchart LR
 | 新增 OpenAPI、向后兼容 | MINOR |
 | 破坏性变更(删字段/改语义) | MAJOR,必须走 expand-contract 流程(6.5) |
 
-**基础镜像**:统一维护 `cloudplatform/base-jdk17`、`cloudplatform/base-go1.22`、`cloudplatform/base-node20`,由 `ci-templates` 仓库流水线每周自动重建(滚动 CVE 修复),业务 Dockerfile 只 FROM 基线镜像——把"基础镜像补丁"从 N 个服务收敛到 1 条流水线。
+**基础镜像**:统一维护 `cloudplatform/base-go1.22`、`cloudplatform/base-node20`,由 `ci-templates` 仓库流水线每周自动重建(滚动 CVE 修复),业务 Dockerfile 只 FROM 基线镜像——把"基础镜像补丁"从 N 个服务收敛到 1 条流水线。
 
 ---
 
@@ -344,7 +344,6 @@ resources:
   requests: { cpu: "500m", memory: "1Gi" }
   limits:   { cpu: "2",    memory: "2Gi" }
 env:
-  SPRING_PROFILES_ACTIVE: prod
   NACOS_NAMESPACE: prod         # 环境映射见第 7.2 节
 hpa:
   enabled: true
@@ -371,8 +370,8 @@ canary:
 ### 5.1 公共设计
 
 - 所有模板沉淀在 `platform/ci-templates` 仓库,业务仓库用 `include` 引用,模板升级全平台生效;
-- Runner 采用 Kubernetes executor(构建 Pod 即起即毁),按标签划分池:`build-java`、`build-go`、`build-fe`、`dind`(kaniko 免 Docker 特权);
-- 缓存策略:Maven/Go/pnpm 依赖缓存到对象存储(MinIO,见《04-middleware-infrastructure.md》)挂载的 PVC,命中率目标 > 85%;
+- Runner 采用 Kubernetes executor(构建 Pod 即起即毁),按标签划分池:`build-go`、`build-fe`、`dind`(kaniko 免 Docker 特权);
+- 缓存策略:Go/pnpm 依赖缓存到对象存储(MinIO,见《04-middleware-infrastructure.md》)挂载的 PVC,命中率目标 > 85%;
 - 凭证:Harbor 推送凭证、GitLab API token 一律用 CI 变量(masked+protected),禁止写入脚本。
 
 `platform/ci-templates/pipeline-base.yml`(公共骨架):
@@ -392,9 +391,9 @@ include:
   - local: templates/gitops.yml        # 清单仓库版本 MR 机器人通用 job
 ```
 
-### 5.2 Java(Spring Cloud)服务流水线
+### 5.2 Go(Kratos)服务流水线
 
-适用:订单、计费、账号等 Spring Cloud 服务(见《03-backend-services.md》)。关键 stage:编译 → 单测(含覆盖率) → SAST → 镜像构建 → 漏洞扫描与签名 → 版本晋级。
+适用:全部后端微服务(订单、计费、账号、BFF、数据接入、推送、operator 等,见《03-backend-services.md》)。关键 stage:编译 → 单测(含覆盖率) → SAST → 镜像构建 → 漏洞扫描与签名 → 版本晋级;差异点:静态二进制、CGO 关闭、golangci-lint、多阶段镜像更小。
 
 ```yaml
 include:
@@ -402,55 +401,42 @@ include:
     file: pipeline-base.yml
 
 variables:
-  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
   IMAGE_NAME: harbor.internal/cloudplatform/order-service
-
-cache:
-  key: "$CI_PROJECT_PATH_SLUG-maven"
-  paths: [.m2/repository]
+  GOFLAGS: "-mod=vendor"
 
 build:compile:
   stage: build
-  tags: [build-java]
-  image: cloudplatform/base-jdk17-build:latest
+  tags: [build-go]
+  image: cloudplatform/base-go1.22-build:latest
   script:
-    - mvn -B -DskipTests compile
-  artifacts:
-    paths: [target/classes]
-    expire_in: 1 hour
+    - go vet ./...
+    - golangci-lint run --timeout 5m        # 统一 lint 规则在 ci-templates 仓库
+    - CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.Version=${CI_COMMIT_SHORT_SHA}" -o bin/app ./cmd/server
+  cache:
+    key: "$CI_PROJECT_PATH_SLUG-gomod"
+    paths: [vendor/]
 
 test:unit:
   stage: test
-  tags: [build-java]
-  image: cloudplatform/base-jdk17-build:latest
-  services:
-    - name: mysql:8.0           # Testcontainers 备选;轻量依赖用 service
-      alias: mysql
+  tags: [build-go]
   script:
-    - mvn -B verify -Pcoverage          # jacoco 报告产出
-    - mvn jacoco:report
-  coverage: '/Total.*?([0-9]{1,3})%/'
+    - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+    - go tool cover -func=coverage.out | tail -n1    # 输出总覆盖率供 GitLab 采集
+  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
   artifacts:
-    when: always
-    reports:
-      junit: target/surefire-reports/*.xml
-      coverage_report:
-        coverage_format: jacoco
-        path: target/site/jacoco/jacoco.xml
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    reports: { coverage_report: { coverage_format: cobertura, path: coverage.xml } }
 
-scan:sast:                             # Semgrep + SonarQube 质量门禁,见 8.3
-  stage: scan
-  image: returntocorp/semgrep:latest   # 辅助工具
-  script:
-    - semgrep ci --config auto --config p/java --sarif -o gl-sast-report.json
-  artifacts:
-    reports: { sast: gl-sast-report.json }
-
-scan:dependency:                       # OWASP dependency-check / trivy fs
+scan:sast:
   stage: scan
   script:
+    - gosec -fmt=json -out=gosec-report.json ./...     # 辅助工具
+  artifacts:
+    reports: { sast: gosec-report.json }
+
+scan:dependency:
+  stage: scan
+  script:
+    - govulncheck ./...
     - trivy fs --severity HIGH,CRITICAL --exit-code 1 --format json -o gl-dep-report.json .
   allow_failure: false
 
@@ -495,55 +481,7 @@ promote:gitops-mr:                     # 机器人向清单仓库提 MR
 
 `update-gitops.sh` 的逻辑:克隆清单仓库 → 用 `yq` 修改 `envs/dev/values-overrides/order-service.yaml` 与 staging 对应文件的 `image.tag` → 以 `bot/order-service-vX.Y.Z` 分支提交并创建 MR,MR 描述自动附上本次变更日志与流水线链接。
 
-### 5.3 Go(Kratos)服务流水线
-
-适用:BFF、数据接入、推送、operator 等 Go 服务。与 Java 的差异:静态二进制、CGO 关闭、golangci-lint、多阶段镜像更小。
-
-```yaml
-include:
-  - project: cloudplatform/ci-templates
-    file: pipeline-base.yml
-
-variables:
-  IMAGE_NAME: harbor.internal/cloudplatform/push-gateway
-  GOFLAGS: "-mod=vendor"
-
-build:compile:
-  stage: build
-  tags: [build-go]
-  image: cloudplatform/base-go1.22-build:latest
-  script:
-    - go vet ./...
-    - golangci-lint run --timeout 5m        # 统一 lint 规则在 ci-templates 仓库
-    - CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.Version=${CI_COMMIT_SHORT_SHA}" -o bin/app ./cmd/server
-  cache:
-    key: "$CI_PROJECT_PATH_SLUG-gomod"
-    paths: [vendor/]
-
-test:unit:
-  stage: test
-  tags: [build-go]
-  script:
-    - go test -race -coverprofile=coverage.out -covermode=atomic ./...
-    - go tool cover -func=coverage.out | tail -n1    # 输出总覆盖率供 GitLab 采集
-  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
-  artifacts:
-    reports: { coverage_report: { coverage_format: cobertura, path: coverage.xml } }
-
-scan:sast:
-  stage: scan
-  script:
-    - gosec -fmt=json -out=gosec-report.json ./...     # 辅助工具
-  artifacts:
-    reports: { sast: gosec-report.json }
-
-# package:image / scan:image / publish:sign / promote:gitops-mr
-# 与 Java 模板一致,仅镜像名与构建上下文不同,由 pipeline-base.yml 提供
-```
-
-### 5.4 前端子应用流水线(Vue + Wujie)
-
-适用:控制台基座与各产品子应用(微前端架构见《02-frontend-architecture.md》)。要点:
+### 5.3 前端子应用流水线(Vue + Wujie)
 
 1. **构建产物双通道**:静态资源推 Harbor 镜像(nginx 承载)用于 K8s 部署,同时可选同步到 MinIO+CDN 加速;
 2. **微前端约束在 CI 校验**:`publicPath` 必须为绝对路径、子应用产物路径前缀与注册中心登记一致、跨域头由网关统一注入(见《10-research-and-selection-decisions.md》§4.4 兼容性坑清单第 6 条);
@@ -594,7 +532,7 @@ review:preview:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 ```
 
-### 5.5 清单仓库自身的流水线
+### 5.4 清单仓库自身的流水线
 
 `gitops-manifests` 仓库也跑 CI,卡住坏清单:
 
@@ -624,8 +562,8 @@ review:preview:
 ### 6.2 滚动发布(默认)
 
 - `maxSurge: 25%`、`maxUnavailable: 0`,配合 `terminationGracePeriodSeconds` ≥ 优雅下线时间(消费者摘流 → 处理完在途请求);
-- **就绪门禁**:`readinessProbe` + `startupProbe`(Spring Cloud 服务启动慢,避免 liveness 过早杀 Pod);
-- **优雅下线钩子**:preStop 中先调用网关/注册中心摘流(Nacos 注销 + APISIX upstream 健康探测剔除),sleep 等待在途请求完成——Spring Cloud 与 Kratos 均封装为 SDK 钩子,业务无感;
+- **就绪门禁**:`readinessProbe` + `startupProbe`(Go 服务编译后二进制启动快,仍配 startupProbe 兜底避免 liveness 过早杀 Pod);
+- **优雅下线钩子**:preStop 中先调用网关/注册中心摘流(Nacos 注销 + APISIX upstream 健康探测剔除),sleep 等待在途请求完成——Kratos 统一封装为 SDK 钩子,业务无感;
 - 改选条件:服务 QPS 极低(长尾请求多)时放宽 `maxUnavailable=1` 以加速发布。
 
 ### 6.3 金丝雀发布(Rollouts + APISIX)
@@ -765,7 +703,7 @@ sequenceDiagram
 
 1. **兼容性变更先行**:新增列必须可空或有默认值;禁止"同一发布里删列+发代码";禁止重命名列(用"新列+双写+迁移+删旧列"四步);
 2. **SQL 审核平台卡点**:所有 DDL/DML 走工单,平台内置规则(如 `ALTER` 必须评估锁、大表必须 gh-ost/pt-osc、禁止无 WHERE 的 UPDATE);工单与发布单关联,形成"变更三要素"(代码 MR、清单 MR、SQL 工单)互相引用;
-3. **分库分表场景**:ShardingSphere 逻辑表的 DDL 必须广播到所有物理分片,审核平台按数据源组批量执行并逐分片校验(详见《03-backend-services.md》与《05-data-observability.md》的数据架构);
+3. **分库分表场景**:Vitess 的 schema 变更经 `vtctld ApplySchema` 或 Online DDL 下发并逐分片校验(详见《03-backend-services.md》与《05-data-observability.md》的数据架构);
 4. **执行窗口**:生产 DDL 默认在业务低峰(02:00–06:00),与发布冻结窗口互斥;
 5. **回滚语义**:代码回滚不附带 schema 回滚——这正是 expand 阶段保持兼容的意义;contract 阶段执行后该变更不可回滚,必须在 MR 描述中显式声明。
 
@@ -845,12 +783,12 @@ Nacos 自身的配置变更同样 GitOps 化:配置基线以 YAML 存于 `gitops
 
 | 阶段 | 门禁 | 工具 | 卡点阈值/规则 | 失败处理 |
 |---|---|---|---|---|
-| MR | 静态检查 | golangci-lint / checkstyle+spotless / eslint | 规则集在 ci-templates 统一,违规即红 | 阻断合并 |
-| MR | 单元测试 | JUnit / go test / vitest | 全部通过 | 阻断合并 |
-| MR | 增量覆盖率 | jacoco / go cover / c8 | 新增代码行覆盖 ≥ 60%;计费/订单等核心域 ≥ 70% | 阻断合并 |
+| MR | 静态检查 | golangci-lint / eslint | 规则集在 ci-templates 统一,违规即红 | 阻断合并 |
+| MR | 单元测试 | go test / vitest | 全部通过 | 阻断合并 |
+| MR | 增量覆盖率 | go cover / c8 | 新增代码行覆盖 ≥ 60%;计费/订单等核心域 ≥ 70% | 阻断合并 |
 | MR | 全量覆盖率趋势 | SonarQube(辅助) | 不允许环比下降 > 2% | 警告→第二次阻断 |
 | MR | SAST | Semgrep / gosec / SonarQube | High/Critical 0 容忍;Medium 需评审豁免 | 阻断合并(豁免需 Owner 签核留痕) |
-| MR | 依赖漏洞 | trivy fs / dependency-check | Critical 阻断;High 阻断或限期豁免(≤7 天) | 阻断合并 |
+| MR | 依赖漏洞 | trivy fs / govulncheck | Critical 阻断;High 阻断或限期豁免(≤7 天) | 阻断合并 |
 | 制品 | 镜像漏洞 | Trivy(Harbor 内置) | Critical 阻断晋级 staging/prod | 阻断版本 MR |
 | 制品 | 镜像签名 | cosign | prod 镜像必须带签名 | 准入层强制 |
 | 清单 | Schema/策略 | kubeconform + OPA/Kyverno | 违规阻断 | 阻断清单 MR |
@@ -866,7 +804,7 @@ Nacos 自身的配置变更同样 GitOps 化:配置基线以 YAML 存于 `gitops
 ### 8.3 SAST 与供应链
 
 - SAST 规则集平台统一维护,业务仓库只 include,禁止私自放宽;
-- 依赖清单锁文件(Maven `dependencyManagement` / go.mod / pnpm-lock.yaml)变更触发强制依赖扫描 diff,新增引入的依赖需在 MR 描述说明用途;
+- 依赖清单锁文件(go.mod / pnpm-lock.yaml)变更触发强制依赖扫描 diff,新增引入的依赖需在 MR 描述说明用途;
 - 基础镜像每周重建并自动向下游触发重建流水线,把 CVE 修复变成例行事件而不是救火。
 
 ### 8.4 镜像扫描与签名验证
@@ -1006,7 +944,7 @@ sequenceDiagram
 | 组件 | 部署形态 | 规格基线(首期) | 高可用要点 |
 |---|---|---|---|
 | GitLab | 独立 VM/独立集群(与业务集群隔离) | 8C16G 起步 + 外挂 PostgreSQL/Gitaly;对象存储放 MinIO | 每日全量备份(etcd/pg/仓库)+ 备份恢复演练每季度 1 次 |
-| GitLab Runner | K8s executor,部署于管理集群 | 池化:java×8、go×6、fe×4、dind×4 并发起步,按流水线 P95 排队时长扩缩 | Runner 无状态,随时重建 |
+| GitLab Runner | K8s executor,部署于管理集群 | 池化:go×8、fe×4、dind×4 并发起步,按流水线 P95 排队时长扩缩 | Runner 无状态,随时重建 |
 | Harbor | 独立 VM 双节点 + 共享 MinIO 后端存储 | 各 4C8G;镜像盘独立 | registry/database/redis 组件副本 ≥ 2;每日 DB 备份 |
 | ArgoCD | 管理集群 argocd 命名空间 | HA 模式:api-server×2、repo-server×2、controller 分片(shard×2) | 配置存 Git,重建可恢复;etcd 依赖 K8s 自身 |
 | Argo Rollouts | 管理集群单控制器 | 2C4G×2(leader 选举) | 控制器挂了不影响已运行 Rollout,只暂停新推进 |

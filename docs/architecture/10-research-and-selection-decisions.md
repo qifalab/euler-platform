@@ -145,12 +145,12 @@ flowchart LR
 | 领域 | 候选池 |
 |---|---|
 | 前端 | Vue + 微前端 |
-| 后端框架 | Spring Cloud / Go-Zero / Kratos(可混合分工) |
-| API 网关 | APISIX / Kong / Spring Cloud Gateway |
+| 后端框架 | Go-Zero / Kratos |
+| API 网关 | APISIX / Kong |
 | 注册中心 | Nacos / Consul |
 | 配置中心 | Nacos / Apollo |
 | 消息队列 | Kafka |
-| 数据库 | MySQL 分库分表 |
+| 数据库 | MySQL 分库分表(Vitess 承载) |
 | 缓存 | Redis Cluster |
 | 搜索 | Elasticsearch |
 | 时序数据 | Prometheus / VictoriaMetrics |
@@ -172,28 +172,28 @@ flowchart LR
 |---|---|---|---|---|---|---|
 | 1 | 前端框架 | **Vue3 + Vite** | 团队生态与招聘面;SSR 官网需求;与微前端基线一致 | — | — | 《02》 |
 | 2 | 微前端 | **Wujie** | 隔离最彻底(WebComponent + iframe 沙箱)、Vite/Vue3 子应用零改造、alive 保活体验对标阿里云控制台 | qiankun / Module Federation | 已有 qiankun 存量基座且子应用以 Webpack/React 为主改 qiankun;运行期共享有状态实例场景局部用 MF 补充,不整体替换 | 《02》§3 |
-| 3 | 后端框架 | **Java/Spring Cloud(强事务业务域)+ Go/Kratos(高并发资源型组件)双栈**;分工口诀"规则和钱归 Java,吞吐和连接归 Go,资源动手归控制器" | Java 与 ShardingSphere/事务/对账生态契合;Kratos gRPC-first、轻量常驻;统一 Nacos 注册、东西向统一 gRPC + Protobuf(IDL-first) | Go-Zero | Go 团队需要开箱即用(内置缓存/限流/代码生成)快速起步时改 Go-Zero;**一旦定下不允许两框架混用** | 《03》§2、《06》§1(所有直接操作 K8s API 的组件用 Go) |
-| 4 | API 网关 | **APISIX** | 全动态配置、插件热加载、语言中立统一承接 Java/Go;限流/认证/灰度插件成熟、K8s 友好 | Spring Cloud Gateway / Kong | 想缩减运维面且网关逻辑可完全用 Spring 表达时选 SCG;需商业支持合同才考虑 Kong | 《04》§3、《00》§2.4 |
+| 3 | 后端框架 | **Go + Kratos(全部微服务统一栈)**;按域分三类:业务规则域(IAM/订单/计费/编排)、高吞吐接入域(计量/审计/通知/BFF)、资源动手域(rc-\* 控制器/Operator) | 单语言收敛运维面与技能栈;Kratos gRPC-first、编译产物小、内存占用低;统一 Nacos 注册、东西向统一 gRPC + Protobuf(IDL-first) | Go-Zero | Go 团队需要开箱即用(内置缓存/限流/代码生成)快速起步时改 Go-Zero;**一旦定下不允许两框架混用** | 《03》§2、《06》§1(所有直接操作 K8s API 的组件用 Go) |
+| 4 | API 网关 | **APISIX** | 全动态配置、插件热加载、语言中立统一承接 Go 服务;限流/认证/灰度插件成熟、K8s 友好 | Kong | 需商业支持合同才考虑 Kong | 《04》§3、《00》§2.4 |
 | 5 | 注册 + 配置 | **Nacos 一体化**(注册与配置一套栈) | 一套 HA 集群一套权限,运维成本减半;SCA 原生集成、Go SDK 成熟;namespace/group 覆盖多环境 | Consul(注册)/ Apollo(配置) | 需多数据中心联邦/服务网格选 Consul;同时满足①合规级变更审批留痕②IP 级灰度③数千配置项且已有 Apollo 运维经验,才拆 Apollo 配置 | 《04》§4、《08》配置基线 |
 | 6 | 消息队列 | **Kafka(KRaft)** | 候选池唯一 MQ;高吞吐、生态最全,计量/审计/日志类大流量场景天然适配 | (池内无) | — | 《04》§5 |
-| 7 | 关系数据库 | **MySQL 分库分表 + ShardingSphere-JDBC** | Apache 顶级项目、无中心化代理、分布式事务生态完整;account_id 全局分片键 | ShardingSphere-Proxy | 出现多语言直连同一分片库需求时引入 Proxy(与 Kratos Go 域共存场景) | 《04》§6、《05》§3 |
+| 7 | 关系数据库 | **MySQL 分库分表 + Vitess(集中式分片代理)** | Go 原生组件;vtgate 以 MySQL 协议统一供 Go 服务接入,无语言耦合;vindex 按 account_id 分片;支持 Reshard 扩容、读写分离 | ShardingSphere-Proxy(已废止,Java 承载) | 出现跨库强一致事务硬诉求时评估 Proxy,但默认维持 Vitess(架构原则为"本地事务+Outbox",避免跨分片强一致) | 《04》§6、《05》§3 |
 | 8 | 缓存 | **Redis Cluster**(3 主 3 从起步) | 候选池结论;热数据、分布式协调、会话与黑名单 | — | — | 《04》§7 |
 | 9 | 搜索 | **Elasticsearch(仅搜索,搜索 ES 集群)** | 官网/产品/文档三类搜索;日志检索按选型走 ClickHouse,搜索 ES 不承担日志负载;trace 存储由 SkyWalking OAP 使用独立的 trace-ES 集群,与搜索 ES 物理隔离(见 #12) | ELK 全家桶 | 强依赖 Kibana 开箱体验与全文检索为第一诉求时 | 《04》§8、《05》§2.3 |
 | 10 | OLAP / 日志存储 | **ClickHouse**(承接计量明细/账单分析/日志/审计四类负载)+ Vector 采集 | 列存压缩成本约为 ES 1/10;SQL 分析、高吞吐写入;一套引擎收敛运维面 | ELK | 同 #9 | 《05》§2.3、§5、§7.2 |
 | 11 | 指标 | **Prometheus(短期热数据)+ VictoriaMetrics(长期,remote_write 承接)**;Grafana 展示、Alertmanager 统一告警出口 | 单机 Prometheus 只留 2~6h~7d 热数据;VM 提供长保留、高压缩比与多租户 accountID 能力(二期引入) | Prometheus 自身长保留 | 数据量小、保留期 ≤30 天且无多租户诉求时可用 Prometheus 长保留 | 《05》§7.1、《09》二期扩容 |
-| 12 | 链路追踪 | **OpenTelemetry 统一埋点 + SkyWalking OAP 接收存储(Otel receiver,存储用独立的 trace-ES 集群)** | OTel 行业标准、双语言 SDK 成熟、厂商中立;OAP 提供一体化 APM UI 与存储;trace 存储使用独立的 trace-ES 集群,与搜索 ES 物理隔离 | 纯 SkyWalking agent(字节码零侵入)/ 纯 OTel Collector + 自研存储 | 需要字节码零侵入且纯 Java 栈时可用 SW agent,但全平台统一口径优先,维持 OTel | 《05》§7.3 |
+| 12 | 链路追踪 | **OpenTelemetry 统一埋点 + SkyWalking OAP 接收存储(Otel receiver,存储用独立的 trace-ES 集群)** | OTel 行业标准、Go SDK 成熟、厂商中立;OAP 提供一体化 APM UI 与存储;trace 存储使用独立的 trace-ES 集群,与搜索 ES 物理隔离 | 纯 OTel Collector + 自研存储 | 全平台统一口径优先,维持 OTel Go SDK | 《05》§7.3 |
 | 13 | 对象存储 | **MinIO**(自建场景;内部使用 + 对外售卖双角色) | S3 兼容、K8s Operator 成熟、自建运维轻 | Ceph / 公有云 OSS | 需块+文件+对象统一存储且规模很大选 Ceph;整体托管上公有云则直接买 OSS(接口 S3 化保证可切换) | 《04》§9、《09》Build-vs-Buy |
 | 14 | 容器平台 | **Kubernetes** | 同时是管控面运行底座与数据面资源池,一套平台两面复用 | 无(候选池内唯一) | — | 《06》、《04》§2 |
 | 15 | CI | **GitLab CI** | 流水线即代码、与代码库/MR/制品库一体;平台从 0 到 1 无存量 VM 脚本包袱 | Jenkins | 并购/接入团队带来大量 Jenkins 存量流水线时作为第二 CI 承接存量,新服务仍走 GitLab CI;**CD 必须一元** | 《08》§2 |
 | 16 | CD | **ArgoCD(GitOps)** | K8s 原生、声明式状态可审计、回滚与多集群支持;CI 禁止持有生产集群 kubeconfig | Flux | 偏好更轻量控制器风格且不需要 UI 时 | 《08》§2 |
 | 17 | 代码托管 | **GitLab 自建(CE 起步)** | 与 GitLab CI 一体,MR/流水线/制品库统一权限模型 | 自建 Gitea + 第三方 CI | 团队极小且只需轻量托管时 | 《08》§2 |
 
-> 南北向统一 HTTP/OpenAPI(JSON),东西向统一 gRPC + Protobuf(IDL-first,跨 Java/Go 生成),与本表 #3 一致(《00》§2.3.2、《03》、《04》)。
+> 南北向统一 HTTP/OpenAPI(JSON),东西向统一 gRPC + Protobuf(IDL-first,跨 Go 服务生成),与本表 #3 一致(《00》§2.3.2、《03》、《04》)。
 
 ### 4.3 第三节 · 多环境与隔离约定
 
 1. **环境隔离**:dev / staging / prod 各自独立中间件实例(联调合并入 dev,不设 test/unit/dev-test),不做跨环境共享。
-2. **Nacos 约定**:环境用 **namespace** 隔离(`dev/staging/prod`),应用用 **group** 隔离(Group=应用名,即与服务名同,如 `svc-order`);服务名规范 `svc-{domain}`,Java/Go 注册名同构;敏感配置不入 Nacos 明文(K8s Secret 注入)。
+2. **Nacos 约定**:环境用 **namespace** 隔离(`dev/staging/prod`),应用用 **group** 隔离(Group=应用名,即与服务名同,如 `svc-order`);服务名规范 `svc-{domain}`,Go 服务注册名统一;敏感配置不入 Nacos 明文(K8s Secret 注入)。
 3. **网关订阅边界**:prod 网关只订阅 `prod` namespace;APISIX `service_name` 必须写成 `{GROUP}@@{serviceName}` 且与服务注册端完全一致(见坑 #2)。
 4. **Kafka 约定**:topic 名中**不含环境标识**,环境隔离靠集群隔离,避免"测试流量写进生产 topic"类事故。
 5. **K8s 约定**:环境/组件以 namespace 隔离,中间件分节点池(`pool-gateway/middleware/business/observability`)taint 隔离。
@@ -204,11 +204,11 @@ flowchart LR
 
 | # | 坑(现象/根因) | 规避措施 | 落地章节 |
 |---|---|---|---|
-| **1** | **同一进程禁止 SkyWalking agent 与 OTel exporter 并存**——双份上报且上下文(trace context)传播断裂 | CI 镜像构建基线只内置 OTel agent,把该红线做成构建约束;全平台统一 OTel 埋点口径 | 《05》§7.3 |
+| **1** | **禁止多路 trace 上报并存**——双份上报且上下文(trace context)传播断裂 | CI 镜像构建基线只内置 OTel exporter,把该红线做成构建约束;全平台统一 OTel 埋点口径 | 《05》§7.3 |
 | **2** | **APISIX↔Nacos 服务发现兼容性**:discovery 走 Nacos 1.x 风格 HTTP Open API,版本漂移/未鉴权会导致订阅失败 | Nacos 锁定 **2.4.x LTS**,启用鉴权并为 `apisix_ro` 配只读权限;`service_name` 必须 `{GROUP}@@{serviceName}` 且与注册端一致;升级 Nacos 3.x 前必须在 staging 验证 discovery 兼容性 | 《04》§3.7 |
 | **3** | **APISIX 依赖 etcd**,etcd 缺管会成为网关单点 | etcd 纳入中间件运维清单(备份/监控/版本升级);三个 APISIX 分区集群共享一套 3 节点 etcd;OpenAPI 区 QPS > 2 万或合规要求强隔离时 etcd 随集群一并拆分 | 《04》§3.1 |
 | **4** | **Filebeat 的 ClickHouse 输出是社区插件**,稳定性无保障 | 日志采集统一 **Vector**(官方支持 ClickHouse sink),DaemonSet 形态与 K8s 对齐 | 《05》§7.2 |
-| **5** | **MySQL 驱动/ORM/连接池版本耦合坑**:Connector/J 与 Hibernate 版本组合漂移、长连接被中间设备掐断、Druid stat filter 与 ShardingSphere 叠加误报连接泄漏 | Connector/J 8.x + Hibernate 6.x 组合在基础镜像中固化并回归;HikariCP 开启 `keepaliveTime`;不使用 Druid stat filter 与 ShardingSphere 叠加 | 《04》§6 |
+| **5** | **MySQL 驱动/vtgate 连接耦合坑**:Go MySQL driver 与 vtgate 版本组合漂移、长连接被中间设备掐断、连接池不设 keepalive 导致连接泄漏误报 | Go driver 与 vtgate 版本组合在基础镜像中固化并回归;连接池开启 `keepalive`;统一经 vtgate 访问分片,不直连 vttablet | 《04》§6 |
 | **6** | **qiankun 对 Vite ESM 子应用需插件侵入**(部分 HMR 不支持),微前端产物约束易被遗漏 | 选 Wujie(entry 模式零改造);CI 校验:`publicPath` 必须绝对路径、子应用产物路径前缀与注册中心登记一致、跨域头由网关统一注入 | 《02》§3、《08》质量门禁 |
 | **7** | **Prometheus→VictoriaMetrics 迁移行为差异**:直接切流会造成指标口径漂移 | remote_write **双写对比 ≥ 1 周**后切流;recording rule 尽量留在 Prometheus 侧,VM 只存结果 | 《05》§7.1、《09》二期扩容 |
 | **8** | **MinIO 升级与最小拓扑约束**:跨大版本滚动升级有数据风险;纠删码盘数不足无法提供冗余 | MinIO **Operator 部署**;纠删码**最少 4 盘**起步;**禁止跨大版本滚动升级**(升级路径逐级进行) | 《04》§9、《06》 |
@@ -228,6 +228,7 @@ flowchart LR
 | Archery 或 Bytebase(二选一) | SQL 审核平台(提交-审核-执行留痕 + gh-ost 在线 DDL) | 变更留痕与 DBA 审核自动化 | 采用(二选一),《08》 |
 | canal / Debezium(可选) | binlog 同步(异地灾备/存量库整库同步) | P3 两地三中心账务数据同步;事务 Outbox 优先,canal 为可选兜底 | 可选,《00》§4.5、《05》§2.3 |
 | local-static-provisioner | 本地 NVMe PV 静态供给 | Kafka/ES/CK/MinIO 本地盘需求 | 采用,《04》§2.1 |
+| Vitess | 集中式 MySQL 分片代理(vtgate/vttablet/vtctld) | Go 原生、vtgate 以 MySQL 协议统一供 Go 服务接入,替代 Java 内嵌 ShardingSphere,随统一 Go 栈引入 | 采用,《04》§6 |
 | Flink | 流式复杂聚合 | 候选池无;一期自研消费者(SDKafka + Redis 状态)即可 | **备选不引入**,出现复杂多流 join/CEP 需求时重评,《05》§2.3 |
 
 ---
@@ -238,3 +239,5 @@ flowchart LR
 2. **裁决后回写**:评审通过后更新本文件版本号与修订记录,并同步回写受影响章节(各章"与选型决策表一致"的声明随更新重新核验)。
 3. **编号只增不删**:启示与坑清单编号只增补、不复用;被废止的条目保留编号并标注"已废止 + 替代条目",保证历史引用可追溯。
 4. **责任人**:本文件由总负责人(架构评审委员会秘书)维护;调研输入一责任人为产品架构负责人,调研输入二责任人为基础设施架构负责人。
+
+> **变更登记(2026-08):统一后端为 Go。** 经架构评审裁决:选型表 #3 后端框架由"Java/Spring Cloud + Go/Kratos 双栈"改为"统一 Go + Kratos";#7 关系数据库由 ShardingSphere-JDBC 改为 **Vitess**(候选池外重型组件,已在 §4.5 登记);#12 链路追踪改为纯 OTel Go SDK;坑清单 #5 由 Java 驱动坑改为 Vitess/Go driver 坑。#3/#7/#12 原编号保留,正文改写并标注替代关系。受影响章节:00/02/03/04/05/06/07/08/09/11,由各章 fixer 按本表回写。

@@ -1,0 +1,9 @@
+# Helm chart for svc-org — phase-1 business service (08-devops §4.3).
+# Syncs with ArgoCD sync-wave 10 (business services apply after middleware/gateway).
+
+apiVersion: v2
+name: svc-org
+description: svc-org phase-1 service deployment chart
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

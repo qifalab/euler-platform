@@ -1,0 +1,20 @@
+# Runtime config for alert-engine, projected as a ConfigMap. Registration params
+# are supplied as env vars by the Deployment; the ConfigMap holds the static
+# service description for operators (08-devops §4.3).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  service.yaml: |
+    service:
+      name: alert-engine
+    nacos:
+      namespace: {{ .Values.env.NACOS_NAMESPACE }}
+      group: {{ .Values.env.SERVICE_GROUP }}
+    server:
+      port: {{ .Values.service.port }}

@@ -16,7 +16,7 @@
 
 本章是云平台"管控面"后端的施工蓝图,回答五个问题:
 
-1. Java(Spring Cloud)与 Go(Kratos)两套语言栈在微服务体系中如何分工,谁写什么域;
+1. 统一 Go + Kratos 技术栈下各服务的职责、域划分与依赖;
 2. 平台需要哪些微服务——17 个核心服务(详见 4.0 服务总表)的职责边界、归属语言、核心接口与依赖关系(Nacos Group 一律用应用名,如 Group=svc-order);
 3. 云资源生命周期的通用模型:状态机、下单→编排→下发→回调→计量的端到端时序;
 4. 账号、资源、订单、账单、配额五类核心数据模型(建表级示例);
@@ -54,15 +54,15 @@ R5 产品可插拔:新增云产品 = 注册资源类型 + 实现资源控制器 
 
 ---
 
-## 2. 语言栈分工:Java(Spring Cloud)与 Go(Kratos)
+## 2. 统一语言栈:Go(Kratos)
 
 ### 2.1 分工结论(与选型决策一致,见《10-research-and-selection-decisions.md》§4.2)
 
-> **结论**:管控业务域(账号、商品、订单、计费、编排等强事务/复杂规则)用 **Java + Spring Cloud**;高并发低延迟、资源敏感型组件(BFF、计量采集、审计接入、推送网关、资源控制器、K8s Operator)用 **Go + Kratos**。
+> **结论**:全部微服务统一 **Go + Kratos**,无语言栈分工。按职责分三类域:业务规则域(账号、商品、订单、计费、编排等强事务/复杂规则)、高吞吐接入域(BFF、计量采集、审计接入、推送网关)、资源动手域(资源控制器、K8s Operator)。
 >
-> **理由**:① Java 域与 ShardingSphere、事务生态、对账批处理框架契合度最高,团队复杂业务表达力强;② Kratos gRPC-first、编译产物小、内存占用低,适合大量常驻的接入型/数据面组件;③ 与《10-research-and-selection-decisions.md》§4.2"语言分工"结论完全一致,不做偏离。
+> **理由**:① 单语言收敛运维面、技能栈与交付体系,消除双语言集成与双标准;② Kratos gRPC-first、编译产物小、内存占用低,适合大量常驻的接入型/数据面组件;③ 与《10-research-and-selection-decisions.md》§4.2"统一 Go"结论完全一致,不做偏离。
 >
-> **备选方案**:Go 域改用 Go-Zero。
+> **备选方案**:改用 Go-Zero。
 >
 > **何时改选备选**:Go 团队希望开箱即用(内置缓存/限流/代码生成)、减少自建脚手架投入时改用 Go-Zero;一旦定下来不允许两框架混用。
 
@@ -73,14 +73,14 @@ R5 产品可插拔:新增云产品 = 注册资源类型 + 实现资源控制器 
 │                        管控面(Management Plane)                     │
 │                                                                     │
 │  ┌─ 接入层 ──────────────────────────────────────────────────────┐  │
-│  │ console-bff (Go)   openapi 网关 APISIX   push-gateway (Go)   │  │
+│  │ console-bff   openapi 网关 APISIX   push-gateway             │  │
 │  └───────────────────────────────────────────────────────────────┘  │
-│  ┌─ 业务域(Java/Spring Cloud)─────────────────────────────────┐  │
+│  ┌─ 业务规则域(Go/Kratos)──────────────────────────────────────┐  │
 │  │ svc-iam  svc-org  svc-catalog  svc-order  svc-billing        │  │
 │  │ svc-payment  svc-orchestrator  svc-quota  svc-workflow       │  │
 │  │ svc-notify  svc-ticket  alert-center(告警收敛/对客通道)     │  │
 │  └───────────────────────────────────────────────────────────────┘  │
-│  ┌─ 高吞吐域(Go/Kratos)───────────────────────────────────────┐  │
+│  ┌─ 高吞吐接入域(Go/Kratos)────────────────────────────────────┐  │
 │  │ svc-metering(计量采集聚合)  svc-audit(审计接入查询)        │  │
 │  │ svc-monitor(监控告警产品)   svc-api-meta(API 元数据/SDK)   │  │
 │  │ alert-engine(租户告警规则评估)                            │  │
@@ -94,7 +94,7 @@ R5 产品可插拔:新增云产品 = 注册资源类型 + 实现资源控制器 
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-分工判定口诀:**"规则和钱归 Java,吞吐和连接归 Go,资源动手归控制器"**。
+分工判定口诀:**"业务规则、高吞吐接入、资源动手"三类域均由 Go 承载,按吞吐/连接/常驻特征定岗**。
 
 ### 2.3 统一服务治理方案
 
@@ -104,28 +104,24 @@ R5 产品可插拔:新增云产品 = 注册资源类型 + 实现资源控制器 
 
 - **Namespace**:按环境隔离 `dev / staging / prod`(联调合并入 dev,不设 test/unit/dev-test),跨环境不互通;与《04-middleware-infrastructure.md》§4.3 及《10-research-and-selection-decisions.md》§4.3 一致;
 - **Group**:一律用应用名(如 `svc-order`),禁止按团队分组;
-- **服务名规范**:`svc-{domain}`,Java 与 Go 注册名同构,例如 `svc-iam`,元数据带 `lang=java|go`、`plane=mgmt|data` 标签,供网关与监控过滤;
+- **服务名规范**:`svc-{domain}`,Go 服务注册名统一,例如 `svc-iam`,元数据带 `lang=go`、`plane=mgmt|data` 标签,供网关与监控过滤;
 - **配置键规范**:`{app}.{module}.{key}`,敏感配置(数据库口令、支付密钥)不入 Nacos 明文,走 K8s Secret + 启动注入,参见《07-security.md》;
 - **APISIX 对接注意**:APISIX discovery 插件走 Nacos 1.x HTTP Open API,需锁定 Nacos 版本并开启鉴权后同步验证(group/namespace 必须与客户端注册参数完全一致),此坑见《10-research-and-selection-decisions.md》§4.4 兼容性清单,部署细节见《04-middleware-infrastructure.md》。
 
-#### 2.3.2 服务间协议选择:gRPC / OpenFeign / HTTP
+#### 2.3.2 服务间协议选择:gRPC / HTTP
 
-> **结论**:东西向(服务间)统一 **gRPC + Protobuf,IDL-first**;南北向(对外开放 API)走 **HTTP/OpenAPI + APISIX**;**OpenFeign 不用于服务间契约调用**,仅用于 Java 服务对接第三方 HTTP 服务(支付渠道、短信通道、实名认证供应商)。
+> **结论**:东西向(服务间)统一 **gRPC + Protobuf,IDL-first**;南北向(对外开放 API)走 **HTTP/OpenAPI + APISIX**;外部三方 HTTP 服务(支付渠道、短信通道、实名认证供应商)用 Go `net/http`/resty 封装,不引入 OpenFeign。
 
 | 协议 | 定位 | 适用场景 | 禁止场景 |
 |---|---|---|---|
 | gRPC + Protobuf | 东西向标准 | 所有微服务间同步调用、资源控制器下发与回调、计量上报 | 直接暴露给公网用户 |
 | HTTP/OpenAPI | 南北向标准 | OpenAPI 网关、console-bff 对前端、官网接口 | 服务间高频调用 |
-| OpenFeign | 三方集成 | 调支付/短信/实名的外部 HTTP API,带负载均衡与降级 | 内部服务间契约(避免 Java 域自成一套 REST 标准,与 Go 域割裂) |
+| Go HTTP 客户端 | 三方集成 | 调支付/短信/实名的外部 HTTP API,带超时与重试 | 内部服务间契约(统一 gRPC,避免 REST 标准割裂) |
 | Kafka 事件 | 异步解耦 | 跨域状态广播、削峰、计量管道 | 需要即时一致结果的场景 |
 
-**理由**:① 与《10-research-and-selection-decisions.md》§4.2"东西向统一 gRPC+Protobuf、IDL-first 跨语言生成"结论一致;② Kratos 原生 gRPC,Spring 侧用 grpc-spring-boot-starter,一套 proto 双端生成,契约不可被某一方私改;③ 性能上 gRPC 二进制序列化 + HTTP/2 多路复用,计量上报与资源回调这类高频链路收益明显。
+**理由**:① 与《10-research-and-selection-decisions.md》§4.2"东西向统一 gRPC+Protobuf、IDL-first"结论一致;② Kratos 原生 gRPC,一套 proto 生成 Go 代码,契约不可被某一方私改;③ 性能上 gRPC 二进制序列化 + HTTP/2 多路复用,计量上报与资源回调这类高频链路收益明显。
 
-**备选方案**:Java 域内部用 OpenFeign(HTTP/JSON)简化调试。
-
-**什么条件下改选备选**:仅当 MVP 阶段 Go 服务数量为 0、且团队确认 proto 治理成本显著高于收益时,允许 Java 域内部短期用 OpenFeign;但任何跨"钱/资源"边界的接口与所有事件必须一步到位按 gRPC/Kafka 标准建设,且该豁免在第一个 Go 服务上线时终止,存量 Feign 接口按季度收敛为 gRPC。
-
-**IDL 管理**:所有 proto 集中在 `proto-hub` 独立仓库,目录按服务划分,CI 强制 `buf lint` + 兼容性检查(`buf breaking`),Java/Go 代码由流水线生成制品(Jar / Go module),业务仓库不手写生成代码。
+**IDL 管理**:所有 proto 集中在 `proto-hub` 独立仓库,目录按服务划分,CI 强制 `buf lint` + 兼容性检查(`buf breaking`),Go 代码由流水线生成制品(Go module),业务仓库不手写生成代码。
 
 #### 2.3.3 流量治理:超时、重试、限流、熔断
 
@@ -133,17 +129,17 @@ R5 产品可插拔:新增云产品 = 注册资源类型 + 实现资源控制器 
 |---|---|
 | 超时分级 | 快查询 1s / 常规调用 3s / 编排下发类 10s;调用方超时 ≤ 被调方处理超时的 80% |
 | 重试 | 只重试幂等读;写接口默认不重试,除非携带 `ClientToken` 且被调方已实现幂等(见 8.3) |
-| 限流 | 南北向由 APISIX `limit-req/limit-count` 插件按 AK/IP 双维限流;Java 域内部用 Sentinel 兜底;Go 服务不单点部署 Sentinel 等价物,统一由 APISIX 与 gRPC 拦截器兜底,避免双标准 |
+| 限流 | 南北向由 APISIX `limit-req/limit-count` 插件按 AK/IP 双维限流;Go 服务统一由 APISIX 与 gRPC 拦截器兜底,不另设限流框架,避免双标准 |
 | 熔断 | gRPC 客户端统一封装熔断拦截器(错误率 >50% 持续 10s 半开),查询类降级返回缓存或空态 |
 | 优雅上下线 | 注册 Nacos 后延迟接流(预热 30s);下线前摘流并等待存量请求完成(最长 30s),发布细节见《08-devops-delivery.md》 |
 
 #### 2.3.4 统一工程约定
 
 - **错误传播**:gRPC Status + 自定义 `ErrorDetail`(携带业务错误码),跨服务透传 `request_id`;
-- **链路**:全服务强制接入 OpenTelemetry(Java 用 agent,Go 用 SDK),trace_id 注入日志 MDC,可观测体系见《05-data-observability.md》;
-- **健康检查**:`/healthz` `/readyz`(Go)与 Spring Actuator health(Java)统一被 K8s 探针使用;
+- **链路**:全服务统一接入 OpenTelemetry Go SDK,trace_id 注入日志字段,可观测体系见《05-data-observability.md》;
+- **健康检查**:`/healthz` `/readyz` 统一被 K8s 探针使用;
 - **指标**:每服务暴露 `/metrics`(Prometheus 格式),RED 三指标(速率/错误/耗时)为交付门禁;
-- **脚手架**:Java 统一 archetype、Go 统一 Kratos layout 模板,内含 trace、metrics、幂等、审计埋点中间件,新服务从模板生成。
+- **脚手架**:统一 Kratos layout 模板,内含 trace、metrics、幂等、审计埋点中间件,新服务从模板生成。
 
 ---
 
@@ -160,32 +156,32 @@ flowchart LR
     BFF[console-bff<br/>Go·Kratos]
 
     subgraph 身份与访问域
-        IAM[svc-iam<br/>Java]
-        ORG[svc-org<br/>Java]
+        IAM[svc-iam<br/>Go]
+        ORG[svc-org<br/>Go]
     end
 
     subgraph 商业化域
-        CATALOG[svc-catalog<br/>Java]
-        ORDER[svc-order<br/>Java]
-        PAY[svc-payment<br/>Java]
-        BILLING[svc-billing<br/>Java]
+        CATALOG[svc-catalog<br/>Go]
+        ORDER[svc-order<br/>Go]
+        PAY[svc-payment<br/>Go]
+        BILLING[svc-billing<br/>Go]
         METERING[svc-metering<br/>Go]
     end
 
     subgraph 资源域
-        ORCH[svc-orchestrator<br/>Java]
-        QUOTA[svc-quota<br/>Java]
-        WORKFLOW[svc-workflow<br/>Java]
+        ORCH[svc-orchestrator<br/>Go]
+        QUOTA[svc-quota<br/>Go]
+        WORKFLOW[svc-workflow<br/>Go]
         RC[资源控制器 rc-*<br/>Go]
     end
 
     subgraph 支撑域
-        NOTIFY[svc-notify<br/>Java]
+        NOTIFY[svc-notify<br/>Go]
         AUDIT[svc-audit<br/>Go]
-        TICKET[svc-ticket<br/>Java]
+        TICKET[svc-ticket<br/>Go]
         MONITOR[svc-monitor<br/>Go]
         ALERTENG[alert-engine<br/>租户规则引擎·Go]
-        ALERTC[alert-center<br/>Java]
+        ALERTC[alert-center<br/>Go]
     end
 
     subgraph 开放域
@@ -224,26 +220,26 @@ flowchart LR
 
 > 本表为全书服务清单/职责/语言栈的**唯一事实源**(命名规范 `svc-{domain}`,Nacos Group=应用名,见《04-middleware-infrastructure.md》§4.3)。本表共列 **18 个具名服务**(含 alert-engine/alert-center 两个告警组件),其中**一期微服务 17 个**(alert-center 后置,见《09-roadmap.md》§3.4 基线表),二/三期扩至 50+。OpenAPI 入口由 APISIX + svc-api-meta 承担,不单设 OpenAPI BFF。
 >
-> 说明:全平台口径为"**一期 17 个核心微服务**(alert-center 后置)+ 2 个告警组件(alert-engine/alert-center)= 表列 18 行具名项";引用服务总数时写"17"(《09》§3.4 基线),引用本表行数时写"18"。
+> 说明:全平台口径为"**一期 17 个核心微服务**(alert-center 后置)+ 2 个告警组件(alert-engine/alert-center)= 表列 18 行具名项";引用服务总数时写"17"(《09》§3.4 基线),引用本表行数时写"18"。**全平台统一 Go + Kratos,无语言栈分工。**
 
 | 服务名 | 中文职责 | 语言栈 | 域 | 关键存储 |
 |---|---|---|---|---|
-| svc-iam | 账号、认证、AK/SK、RAM 用户/角色/策略 | Java | 身份 | MySQL(分库)+ Redis |
-| svc-org | 组织、项目(资源组)、标签 | Java | 身份 | MySQL |
-| svc-catalog | 商品目录、定价、询价、试用代金券 | Java | 商业化 | MySQL + Redis |
-| svc-order | 订单中心(新购/续费/升降配/退订) | Java | 商业化 | MySQL(分库分表) |
-| svc-payment | 支付渠道对接、收退款、对账单 | Java | 商业化 | MySQL |
-| svc-billing | 出账、抵扣、余额、欠费判定(现金余额/流水归 trade_db ledger) | Java | 商业化 | MySQL(分库分表) |
+| svc-iam | 账号、认证、AK/SK、RAM 用户/角色/策略 | Go | 身份 | MySQL(分库)+ Redis |
+| svc-org | 组织、项目(资源组)、标签 | Go | 身份 | MySQL |
+| svc-catalog | 商品目录、定价、询价、试用代金券 | Go | 商业化 | MySQL + Redis |
+| svc-order | 订单中心(新购/续费/升降配/退订) | Go | 商业化 | MySQL(分库分表) |
+| svc-payment | 支付渠道对接、收退款、对账单 | Go | 商业化 | MySQL |
+| svc-billing | 出账、抵扣、余额、欠费判定(现金余额/流水归 trade_db ledger) | Go | 商业化 | MySQL(分库分表) |
 | svc-metering | 计量采集、聚合、上报管道 | Go | 商业化 | Kafka + ClickHouse + MySQL |
-| svc-orchestrator | 资源编排与生命周期管控、资源台账 resource_instance 唯一所有者(对标 ROS 履约侧) | Java | 资源 | MySQL + Kafka |
-| svc-quota | 配额定义、占用、审批 | Java | 资源 | MySQL + Redis |
-| svc-workflow | 轻量工作流/状态机引擎(平台底座) | Java | 资源 | MySQL + Kafka |
+| svc-orchestrator | 资源编排与生命周期管控、资源台账 resource_instance 唯一所有者(对标 ROS 履约侧) | Go | 资源 | MySQL + Kafka |
+| svc-quota | 配额定义、占用、审批 | Go | 资源 | MySQL + Redis |
+| svc-workflow | 轻量工作流/状态机引擎(平台底座) | Go | 资源 | MySQL + Kafka |
 | svc-monitor | 用户侧监控告警产品:规则管理与指标查询代理(对标 CloudMonitor) | Go | 支撑 | MySQL + 租户 VM 集群 |
 | alert-engine | 租户告警规则评估(即《05》中的"租户规则引擎") | Go | 支撑 | MySQL(alert_rule)+ 租户 VM 集群 |
-| alert-center | 告警收敛与对客通知通道 | Java | 支撑 | MySQL + Kafka + ClickHouse |
-| svc-notify | 站内信/短信/邮件/推送 | Java | 支撑 | MySQL + Kafka |
+| alert-center | 告警收敛与对客通知通道 | Go | 支撑 | MySQL + Kafka + ClickHouse |
+| svc-notify | 站内信/短信/邮件/推送 | Go | 支撑 | MySQL + Kafka |
 | svc-audit | 操作审计采集与查询 | Go | 支撑 | Kafka + ClickHouse |
-| svc-ticket | 工单系统 | Java | 支撑 | MySQL |
+| svc-ticket | 工单系统 | Go | 支撑 | MySQL |
 | svc-api-meta | OpenAPI 元数据、文档与 SDK 生成 | Go | 开放 | MySQL + MinIO |
 | console-bff | 控制台聚合层 | Go | 接入 | Redis |
 | rc-* | 各产品资源控制器(数据面) | Go | 资源 | K8s etcd(CR) |
@@ -255,7 +251,7 @@ flowchart LR
 #### 4.1.1 svc-iam(账号与身份,对标 RAM)
 
 - **职责**:主账号注册/登录/注销、实名认证状态、MFA、RAM 子用户与用户组、角色与 STS 后置、AK/SK 生命周期、策略(Policy)引擎鉴权。**Day 1 服务,晚做则全平台返工**(对标启示 1,见《10-research-and-selection-decisions.md》§3.4)。
-- **语言栈**:Java。理由:策略求值涉及组织/项目/资源标签多因子组合,规则复杂、变更频繁,且与账号强事务绑定。
+- **语言栈**:Go。理由:策略求值涉及组织/项目/资源标签多因子组合,规则复杂、变更频繁,且与账号强事务绑定。
 - **核心接口**:
   ```protobuf
   service AccountService {
@@ -276,7 +272,7 @@ flowchart LR
 #### 4.1.2 svc-org(组织与项目)
 
 - **职责**:资源目录(企业多账号后置)、项目(资源组)CRUD、资源归属与移动、统一标签(Tag)体系。标签是成本分析与权限的公共语言,模型第一天就要稳。
-- **语言栈**:Java。
+- **语言栈**:Go。
 - **核心接口**:
   ```protobuf
   service OrgService {
@@ -292,7 +288,7 @@ flowchart LR
 #### 4.2.1 svc-catalog(商品与定价)
 
 - **职责**:产品/资源类型目录、SKU 与规格定义、定价计划(包年包月/按量/资源包)、价格计算引擎、试用代金券规则挂载点。**Day1 计费形态 = 包年包月 + 按量(资源包与抢占式后置二期);免费试用以试用代金券形态一期最小实现(由本服务提供代金券最小实现),满减/折扣券后置二期**(以《01-product-catalog.md》D6/D7 为唯一事实源)。
-- **语言栈**:Java。
+- **语言栈**:Go。
 - **核心接口**:
   ```protobuf
   service CatalogService {
@@ -307,7 +303,7 @@ flowchart LR
 #### 4.2.2 svc-order(订单中心)
 
 - **职责**:统一订单模型(新购/续费/升配/降配/退订五类),购物车后置;询价→锁价→下单→支付驱动→履约触发→退订退款编排;订单是商业化复杂度的中枢(对标启示 9,见《10-research-and-selection-decisions.md》§3.4)。
-- **语言栈**:Java。理由:强事务 + 状态机 + 金额精度,属《10-research-and-selection-decisions.md》§4.2 中 Java 域典型场景。
+- **语言栈**:Go。理由:强事务 + 状态机 + 金额精度,依赖 gRPC 与同分片本地事务,属业务规则域典型场景。
 - **核心接口**:
   ```protobuf
   service OrderService {
@@ -324,7 +320,7 @@ flowchart LR
 #### 4.2.3 svc-payment(支付对接)
 
 - **职责**:支付渠道适配(一期内部模拟渠道/余额支付,二期对接三方)、支付单与退款单、渠道回调验签与幂等、渠道对账文件解析。
-- **语言栈**:Java。
+- **语言栈**:Go。
 - **核心接口**:
   ```protobuf
   service PaymentService {
@@ -334,13 +330,13 @@ flowchart LR
     rpc QueryPaymentStatus(payment_id);
   }
   ```
-- **依赖**:上游 svc-order;外部渠道 HTTP(OpenFeign 封装);Kafka `cloud.trade.payment.event`(topic 规范见《04-middleware-infrastructure.md》§5.4)。
+- **依赖**:上游 svc-order;外部渠道 HTTP(Go HTTP 客户端封装);Kafka `cloud.trade.payment.event`(topic 规范见《04-middleware-infrastructure.md》§5.4)。
 - **一致性**:支付单与订单之间靠双向对账兜底(8.5),回调处理先落库再发事件。
 
 #### 4.2.4 svc-billing(计费出账)
 
 - **职责**:计费规则执行(按量小时出账)、资源包/代金券抵扣顺序、余额扣减与欠费判定、账单生成(小时明细 + 月度汇总)、欠费催收事件、发票合同后置。现金余额与余额流水归本服务管辖的 trade_db ledger(见《04-middleware-infrastructure.md》§6.3)。
-- **语言栈**:Java。理由:金额计算、抵扣顺序、账务强一致,复杂规则密集。
+- **语言栈**:Go。理由:金额计算、抵扣顺序、账务强一致,复杂规则密集,靠同分片本地事务 + outbox 保证一致。
 - **核心接口**:
   ```protobuf
   service BillingService {
@@ -372,7 +368,7 @@ flowchart LR
 #### 4.3.1 svc-orchestrator(资源编排与生命周期)
 
 - **职责**:① 资源生命周期唯一所有者:持有资源台账 `resource_instance` 表(6.2),状态机唯一写入口(状态迁移只在本服务发生,K8s phase 仅作观测字段);② 订单履约编排:把订单拆解为资源操作序列并驱动执行;③ 对外 IaC 模板编排(对标 ROS,二期);④ 失败补偿与超时回收。
-- **语言栈**:Java。理由:编排逻辑 = 复杂规则 + 状态机 + 事务记录,且与订单/配额等 Java 服务强协同。
+- **语言栈**:Go。理由:编排逻辑 = 复杂规则 + 状态机 + 事务记录,与订单/配额等服务强协同。
 - **核心接口**:
   ```protobuf
   service OrchestratorService {
@@ -388,7 +384,7 @@ flowchart LR
 #### 4.3.2 svc-quota(配额中心)
 
 - **职责**:配额定义(每产品每 region)、用量实时统计、下单前校验与占用、释放回退、配额提升工单审批。
-- **语言栈**:Java。理由:占用/回退必须与订单事务语义协同,且需要审计。
+- **语言栈**:Go。理由:占用/回退必须与订单事务语义协同,且需要审计。
 - **核心接口**:
   ```protobuf
   service QuotaService {
@@ -404,7 +400,7 @@ flowchart LR
 #### 4.3.3 svc-workflow(工作流引擎)
 
 - **职责**:平台级轻量流程引擎:流程定义(步骤 DAG)、实例与步骤状态持久化、超时与重试调度、补偿步骤登记。**自研轻量实现,不引入候选池外的重型工作流组件(如 Temporal/Camunda)**。
-- **语言栈**:Java。
+- **语言栈**:Go。
 - **设计**:
   - `flow_definition`(步骤 JSON)/ `flow_instance` / `step_instance` 三张表,步骤经 Kafka `cloud.sys.workflow.task` 派发给执行器(各业务服务订阅自己的 task_type,topic 规范见《04-middleware-infrastructure.md》§5.4);
   - 定时器由"扫描 `next_fire_at` 索引 + 分布式锁"实现,不依赖额外调度组件;
@@ -450,7 +446,7 @@ flowchart LR
     rpc QueryMetricData(resource_id, metric, range);             // Monitor.QueryMetricData
   }
   ```
-- **实现**(与《05-data-observability.md》§8/§9 的双栈方案完全一致,以该章为准):
+- **实现**(与《05-data-observability.md》§8/§9 的告警方案完全一致,以该章为准):
   - **租户侧不部署 Prometheus/AlertManager**:租户 agent(cloudmonitor-agent)经监控接入网关直推租户 VictoriaMetrics 集群(account_id/project_id 多租户隔离,字段名见《00-overview.md》附录 A 全局标识规范),因此不存在"把租户规则编译为 AlertManager 配置"的落地路径;
   - **规则存储**:租户规则落 MySQL `alert_rule`(分片键 account_id),规则数量上限按套餐分级(免费 5 条/企业版 100 条),变更同步 alert-engine 生效;
   - **告警评估**:alert-engine 每分钟从租户指标集群拉取评估,触发事件写 Kafka `cloud.sys.alert.event`;
@@ -460,7 +456,7 @@ flowchart LR
 #### 4.4.2 svc-notify(消息通知)
 
 - **职责**:通知模板管理、渠道发送(站内信/短信/邮件/WebSocket 推送)、发送频控与退订、通知偏好。
-- **语言栈**:Java(模板、偏好、频控规则)+ Go 组件 `push-gateway`(WebSocket 长连接,高并发资源敏感型)。
+- **语言栈**:Go。模板、偏好、频控规则与 WebSocket 长连接统一由 Go 承载;`push-gateway` 组件处理高并发长连接。
 - **核心接口**:消费 Kafka `cloud.notify.message`(统一任务模型:account_id + template_id + 参数 + 渠道;topic 规范见《04-middleware-infrastructure.md》§5.4);对外 `Notify.DescribeNotifications`(站内信列表)。
 - **关键约束**:欠费催收、到期提醒、释放预告三类通知必须落库可查、可追溯(商业信任底线,对标启示 8,见《10-research-and-selection-decisions.md》§3.4)。
 
@@ -475,7 +471,7 @@ flowchart LR
 #### 4.4.4 svc-ticket(工单)
 
 - **职责**:工单创建/流转/评价、分类与优先级、SLA 计时(支持计划分级后置)、客服工作台接口;审批类流程(配额提升、退款人工审核)复用 svc-workflow。
-- **语言栈**:Java。
+- **语言栈**:Go。
 - **核心接口**:`Ticket.CreateTicket / ReplyTicket / ListTickets`;智能客服机器人接入点预留(后置)。
 - **约束**:工单通道属"不可后置"清单(对标启示 10,见《10-research-and-selection-decisions.md》§3.4),MVP 以最简形态上线。
 
@@ -484,12 +480,12 @@ flowchart LR
 - **职责**:L2 对客告警的评估引擎:按租户规则周期(默认每分钟)从租户 VictoriaMetrics 集群拉取指标并评估(阈值/同比/环比),触发后产出告警事件写 Kafka `cloud.sys.alert.event`;只评估、不通知。
 - **语言栈**:Go。理由:周期拉取评估为高频 IO 型负载,无复杂事务,水平扩展友好,符合 Go 域定位。
 - **依赖**:读 MySQL `alert_rule`(规则定义归 svc-monitor 所有);读租户 VM 集群;下游 Kafka `cloud.sys.alert.event`(topic 规范见《04-middleware-infrastructure.md》§5.4)。
-- **边界**:平台自身(L0/L1)告警走 Prometheus + Alertmanager,不经本服务;双栈分工见《05-data-observability.md》§8.1/§9.2。
+- **边界**:平台自身(L0/L1)告警走 Prometheus + Alertmanager,不经本服务;告警方案见《05-data-observability.md》§8.1/§9.2。
 
 #### 4.4.6 alert-center(告警中心)
 
 - **职责**:告警统一收敛与对客通知通道:消费 Kafka `cloud.sys.alert.event`(含平台 Alertmanager webhook 入流与租户规则引擎事件),执行去重/分组/抑制/静默四级收敛,按租户联系人与支持计划等级路由通知,单租户通知限流(10 条/分钟)防通知风暴;告警历史留痕供租户控制台查询。
-- **语言栈**:Java。理由:收敛策略、联系人分组、通知偏好属复杂配置型业务,与《05-data-observability.md》§8.3 的结论一致。
+- **语言栈**:Go。收敛策略、联系人分组、通知偏好属复杂配置型业务,与《05-data-observability.md》§8.3 的结论一致。
 - **依赖**:上游 Kafka `cloud.sys.alert.event`;下游 Kafka `cloud.notify.message`(对客短信/邮件/站内信经 svc-notify 发出);告警事件与收敛明细归档 ClickHouse;topic 规范见《04-middleware-infrastructure.md》§5.4。
 
 ### 4.5 开放域
@@ -499,7 +495,7 @@ flowchart LR
 - **职责**:
   - **APISIX**:唯一 OpenAPI 南北向入口——AK/SK 签名校验(CPS1-HMAC-SHA256,见《07-security.md》§4.1)、路由到产品 Action、限流、审计打点、RequestId 生成。路由规划:一产品一子域名 `{productCode}.api.starcloud.cn`(如 `scecs.api.starcloud.cn`),按 `product_code` 路由到对应产品控制面服务,域名形态与路由表以《04-middleware-infrastructure.md》§3.2/§3.3 为准;
   - **svc-api-meta(Go)**:API 元数据中心——存储每个 Action 的参数 schema、错误码、版本;驱动文档自动生成(文档中心,见《01-product-catalog.md》;对标杆源与选型坑清单见《10-research-and-selection-decisions.md》§3.4/§4.2/§4.4)与 SDK 生成(9.4);提供 OpenAPI Explorer 调试台后端。
-- **语言栈**:APISIX(选型结论,备选 Spring Cloud Gateway 的条件见《10-research-and-selection-decisions.md》§4.2);svc-api-meta 用 Go(元数据读多写少、与文档/SDK 工具链同生态)。
+- **语言栈**:APISIX(选型结论,见《10-research-and-selection-decisions.md》§4.2);svc-api-meta 用 Go(元数据读多写少、与文档/SDK 工具链同生态)。
 - **兼容性注意**:APISIX 依赖 etcd,纳入《04-middleware-infrastructure.md》运维清单;Nacos discovery 插件版本锁定见 2.3.1。
 
 ---
@@ -880,9 +876,9 @@ CREATE TABLE `quota_usage` (
 >
 > **理由**:云管控链路跨 5+ 服务,XA/全局锁的可用性代价不可接受;账单与计量天然可重算、可对账,最终一致 + 兜底纠正是云厂商通行做法。
 >
-> **备选方案**:Seata(AT/TCC)覆盖 Java 域内强一致场景。
+> **备选方案**:引入分布式事务框架(如 DTM)覆盖强一致场景。
 >
-> **何时改选备选**:当出现"一个用户请求内必须原子落 2 个以上 Java 服务库"且无法用 outbox 改造的场景累计 ≥3 个时,在 Java 域局部引入 Seata AT;TCC 仅允许用于资金冻结类接口。引入前必须评估悬挂/空回滚防护成本。
+> **何时改选备选**:当出现"一个用户请求内必须原子落 2 个以上服务库(跨分片)"且无法用 outbox 改造的场景累计 ≥3 个时,评估引入分布式事务框架。但 Vitess 不提供跨分片强一致事务,因此**优先靠分片键把跨库一致性问题限定在单分片内**(本地事务+vindex),避免触发此改选条件。TCC 仅允许用于资金冻结类接口。引入前必须评估悬挂/空回滚防护成本。
 
 ### 8.2 本地消息表 + Outbox 投递(标准范式)
 
@@ -914,7 +910,7 @@ flowchart LR
     E -- 否 --> G["retry_count+1,指数退避<br/>超过阈值告警人工介入"]
 ```
 
-要点:Relay 为各 Java 服务内嵌组件(统一 starter),扫描加分布式锁防重;消息至少一次投递,消费端必须幂等;禁止业务代码直接发 Kafka 替代 outbox(资金/资源相关事件)。
+要点:Relay 为独立 Go/Kratos 轻量服务,扫描各 vttablet 的 outbox 表(加分布式锁防重);消息至少一次投递,消费端必须幂等;禁止业务代码直接发 Kafka 替代 outbox(资金/资源相关事件)。
 
 ### 8.3 幂等设计(全平台强制)
 
@@ -1053,7 +1049,7 @@ flowchart LR
     A[proto-hub<br/>IDL 唯一事实源] --> B[CI: buf lint/breaking]
     B --> C[生成 OpenAPI 3.0 描述<br/>+ gRPC stub 制品]
     C --> D[svc-api-meta 元数据入库]
-    D --> E1[openapi-generator<br/>Java/Go/Python SDK]
+    D --> E1[openapi-generator<br/>Go/Python SDK]
     D --> E2[文档站 API 参考页<br/>见文档中心]
     D --> E3[OpenAPI Explorer<br/>在线调试]
     E1 & E2 & E3 --> F[API 发布流水线<br/>版本/错误码门禁]
@@ -1074,7 +1070,7 @@ flowchart LR
 | APISIX | 4(跨 AZ) | 4C8G | 签名插件 CPU 敏感,压测定容(对齐 09§3.4) |
 | console-bff | 4 | 1C2G | Go 低占用 |
 | svc-iam | 4 | 2C4G | 鉴权热路径,本地缓存为主 |
-| svc-order / billing / orchestrator | 各 3 | 2C4G | Java 域标准 |
+| svc-order / billing / orchestrator | 各 3 | 2C4G | 核心业务域标准 |
 | svc-catalog / quota / payment / workflow | 各 2 | 2C4G | |
 | svc-metering / audit / monitor / api-meta | 各 2 | 1C2G | Go 域标准 |
 | svc-notify + push-gateway | 2 + 2 | 1C2G | 长连接单独扩缩 |
@@ -1084,7 +1080,7 @@ flowchart LR
 数据面部署原则:
 
 - 全部容器化跑在管控 K8s 集群,HPA 以 CPU 70% + 自定义 QPS 指标双触发;
-- MySQL:ShardingSphere-JDBC 分库分表(account_db 4 库×16 表、trade_db/resource_db/metering_db 8 库×16 表,统一按 account_id 分片,8 库×16 表=128 片起步、倍增扩容),中间件部署细节见《04-middleware-infrastructure.md》§6.3;
+- MySQL:Vitess 分库分表(account_db 4 库×16 表、trade_db/resource_db/metering_db 8 库×16 表,统一按 account_id 分片、Reshard 承载水平扩容),中间件部署细节见《04-middleware-infrastructure.md》§6.3;
 - 审计与计量明细走 ClickHouse(MySQL 只存聚合与热数据),日志/Trace 体系见《05-data-observability.md》;
 - 多地域:模型层 Day 1 带 region 字段(对标启示 6,见《10-research-and-selection-decisions.md》§3.4),物理上先单地域单 AZ(P1),P2 起同城双 AZ;跨地域复制方案后置(P3,见《00-overview.md》§4.2 部署演进)。
 
@@ -1115,7 +1111,7 @@ flowchart LR
 
 ## 附:评审关注点自查
 
-- [x] Java/Go 分工与选型决策一致,OpenFeign 定位显式说明(2.3.2;选型见《10-research-and-selection-decisions.md》§4.2)
+- [x] 统一 Go/Kratos 分工与选型决策一致,东西向 gRPC 与外部 HTTP 封装定位显式说明(2.3.2;选型见《10-research-and-selection-decisions.md》§4.2)
 - [x] 17 个核心服务均有职责/语言/接口/依赖(第 4 节,详见 4.0 服务总表)
 - [x] 资源状态机覆盖欠费锁定与到期释放(5.2/5.4)
 - [x] 端到端时序图含回调兜底与计量闭环(5.3)
@@ -1123,7 +1119,7 @@ flowchart LR
 - [x] 无 XA,outbox+幂等+补偿+对账四件套齐备(第 8 节)
 - [x] OpenAPI 版本/签名/错误码/SDK 生成闭环(第 9 节;签名唯一契约 CPS1-HMAC-SHA256 见《07-security.md》§4.1)
 - [x] AK/SK 存储采用 KMS 信封加密可逆方案(sk_cipher + sk_key_version),验签依赖可逆 SK(6.1,事实源《07-security.md》§2.2)
-- [x] 对客告警走 alert-engine/alert-center 双栈,租户侧不部署 Prometheus(4.4.1,事实源《05-data-observability.md》§8/§9)
+- [x] 对客告警走 alert-engine/alert-center,租户侧不部署 Prometheus(4.4.1,事实源《05-data-observability.md》§8/§9)
 - [x] 一期规模引用《09-roadmap.md》§3.4 基线表(第 10 节)
 - [x] 一期上线顺序含 rc-network/rc-database,SCECI 后置二期(第 11 节)
 - [x] 余额字段归 trade_db ledger,account 表仅留身份属性(6.1)
@@ -1140,7 +1136,7 @@ flowchart LR
 |---|---|---|
 | 命名规范 | 库名/表名/列名小写下划线,禁用保留字;索引名 `uk_`/`idx_` 前缀 | 与 04§6.1 命名规范一致 |
 | 分片键 | 涉及"钱/资源归属/计量"的表必须以 `account_id` 为分片键(单键,否决 region+account_id 组合) | 与 04§6.3/§6.4 一致;资源元数据可携 `region` 字段但不作分片键 |
-| 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(起步 8 库×16 表=128 片,倍增扩容) | 与 04§6.3 量级一致 |
+| 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(库×表口径;Reshard 承载水平扩容) | 与 04§6.3 量级一致 |
 | 主键与唯一键 | 主键建议雪花 BIGINT;业务唯一键显式 `UNIQUE KEY`;幂等键(如 `client_token`)落唯一索引 | 见 6.3 `order_main.uk_client_token` |
 | 字段类型 | 金额 `DECIMAL`(禁浮点);时间 `DATETIME`+UTC;枚举用 `TINYINT`+注释字典;JSON 字段标注结构示例 | 见第 6 节约定 |
 | 索引设计 | 查询条件字段建复合索引;区分度高列在前;`idx_status_*` 类扫描索引单独建;单表索引 ≤8 | 见 6.2 `idx_acc_prod`/`idx_status_charge` |

@@ -237,7 +237,6 @@ mindmap
 | 容器镜像服务 SCACR | 镜像托管、分发与安全扫描 | ACR | Harbor 多租户项目、镜像推拉鉴权、Trivy 漏洞扫描、仓库配额 | Harbor 托管化、IAM、VPC | 低 |
 | 流水线服务 SCPIPE | CI/CD 流水线即代码 | 云效 Flow | 图形化与 YAML 双模流水线、构建/测试/部署步骤、对接 GitLab CI 引擎与 ArgoCD | GitLab CI Runner 池、ArgoCD 多租户、制品仓库 | 中 |
 | 制品仓库 SCARTIFACT | Maven/npm/Docker 通用制品托管 | 云效 Packages | Maven/npm 代理与私有仓库、权限控制、配额 | Nexus/Verdaccio 托管化、IAM | 低 |
-
 **品类说明**:DevOps 品类的底座即平台自身交付体系(参见《08-devops-delivery.md》),对外售卖形态是把内部 GitLab CI + ArgoCD 体系多租户化。建议先卖 SCACR(容器生态刚需、成本最低),SCPIPE 待内部流水线平台稳定后再开放。
 
 ### 2.9 域名与建站

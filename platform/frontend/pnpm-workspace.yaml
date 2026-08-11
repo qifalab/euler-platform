@@ -1,0 +1,7 @@
+# pnpm workspace for the StarCloud frontend scaffold.
+# Each console sub-app is an independent workspace package so it can be
+# developed and published independently (per the architecture doc).
+packages:
+  - "apps/console-base"
+  - "apps/console-ecs"
+  - "apps/site"

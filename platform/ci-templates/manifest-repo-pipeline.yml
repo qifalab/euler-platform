@@ -1,0 +1,104 @@
+# Manifest repository pipeline (08-devops-delivery §5.5).
+#
+# The manifest repo is the GitOps source of truth, so its own pipeline is the
+# last gate before ArgoCD applies anything to a cluster. Jobs run on every MR;
+# prod/ changes additionally require SRE + service Owner dual approval via
+# CODEOWNERS (08§4.2).
+
+stages: [lint, validate, diff]
+
+variables:
+  PYTHON_IMAGE: python:3.12-slim
+
+# ---------------------------------------------------------------------------
+# Syntax: every manifest must parse.
+# ---------------------------------------------------------------------------
+lint:yaml:
+  stage: lint
+  image: $PYTHON_IMAGE
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - python tools/check-yaml-syntax.py
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ---------------------------------------------------------------------------
+# K8s schema conformance.
+# ---------------------------------------------------------------------------
+lint:kubeconform:
+  stage: lint
+  image: ghcr.io/yannh/kubeconform:latest-alpine
+  script:
+    # Helm templates carry Go directives, so render them before validating.
+    - |
+      for chart in deploy/gitops-manifests/apps/*/; do
+        helm template "$chart" > /tmp/rendered.yaml
+        kubeconform -strict -summary /tmp/rendered.yaml
+      done
+    - kubeconform -strict -summary -ignore-missing-schemas
+        deploy/gitops-manifests/platform/
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Gateway semantics. YAML validity is not enough — the failures that matter
+# here are semantic and silent in production: a route without sc-auth is an
+# unauthenticated endpoint; a Nacos subscription string in the wrong form
+# resolves to zero upstreams and the route simply 502s.
+# ---------------------------------------------------------------------------
+validate:apisix-routes:
+  stage: validate
+  image: $PYTHON_IMAGE
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - python tools/check-apisix-routes.py
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+validate:lua-plugins:
+  stage: validate
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache lua5.1 luarocks python3
+    - luarocks-5.1 install luacheck
+  script:
+    # Structural contract check (module table, check_schema, priority).
+    - python3 tools/check-lua-plugins.py
+    # Real Lua linting once the interpreter is available in CI.
+    - luacheck deploy/gitops-manifests/platform/apisix/plugins/ --no-color
+        --globals ngx --std max
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Policy admission (OPA/Kyverno dry-run).
+# ---------------------------------------------------------------------------
+validate:policy:
+  stage: validate
+  image: openpolicyagent/conftest:latest
+  script:
+    - conftest test deploy/gitops-manifests/platform/ --policy policies/
+  allow_failure: true      # advisory until the policy set is complete
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Show the operator exactly what will change in the cluster before approval.
+# Read-only credentials; ArgoCD does the applying.
+# ---------------------------------------------------------------------------
+diff:argocd:
+  stage: diff
+  image: argoproj/argocd:latest
+  script:
+    - argocd login "$ARGOCD_SERVER" --auth-token "$ARGOCD_READONLY_TOKEN" --grpc-web
+    - |
+      for app in $(argocd app list -o name); do
+        echo "=== $app ==="
+        argocd app diff "$app" --refresh || true
+      done
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

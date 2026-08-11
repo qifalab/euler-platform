@@ -34,7 +34,7 @@
 2. **声明式到底**:从 OpenAPI 到 Operator,全链路只传递"期望状态",由 reconcile 循环收敛;禁止把一次性命令当作供给主链路。
 3. **一切资源皆有归属标签**:任何被平台创建的 K8s 对象必须携带 `tenant/project/instance/product` 四元标签,配额、计量、审计、清理都依赖它。
 4. **K8s 不是唯一后端**:供给链路通过驱动层抽象(§6),今天落 K8s,明天可落虚机/裸金属,管控上层不感知。
-5. **语言分工遵循选型决议**:所有直接操作 K8s API 的组件(Operator、rc-* 资源控制器、数据面 Agent)及高频写入/数据接入型服务(计量聚合 svc-metering,Go)用 Go/Kratos 生态;业务逻辑(订单、计费、资源台账)用 Java/Spring Cloud。依据见《10-research-and-selection-decisions.md》§4.2 选型总表(双栈分工同《03-backend-services.md》§2.2/§4.0 服务总表)。
+5. **语言统一遵循选型决议**:全平台后端统一 Go/Kratos;其中所有直接操作 K8s API 的组件(Operator、rc-* 资源控制器、数据面 Agent)及高频写入/数据接入型服务(计量聚合 svc-metering)用 Go/Kratos 生态。依据见《10-research-and-selection-decisions.md》§4.2 选型总表(统一 Go 分工同《03-backend-services.md》§2.2/§4.0 服务总表)。
 
 ---
 
@@ -57,7 +57,7 @@
 flowchart TB
     subgraph MGMT["管理集群 mgmt-prod-01(独立资源池)"]
         direction TB
-        ORC["资源编排 svc-orchestrator(Java)"]
+        ORC["资源编排 svc-orchestrator(Go)"]
         RCCTL["资源控制器 rc-*(Go,承载 ProvisionDriver §6)"]
         NODESVC["节点管理服务(Go)"]
         HUB["Operator 管理台 / CRD 版本管理"]
@@ -367,7 +367,7 @@ sequenceDiagram
 
 | 收敛项 | 结论 |
 |---|---|
-| 服务命名 | 本章初稿的"资源管控 / resource-center"即 **svc-orchestrator**(资源编排与生命周期,Java,《03-backend-services.md》§4.3.1),全书不再另设同名服务;"provision-bridge"收敛为 **rc-* 资源控制器**(rc-compute / rc-storage / rc-network…,Go,《03-backend-services.md》§4.3.4)内的履约执行层,即本章 §6 ProvisionDriver 抽象的承载者 |
+| 服务命名 | 本章初稿的"资源管控 / resource-center"即 **svc-orchestrator**(资源编排与生命周期,Go,《03-backend-services.md》§4.3.1),全书不再另设同名服务;"provision-bridge"收敛为 **rc-* 资源控制器**(rc-compute / rc-storage / rc-network…,Go,《03-backend-services.md》§4.3.4)内的履约执行层,即本章 §6 ProvisionDriver 抽象的承载者 |
 | 实例台账 | 唯一台账为 `resource_instance`(svc-orchestrator 持有,表结构见《03-backend-services.md》§6.2);本章初稿的 `product_instance` 表废弃;产品私有属性进 `resource_instance_attr` KV 扩展表与 CR spec(§4.5) |
 | 状态机事实源 | 平台级资源状态机(INIT/CREATING/RUNNING/…)**仅由 svc-orchestrator 写入**,是计费、控制台、审计口径;K8s CR `status.phase` 是**数据面运行事实**,经 rc-* 回调/轮询上送;两者以固定映射(§4.3)+ 超时兜底 + 每日对账收敛,而非互为镜像 |
 | 下发通道 | gRPC 声明式下发 + 回调/轮询双保险(决策见下) |
@@ -497,12 +497,12 @@ sequenceDiagram
     autonumber
     actor U as 租户(控制台/OpenAPI)
     participant GW as APISIX 网关
-    participant API as SCOSS OpenAPI 服务(Java)
+    participant API as SCOSS OpenAPI 服务(Go)
     participant CAT as svc-catalog(询价)
     participant Q as svc-quota
-    participant ORD as svc-order(Java)
+    participant ORD as svc-order(Go)
     participant PAY as svc-payment
-    participant ORC as svc-orchestrator(Java)
+    participant ORC as svc-orchestrator(Go)
     participant WF as svc-workflow
     participant RC as rc-storage(Go,承载 ProvisionDriver §6)
     participant K8S as 业务集群 API Server
@@ -562,7 +562,7 @@ sequenceDiagram
 
 ### 4.5 管控侧核心表结构(示例)
 
-> **台账事实源说明**:全平台资源台账唯一为 `resource_instance`(由 svc-orchestrator 持有,表结构见《03-backend-services.md》§6.2),分库分表策略(按 `account_id` 单键分片,垂直四库 account_db/trade_db/resource_db/metering_db,水平 account_db 4×16、trade/resource/metering_db 8×16 起步,ShardingSphere-JDBC)参见《04-middleware-infrastructure.md》§6.3 与《03-backend-services.md》§6。本章初稿的 `product_instance` 表**已废弃并合并至 `resource_instance`**;产品私有属性进 `resource_instance_attr` KV 扩展表与 CR spec。下方仅展示 rc-* 侧的供给任务表(仍归 svc-orchestrator/履约执行层维护)。
+> **台账事实源说明**:全平台资源台账唯一为 `resource_instance`(由 svc-orchestrator 持有,表结构见《03-backend-services.md》§6.2),分库分表策略(按 `account_id` 单键分片,垂直四库 account_db/trade_db/resource_db/metering_db,水平 account_db 4×16、trade/resource/metering_db 8×16 起步,Vitess)参见《04-middleware-infrastructure.md》§6.3 与《03-backend-services.md》§6。本章初稿的 `product_instance` 表**已废弃并合并至 `resource_instance`**;产品私有属性进 `resource_instance_attr` KV 扩展表与 CR spec。下方仅展示 rc-* 侧的供给任务表(仍归 svc-orchestrator/履约执行层维护)。
 
 ```sql
 -- 供给/运维任务:一切对 CR 的写操作都必须先落任务(可追溯、可重试)
@@ -722,7 +722,7 @@ type StatusEvent struct {
 
 ```mermaid
 flowchart LR
-    ORC["资源编排 svc-orchestrator(Java)"] -- "gRPC ApplyResource 声明式下发" --> RC["rc-* 履约执行层(Go)"]
+    ORC["资源编排 svc-orchestrator(Go)"] -- "gRPC ApplyResource 声明式下发" --> RC["rc-* 履约执行层(Go)"]
     RC --> RT{"驱动路由<br/>instance.driver + 选址策略"}
     RT -- driver=k8s --> KD["K8sDriver<br/>dynamic client 创建/更新 CR<br/>watch 聚合多集群事件"]
     RT -- driver=vm(二期) --> VD["VMDriver<br/>虚拟化平台 API 适配器(预留)"]
@@ -848,7 +848,7 @@ flowchart TD
 1. **PriorityClass**:`platform-critical`(平台组件)> `tenant-paid`(付费负载)> `batch-low`(内部批处理/缓冲池填充);节点压力时按优先级驱逐;
 2. **准入强制**:租户 Pod 若 limit/request 比值超过池策略(1.5)直接拒绝,防止个别用户把超卖空间吃光;
 3. **规格模板校准**:VPA recommendation 周报驱动各产品规格模板的 request 值修正——超卖的本质风险是"模板 request 低估",用数据闭环而非拍脑袋;
-4. **红线告警**:节点内存 >80%、CPU load 异常、磁盘 IO 饱和均接入对客告警通道(05 双栈方案:租户 agent 直推 VictoriaMetrics,alert-engine(Go)+alert-center(Java)评估走对客通道,见《05-data-observability.md》§8/§9)并定义 SLO。
+4. **红线告警**:节点内存 >80%、CPU load 异常、磁盘 IO 饱和均接入对客告警通道(05 方案:租户 agent 直推 VictoriaMetrics,alert-engine(Go)+alert-center(Go)评估走对客通道,见《05-data-observability.md》§8/§9)并定义 SLO。
 
 演进开关:当售卖"突发性能型"规格(对标阿里云 t 系列)时,才考虑引入 CPU 积分制限流(APISIX/自研 cgroup 控制器),一期不做。
 

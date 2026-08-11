@@ -43,7 +43,7 @@
 
 | 数据类别 | 典型内容 | 主存储 | 辅助组件 | 特征 |
 |---|---|---|---|---|
-| 交易型业务数据 | 订单、账单汇总、资源元数据、账号权限 | MySQL 分库分表(ShardingSphere-JDBC) | Redis Cluster 缓存 | 强一致、行级事务、低延迟点查 |
+| 交易型业务数据 | 订单、账单汇总、资源元数据、账号权限 | MySQL 分库分表(Vitess) | Redis Cluster 缓存 | 强一致、行级事务、低延迟点查 |
 | 计量明细 | 逐资源逐计量项的用量记录 | ClickHouse | Kafka 管道 + Redis 聚合状态 | 只追加、海量、按账号/时间分析 |
 | 账单/聚合数据 | 小时聚合、日汇总、账单明细 | MySQL(账单)+ ClickHouse(明细分析) | — | 出账写 MySQL,追溯查明细走 CK |
 | 业务事件流 | 订单事件、资源生命周期事件、计费事件 | Kafka(管道)+ ClickHouse(事件审计) | MySQL outbox 表 | 事件溯源、跨域解耦 |
@@ -58,8 +58,8 @@
 ```mermaid
 flowchart LR
     subgraph OLTP["OLTP 交易层"]
-        MS["微服务集群<br/>(Spring Cloud / Kratos)"]
-        MY[("MySQL 分库分表<br/>ShardingSphere-JDBC")]
+        MS["微服务集群<br/>(统一 Go/Kratos)"]
+        MY[("MySQL 分库分表<br/>Vitess")]
         OB[("Outbox 表")]
         RD[("Redis Cluster<br/>缓存/聚合状态")]
     end
@@ -130,7 +130,7 @@ flowchart LR
 | OLAP 引擎 | **ClickHouse** | 列存压缩成本约为 ES 1/10;SQL 分析;高吞吐写入;同时承接计量/账单/日志/审计四类负载,一套引擎收敛运维面 | Elasticsearch | 团队已有成熟 ES 运维能力且全文检索为第一诉求 |
 | 日志存储 | **ClickHouse**(Vector 官方 sink 写入) | 同上;日志写多读少、几乎不更新,与 MergeTree+TTL 天然匹配 | ELK | 强依赖 Kibana 开箱体验与全文检索体验时 |
 | 长期指标存储 | **VictoriaMetrics**(Prometheus remote_write 承接) | 单机 Prometheus 只留 7d 热数据;VM 提供长保留、高压缩比与多租户 accountID 能力 | Prometheus 自身长保留 | 数据量小、保留期 ≤30 天且无多租户诉求 |
-| Trace 后端 | **OpenTelemetry 埋点 + SkyWalking OAP 接收存储** | OTel 行业标准、双语言 SDK 成熟;OAP 提供一体化 APM UI,存储用独立的 trace-ES 集群(与搜索 ES 物理隔离,见 §7.3) | 纯 OTel Collector + 自研存储 | 需要字节码零侵入且纯 Java 栈时可直接 SW agent(但全平台统一口径优先,维持 OTel) |
+| Trace 后端 | **OpenTelemetry 埋点 + SkyWalking OAP 接收存储** | OTel 行业标准、Go SDK 成熟;OAP 提供一体化 APM UI,存储用独立的 trace-ES 集群(与搜索 ES 物理隔离,见 §7.3) | 纯 OTel Collector + 自研存储 | 需要字节码零侵入且纯 Java 栈时可评估 SW agent(但全平台统一 Go 口径优先,维持 OTel) |
 | 流式聚合 | **自研消费者服务**(即 svc-metering,Go/Kratos 实现,Kafka 消费者 + Redis 状态) | 候选池无 Flink;计量聚合逻辑固定、窗口简单,自研消费者 + 幂等下沉成本最低、可控性最强;语言归属符合"吞吐和连接归 Go"分工(见《03-backend-services.md》§2.2) | Flink(可选,候选池外小工具标注) | 出现复杂多流 join / CEP / 分钟级大规模状态计算需求时 |
 | 业务数据同步至分析层 | **事务 Outbox + Relay 投递** | 与业务事务原子提交,无额外组件;实现简单 | Debezium/Canal CDC(可选) | 存量库无法改造、或需要整库批量同步时 |
 
@@ -140,7 +140,7 @@ flowchart LR
 
 ## 3. OLTP 数据架构(摘要与本章增量约定)
 
-分库分表总体方案、ShardingSphere-JDBC 使用规范、连接池与驱动版本耦合坑,参见《04-middleware-infrastructure.md》与《03-backend-services.md》。此处只列与数据流相关的强约定:
+分库分表总体方案、Vitess 使用规范、连接池与驱动版本耦合坑,参见《04-middleware-infrastructure.md》与《03-backend-services.md》。此处只列与数据流相关的强约定:
 
 ### 3.1 分片键约定
 
@@ -225,7 +225,7 @@ sequenceDiagram
 
 1. **生产端**:计量、账务与审计类 topic 强制 `acks=all` + `enable.idempotence=true`(broker 侧 `min.insync.replicas=2`,见《04》§5.6);日志缓冲类(`cloud.sys.log.buffer`)允许 `acks=1`(允许极端情况丢弃)。
 2. **分区键 = 顺序边界**:同一资源/账号的事件必须落同一分区;禁止随机 key。
-3. **消息必须含 `trace_id` 字段**:生产端由框架拦截器自动注入(Java 用 OTel agent 注入的 MDC,Go 用统一日志/消息封装),实现"事件→调用链"反查。
+3. **消息必须含 `trace_id` 字段**:生产端由框架拦截器自动注入(Go 用统一日志/消息封装),实现"事件→调用链"反查。
 4. **消费端三件套**:手动提交 offset、幂等下沉、死信转发。消费失败重试后投 `cloud.*.dlq` 并告警;消费组命名 `{service}.{purpose}`(见《04》§5.5)。
 5. **Schema 治理**:payload 用 Protobuf(与东西向 gRPC IDL-first 策略一致),`schema_version` 字段做兼容演进;新增字段只增不改;topic 名不含版本号(《04》§5.3)。
 
@@ -348,7 +348,7 @@ message HourlyUsage {
 
 ### 5.4 聚合层实现要点
 
-- **技术形态**:Go(Kratos)服务 `svc-metering`,3 副本——与《03-backend-services.md》§4.2.5 是**同一组件、同一服务名**(语言归属按双栈分工口诀"吞吐和连接归 Go",见《03》§2.2 与《09-roadmap.md》决策 R-04);消费组内按 resource_id 哈希与 Kafka 分区天然对齐,同资源顺序处理。
+- **技术形态**:Go(Kratos)服务 `svc-metering`,3 副本——与《03-backend-services.md》§4.2.5 是**同一组件、同一服务名**(语言归属按《03》§2.2 统一 Go/Kratos);消费组内按 resource_id 哈希与 Kafka 分区天然对齐,同资源顺序处理。
 - **状态管理**:5min 微批先累加进 Redis(`HINCRBYFLOAT metering:{hour}:{partition-range}`),小时窗口封口时读出并产出 HourlyUsage。Redis 只做加速,**不是事实源**——事实源是 Kafka `cloud.metering.usage.raw`(保留 3 天,参数见《04-middleware-infrastructure.md》§5.4),Redis 状态丢失可从 raw 重放重建。
 - **窗口封口时机**:整点后等待 10 分钟水位线(容忍 agent 延迟),封口后仍可通过补数流程修正。
 - **乱序处理**:`window_start` 决定归属窗口,与到达顺序无关;迟到数据(跨小时到达)单独标记并合并进对应历史窗口,产出 `batch_id=late` 的修正聚合记录。
@@ -539,7 +539,7 @@ CK 写入大忌是"逐条 INSERT";所有写入方必须攒批,并对 `Too many p
 ```mermaid
 flowchart TB
     subgraph APP["应用与基础设施"]
-        SVC["微服务 Pod<br/>Java: OTel Agent + Micrometer<br/>Go: OTel SDK + go-metrics"]
+        SVC["微服务 Pod<br/>Go: OTel SDK + go-metrics"]
         NODE["K8s 节点 / cAdvisor / kube-state-metrics"]
         MW["中间件 exporter<br/>mysqld/redis/kafka/apisix"]
     end
@@ -585,17 +585,17 @@ flowchart TB
 - 备选:仅用 Prometheus 自身长保留 / Thanos 类方案。
 - 改选条件:指标总量小(序列数 <50 万)且保留期 ≤30 天时,Prometheus 单栈即可,撤掉 VM 减少组件;反之若多集群聚合诉求出现,VM 是唯一正确方向(选型表一致)。
 - **坑位提示(与选型坑清单 7 一致,见《10-research-and-selection-decisions.md》§4.4)**:Prometheus→VM 迁移期 remote_write 双写对比至少一周;recording rule 尽量留在 Prometheus 侧,VM 只存结果,避免行为差异。
-- 采集规范:服务统一暴露 `/metrics`(Java Micrometer + OTel agent 自动装配;Go 用 prometheus/client_golang);标签必须含 `service`、`instance`、`region`、`env`;**禁止高基数标签**(account_id、resource_id 不得进指标标签——它们属于 trace/log 与租户监控域)。
+- 采集规范:服务统一暴露 `/metrics`(Go 用 prometheus/client_golang + go-metrics);标签必须含 `service`、`instance`、`region`、`env`;**禁止高基数标签**(account_id、resource_id 不得进指标标签——它们属于 trace/log 与租户监控域)。
 - RED/USE 模板:每个服务默认出 RED 面板(请求率/错误率/时延)与依赖健康面板,由平台 Grafana provisioning 统一下发(纳入《08-devops-delivery.md》GitOps)。
 
 ### 7.3 Traces 支柱
 
 **结论:全平台统一 OpenTelemetry 埋点,OTLP 输出至 SkyWalking OAP(Otel receiver)做存储与分析 UI;存储用独立的 trace-ES 集群(与搜索 ES 物理隔离)。**
 
-- 理由:OTel 是行业标准、Java agent 与 Go SDK 均成熟,与 Java/Go 双语言分工(参见《03-backend-services.md》)天然匹配;OAP 提供开箱即用的 APM 拓扑/慢调用分析,免去自建 trace 查询 UI。
-- 备选:纯 SkyWalking agent(字节码增强零侵入)。
-- 改选条件:平台收敛为纯 Java 且追求零改造成本时可全量切 SW agent;但当前双语言格局下,OTel 统一口径收益更大,维持现结论。
-- **红线(选型坑清单 1,见《10-research-and-selection-decisions.md》§4.4)**:同一进程禁止 SW agent 与 OTel exporter 并存——双份上报且上下文传播断裂。工程落地:CI 镜像构建基线只内置 OTel agent,把该红线变成构建约束。
+- 理由:OTel 是行业标准、Go SDK 成熟,与统一 Go/Kratos 栈(参见《03-backend-services.md》)天然匹配;OAP 提供开箱即用的 APM 拓扑/慢调用分析,免去自建 trace 查询 UI。
+- 备选:纯 SkyWalking agent(字节码增强零侵入,仅适用 Java 栈)。
+- 改选条件:未来若引入 Java 组件且追求零改造成本时可评估 SW agent;但当前统一 Go 口径下,OTel 统一口径收益更大,维持现结论。
+- **红线(选型坑清单 1,见《10-research-and-selection-decisions.md》§4.4)**:同一进程禁止 SW agent 与 OTel exporter 并存——双份上报且上下文传播断裂。工程落地:CI 镜像构建基线只内置 OTel exporter,把该红线变成构建约束。
 - Trace 存储:OAP 使用**独立的 trace-ES 集群**(3 节点 16C/64G/2TB,保留 7~15 天),与官网**搜索 ES 集群**(3 master+3 data,8C32G/500GB)物理隔离,二者互不影响。**用途边界与集群规格以《04-middleware-infrastructure.md》§8.1/§8.2 为准**:搜索 ES 只承担"三类搜索"用途,trace-ES 只承担 OAP trace 存储,均不与日志/OLAP(ClickHouse)负载混部。采样策略:网关默认 10% 采样 + 错误/慢调用(>1s)100% 尾采样,由 APISIX/OTel 采样器实现。
 
 ### 7.4 Logs 支柱
@@ -606,7 +606,7 @@ flowchart TB
 - 备选:ELK。改选条件见 6.1。
 - **日志规范(强制,三支柱联动的前提)**:
   - 结构化 JSON 单行输出;必含字段:`ts, level, service, instance, env, msg`;
-  - `trace_id/span_id`:Java 由 OTel agent 自动注入 MDC,Go 用平台统一日志库封装注入;
+  - `trace_id/span_id`:Go 由统一日志库封装注入;
   - 敏感数据(AK/SK、手机号、身份证)在应用侧脱敏后输出;平台侧 Vector transform 兜底正则遮蔽(安全细则参见《07-security.md》);
   - 日志等级纪律:正常流量禁打 INFO 大对象;ERROR 必须可告警或可忽略有标记,否则告警体系被噪音淹没。
 - Kafka 缓冲链路取舍:日常直写 CK(Vector 自带磁盘 buffer);仅在 CK 维护窗口或日志洪峰时启用 Kafka 缓冲(消费者为 logs-ingestor),保持链路可切换但常态最短。
@@ -662,7 +662,7 @@ flowchart TB
     subgraph L2["对客告警(云监控产品)"]
         R3["租户自定义规则<br/>(MySQL 存储, alert-engine 评估)"]
         R4["平台预置规则模板<br/>(ECS CPU/内存/磁盘等)"]
-        AC["告警中心 alert-center(Java)"]
+        AC["告警中心 alert-center(Go)"]
     end
 
     R1 --> AM1
@@ -686,11 +686,11 @@ flowchart TB
 
 - 平台规则:PrometheusRule CRD + Grafana dashboard 一律进 Git,经 ArgoCD 同步(参见《08-devops-delivery.md》);规则变更走 MR 评审。
 - 规则模板:每类中间件/服务提供默认规则包(Nacos 注册即自动被 kube-prometheus 发现并挂默认规则),新服务上线自带基础告警。
-- 对客规则:存 MySQL(`alert_rule`,分片键 account_id),由 `alert-engine`(Go)消费租户 VM 数据评估,规则数量上限按套餐分级(免费 5 条/企业版 100 条);`svc-monitor` 只负责租户告警规则 CRUD 与查询代理,不编译 Prometheus/Alertmanager 配置(对客告警双栈方案见 §8.5/§9.2)。
+- 对客规则:存 MySQL(`alert_rule`,分片键 account_id),由 `alert-engine`(Go)消费租户 VM 数据评估,规则数量上限按套餐分级(免费 5 条/企业版 100 条);`svc-monitor` 只负责租户告警规则 CRUD 与查询代理,不编译 Prometheus/Alertmanager 配置(对客告警方案见 §8.5/§9.2)。
 
 ### 8.3 告警收敛
 
-告警中心(alert-center,Java 服务)消费 `cloud.sys.alert.event`,执行四级收敛管线:
+告警中心(alert-center,Go 服务)消费 `cloud.sys.alert.event`,执行四级收敛管线:
 
 1. **去重**:同 fingerprint(规则 ID+标签集哈希)在 10min 窗口内仅留一条;
 2. **分组**:按 service/region 聚合为告警组,同组多条只发一条摘要(含 top 实例列表);
@@ -723,7 +723,7 @@ flowchart LR
         ENG["租户规则引擎 alert-engine(Go)"]
     end
 
-    AC["告警中心 alert-center(Java,对客通道)"]
+    AC["告警中心 alert-center(Go,对客通道)"]
     CON["控制台监控大盘<br/>(Vue 前端 + BFF 查询代理)"]
 
     VM1 -->|remote-write/push| GW
@@ -736,7 +736,7 @@ flowchart LR
 产品化要点:
 
 1. **基础监控免费、精细监控收费**:agent 60s 粒度基础指标(CPU/内存/磁盘/网络)免费,作为 ECS 标配提升产品力;10s 粒度、自定义指标、更长保留期走付费套餐——直接对标阿里云云监控商业模式。
-2. **agent 即 Go 基建**:cloudmonitor-agent 用 Go 实现(呼应 Java/Go 分工:Go 负责资源敏感型工具),支持宿主一键安装脚本与 K8s DaemonSet 两种形态。
+2. **agent 即 Go 基建**:cloudmonitor-agent 用 Go 实现(统一 Go 栈,资源敏感型工具天然 Go),支持宿主一键安装脚本与 K8s DaemonSet 两种形态。
 3. **大盘不用 Grafana 对客**:多租户 Grafana 暴露面大、定制差;控制台用 Vue 图表组件 + BFF 查询代理(见第 9 节隔离),Grafana 仅限内部。
 4. **与资源生命周期联动**:资源释放后监控数据保留 3 天供回溯,随后随租户数据清理策略删除(呼应对标启示 8 的透明状态机,见《10-research-and-selection-decisions.md》§3.4)。
 

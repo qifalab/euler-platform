@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package starcloud.billing.v1;
+
+option go_package = "github.com/starcloud/sc-platform/proto/starcloud/billing/v1;billingv1";
+
+// BillingService is the billing / invoicing engine (03§4.2.4). Owns billing
+// rule execution (postpaid hourly charging), resource-pack / coupon / balance
+// deduction ordering, balance deduction & overdue determination, bill
+// generation (hourly detail + monthly summary), and overdue-collection events.
+// Cash balance & balance ledger belong to the trade_db ledger it governs
+// (04§6.3). amounts are decimal strings (money never float — 03§6).
+service BillingService {
+  // ChargeHourly consumes the metering aggregate event and writes hourly charge
+  // lines after applying the deduction waterfall. Idempotent per charge line.
+  rpc ChargeHourly(ChargeHourlyRequest) returns (Ack);
+  rpc DescribeBills(DescribeBillsRequest) returns (DescribeBillsResponse);
+  rpc DescribeBillDetails(DescribeBillDetailsRequest) returns (DescribeBillDetailsResponse);
+  // GetAccountBalance / AdjustBalance are internal ledger operations.
+  rpc GetAccountBalance(GetAccountBalanceRequest) returns (AccountBalance);
+  rpc AdjustBalance(AdjustBalanceRequest) returns (AccountBalance);
+  // FreezeResource is invoked on overdue to lock a resource; the lock is
+  // delivered to svc-orchestrator via Kafka (03§4.2.4 出账链路: 欠费 → 宽限期 →
+  // 停服锁定 → 释放).
+  rpc FreezeResource(FreezeResourceRequest) returns (Ack);
+}
+
+// Bill is a monthly bill for an account (月度汇总).
+message Bill {
+  int64 bill_id = 1;
+  int64 account_id = 2;
+  int32 bill_year = 3;
+  int32 bill_month = 4;           // 1-12
+  string total_amount = 5;        // decimal string
+  string paid_amount = 6;         // decimal string
+  string unpaid_amount = 7;       // decimal string
+  BillStatus status = 8;
+  int64 generated_at = 9;         // unix seconds
+}
+
+enum BillStatus {
+  BILL_STATUS_UNSPECIFIED = 0;
+  BILL_STATUS_UNPAID = 1;         // 未结清
+  BILL_STATUS_PAID = 2;           // 已结清
+  BILL_STATUS_OVERDUE = 3;        // 已欠费(宽限期中)
+}
+
+// BillDetail is one charge line inside a bill (小时明细 / 单条计费记录).
+message BillDetail {
+  int64 detail_id = 1;
+  int64 bill_id = 2;
+  int64 account_id = 3;
+  string resource_id = 4;
+  string metering_item = 5;       // cpu_seconds | storage_gb_hour | ...
+  int64 window_start = 6;         // unix seconds, hour-aligned for hourly
+  int32 window_seconds = 7;
+  string unit_price = 8;          // decimal string from frozen price snapshot
+  string quantity = 9;            // decimal string
+  string amount = 10;             // decimal string (unit_price * quantity)
+  repeated Deduction deductions = 11; // deduction waterfall applied
+  string charge_line_id = 12;     // idempotency key = sha1(resource|item|hour)[0:24]
+}
+
+// Deduction records one step of the waterfall applied to a charge line.
+// Order: resource pack -> coupon expiring soonest -> cash balance (03§4.2.4
+// 出账链路: 计量聚合 → 计费 → 抵扣(资源包→代金券→余额)).
+message Deduction {
+  string type = 1;                // resource_pack | coupon | balance
+  string amount = 2;              // decimal string deducted at this step
+  string ref_id = 3;              // pack_id | coupon_id | "-"
+}
+
+// ChargeLine is the input to a deduction pass (unit charge for one
+// resource x item x hour).
+message ChargeLine {
+  string charge_line_id = 1;      // deterministic idempotency key
+  int64 account_id = 2;
+  string resource_id = 3;
+  string metering_item = 4;
+  string unit_price = 5;          // decimal string
+  string quantity = 6;            // decimal string
+  string amount = 7;              // decimal string
+  int64 window_start = 8;         // unix seconds
+}
+
+// AccountBalance is the cash balance (现金余额) governed by the trade_db ledger.
+message AccountBalance {
+  int64 account_id = 1;
+  string balance = 2;             // decimal string
+  string frozen = 3;              // decimal string (frozen during refund orchestration)
+  string available = 4;           // decimal string (balance - frozen)
+  int64 updated_at = 5;           // unix seconds
+}
+
+message ChargeHourlyRequest {
+  repeated ChargeLine lines = 1;  // batch of charge lines for one pass
+}
+
+message DescribeBillsRequest {
+  int64 account_id = 1;
+  int32 bill_year = 2;
+  int32 bill_month = 3;           // optional
+  int32 page_number = 4;
+  int32 page_size = 5;
+}
+
+message DescribeBillsResponse {
+  repeated Bill bills = 1;
+  int32 total_count = 2;
+}
+
+message DescribeBillDetailsRequest {
+  int64 bill_id = 1;
+  int32 page_number = 2;
+  int32 page_size = 3;
+}
+
+message DescribeBillDetailsResponse {
+  repeated BillDetail details = 1;
+  int32 total_count = 2;
+}
+
+message GetAccountBalanceRequest {
+  int64 account_id = 1;
+}
+
+message AdjustBalanceRequest {
+  int64 account_id = 1;
+  string delta = 2;               // decimal string; positive=top-up, negative=withdraw
+  string reason = 3;
+  string ref_id = 4;              // ledger reference, idempotency anchor
+}
+
+message FreezeResourceRequest {
+  string resource_id = 1;
+  int64 account_id = 2;
+  string reason = 3;              // overdue lock
+}
+
+message Ack {}

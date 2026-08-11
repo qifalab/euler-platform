@@ -116,14 +116,14 @@
 | 主域名 | `starcloud.cn` | www.starcloud.cn / console.starcloud.cn / scecs.api.starcloud.cn | 01 D0 + 00 附录A |
 | 品牌/平台前缀 | `sc`(替代 cldp/cps/CPSA) | sc-frontend-platform、@sc/ui、--sc-* CSS 变量、sc:ecs ARN | 00 附录A |
 | 产品 code 前缀 | `sc` + 品类缩写(全小写) | scecs、scoss、scrds、scvpc、scbs、sceip、scmon、sceci、sccert | 01 D0 |
-| 服务名 | `svc-{domain}`(Java/Go 同构) | svc-iam、svc-order、svc-billing、svc-metering、svc-orchestrator、svc-kms | 03§4.0 |
+| 服务名 | `svc-{domain}`(统一 Go) | svc-iam、svc-order、svc-billing、svc-metering、svc-orchestrator、svc-kms | 03§4.0 |
 | 接入层 BFF | `{场景}-bff` | console-bff、site-bff、auth-console-bff | 03§4.0 + 04§4.3 |
 | 数据面控制器 | `rc-*` | rc-compute、rc-storage、rc-network | 03§4.0 + 06§4.0 |
-| 告警组件 | alert-engine(Go)/alert-center(Java) | — | 03§4.0 |
+| 告警组件 | alert-engine(Go)/alert-center(Go) | — | 03§4.0 |
 | Nacos Group | = 应用名(=服务名) | Group=svc-order;订阅串 svc-order@@svc-order | 04§4.3 |
-| 租户标识字段 | `account_id`(≡ uid ≡ user_id ≡ tenant_id) | 全书物理列/shardingColumn/Kafka 分区键一律 account_id | 00 附录A + 04§6.3 |
+| 租户标识字段 | `account_id`(≡ uid ≡ user_id ≡ tenant_id) | 全书物理列/Vitess vindex 分片键/Kafka 分区键一律 account_id | 00 附录A + 04§6.3 |
 | 分片键 | account_id 单键(四库统一) | 否决 region+account_id 组合路由 | 04§6.4 |
-| 分库分表 | account_db 4×16、trade/resource/metering_db 8×16 | 8 库×16 表=128 片起步,倍增扩容 | 04§6.3 |
+| 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(实现承载 Vitess,口径不变) | 库×表口径;Reshard 承载水平扩容 | 04§6.3 |
 | 资源 ID 格式 | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | scecs-cn-north-1-01-a1b2c3d4 | 00 附录A + 04§6.6 |
 | region 命名 | `cn-north-1`/`cn-east-1`(短横线风格) | cn-north-1-a | 00 附录A |
 | 可用区命名 | `{region}-{a/b/...}` | cn-north-1-a | 00§4.1 |

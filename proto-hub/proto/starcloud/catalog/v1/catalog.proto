@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package starcloud.catalog.v1;
+
+option go_package = "github.com/starcloud/sc-platform/proto/starcloud/catalog/v1;catalogv1";
+
+// CatalogService is the commercialization middleware (03§4.2.1 / 01§7).
+// Owns: product/resource-type catalog, SKU & spec definitions, pricing rules,
+// the price calculation engine, and the trial-voucher minimal implementation
+// (满减/折扣券 deferred to phase 2).
+//
+// New-product onboarding contract (对标启示 2/5, 01§7.3): a product registers
+// the "三件套" — resource type + metering items + OpenAPI — here before it can
+// list. The gateway refuses to mount routes for unregistered products.
+service CatalogService {
+  rpc DescribeProducts(DescribeProductsRequest) returns (DescribeProductsResponse);
+  rpc DescribeSpecs(DescribeSpecsRequest) returns (DescribeSpecsResponse);
+  // CalculatePrice is idempotent询价; returns a price snapshot id the order
+  // service freezes at下单 time (01§12.3: price is append-only, never rewritten).
+  rpc CalculatePrice(CalculatePriceRequest) returns (PriceResult);
+  rpc GetPriceSnapshot(GetPriceSnapshotRequest) returns (PriceSnapshot);
+}
+
+message Product {
+  string product_code = 1;      // sc-prefixed, e.g. scecs (01§1.1 D0)
+  string product_name = 2;
+  string category = 3;          // compute|storage|network|database|...
+  string description = 4;       // 一句话定位, drives marketing detail page (01§3)
+  string resource_type = 5;
+  RegionScope region_scope = 6;  // REGIONAL | GLOBAL
+  ProductStatus status = 7;
+}
+
+enum RegionScope {
+  REGION_SCOPE_UNSPECIFIED = 0;
+  REGION_SCOPE_REGIONAL = 1;
+  REGION_SCOPE_GLOBAL = 2;
+}
+
+enum ProductStatus {
+  PRODUCT_STATUS_UNSPECIFIED = 0;
+  PRODUCT_STATUS_DRAFT = 1;
+  PRODUCT_STATUS_REVIEWING = 2;
+  PRODUCT_STATUS_ON_SALE = 3;
+  PRODUCT_STATUS_OFF_SHELF = 4;
+}
+
+message Sku {
+  string sku_code = 1;
+  string product_code = 2;
+  ChargeType charge_type = 3;
+  string spec_json = 4;         // e.g. {"cpu":2,"mem_gb":4}
+  SkuStatus status = 5;
+}
+
+enum ChargeType {
+  CHARGE_TYPE_UNSPECIFIED = 0;
+  CHARGE_TYPE_PREPAID = 1;       // 包年包月 — phase 1 Day-1 (D6)
+  CHARGE_TYPE_POSTPAID = 2;     // 按量 — phase 1 Day-1 (D6)
+  CHARGE_TYPE_RESOURCE_PACK = 3; // resource pack — deferred phase 2 (D6)
+}
+
+enum SkuStatus {
+  SKU_STATUS_UNSPECIFIED = 0;
+  SKU_STATUS_DRAFT = 1;
+  SKU_STATUS_ON_SALE = 2;
+  SKU_STATUS_OFF_SHELF = 3;
+}
+
+message PricingRule {
+  int64 rule_id = 1;
+  string sku_code = 2;
+  string region_id = 3;        // "*" for global
+  string duration_unit = 4;   // MONTH | YEAR | HOUR | USAGE
+  string list_price = 5;       // decimal string; money never float (03§6)
+  string customer_level = 6;  // NORMAL | ... (差价 by客户等级)
+  int64 effective_from = 7;
+  int64 effective_to = 8;
+}
+
+// PriceResult carries the询价 breakdown and a snapshot id the order freezes.
+// 询价 = 目录价 → 促销折扣(取最优一条,不叠加) → 代金券预抵扣展示 (01§12.3).
+message PriceResult {
+  string snapshot_id = 1;
+  string list_amount = 2;
+  string promo_amount = 3;
+  string coupon_amount = 4;    // trial voucher抵扣 display (D7)
+  string payable_amount = 5;
+}
+
+// PriceSnapshot is the frozen price at order time; the reconciliation/对账
+// basis (01§12.3 — "价格可追溯、不可改写" 是资损防控底线).
+message PriceSnapshot {
+  string snapshot_id = 1;
+  int64 order_id = 2;
+  string sku_code = 3;
+  string list_amount = 4;
+  string promo_amount = 5;
+  string coupon_amount = 6;
+  string payable_amount = 7;
+  string detail_json = 8;       // full计价 process, 客诉 & 审计 basis
+}
+
+message DescribeProductsRequest {
+  string category = 1;         // optional filter
+  int32 page_number = 2;
+  int32 page_size = 3;
+}
+
+message DescribeProductsResponse {
+  repeated Product products = 1;
+  int32 total_count = 2;
+}
+
+message DescribeSpecsRequest {
+  string product_code = 1;
+}
+
+message DescribeSpecsResponse {
+  repeated Sku skus = 1;
+}
+
+message CalculatePriceRequest {
+  int64 account_id = 1;
+  string sku_code = 2;
+  string region_id = 3;
+  int32 quantity = 4;
+  int32 duration = 5;          // 0 for postpaid
+  string duration_unit = 6;   // MONTH | YEAR | HOUR | USAGE
+  // Trial voucher to apply (D7: free trial = voucher via standard postpaid flow).
+  string coupon_id = 7;
+}
+
+message GetPriceSnapshotRequest {
+  string snapshot_id = 1;
+}

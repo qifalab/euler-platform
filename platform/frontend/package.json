@@ -1,0 +1,21 @@
+{
+  "name": "cloudplatform-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud phase-1 frontend scaffold (source-only): Wujie micro-frontend base, console sub-apps, marketing portal.",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/console-base",
+    "apps/console-ecs",
+    "apps/site"
+  ],
+  "scripts": {
+    "dev:base": "echo \"TODO: start console-base dev server (e.g. vite)\"",
+    "dev:ecs": "echo \"TODO: start console-ecs dev server\"",
+    "dev:site": "echo \"TODO: start marketing site server\""
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}

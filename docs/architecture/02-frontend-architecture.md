@@ -858,7 +858,7 @@ flowchart LR
 | API 质量 | `@sc/sdk` 统一上报:耗时、状态码、错误码、requestId | 同上(→ `cloud.sys.rum.event`),可按 appCode 聚合出"子应用接口成功率" |
 | 行为埋点 | 声明式(指令 `v-track`)关键转化漏斗:注册→首购、试用→转正 | 同上(→ `cloud.sys.rum.event`) |
 
-告警规则示例(对客告警由 alert-engine(Go)+alert-center(Java)走对客通道,见《05-data-observability.md》§8 与《03-backend-services.md》§4.0):某子应用版本 JS 错误率 > 2% 持续 5 分钟 → 通知发布负责人并自动建议回滚;灰度版本错误率显著高于稳定版(>3 倍)→ 阻断放量。所有上报携带子应用版本号,使"指标异常→定位到具体版本→一键回滚"闭环成立。
+告警规则示例(对客告警由 alert-engine + alert-center 走对客通道,见《05-data-observability.md》§8 与《03-backend-services.md》§4.0):某子应用版本 JS 错误率 > 2% 持续 5 分钟 → 通知发布负责人并自动建议回滚;灰度版本错误率显著高于稳定版(>3 倍)→ 阻断放量。所有上报携带子应用版本号,使"指标异常→定位到具体版本→一键回滚"闭环成立。
 
 ---
 

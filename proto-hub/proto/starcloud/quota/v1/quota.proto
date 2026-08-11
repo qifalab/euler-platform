@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package starcloud.quota.v1;
+
+option go_package = "github.com/starcloud/sc-platform/proto/starcloud/quota/v1;quotav1";
+
+// QuotaService is the quota center (03§4.3.2). Owns quota definitions
+// (per product per region), real-time usage statistics, pre-order check &
+// occupy, release rollback, and quota-increase work-order approval.
+//
+// Two-phase reservation model (对标 03§4.3.2 / 03§5.3):
+//   CheckAndOccupy 预检并占用 (returns a TTL-bounded Token)
+//   CommitOccupy    落账 (used += amount, occupying -= amount)
+//   ReleaseOccupy   释放回退
+// The occupy token carries a TTL: if it is not committed before expiry it is
+// auto-released, preventing悬挂 (dangling) reservations (03§4.3.2).
+message QuotaService {
+  // CheckAndOccupy pre-checks the quota and reserves amount, returning a
+  // TTL-bounded occupy token. Called by svc-order (下单预检, 03§5.3 step 7)
+  // and svc-orchestrator (履约占用, 03§5.3 step 11). On hard-limit breach
+  // returns an Exceeded error (Quota.Exceeded.*, 03§9.3.1).
+  rpc CheckAndOccupy(CheckAndOccupyRequest) returns (OccupyToken);
+
+  // CommitOccupy settles a previously occupied token: used += amount,
+  // occupying -= amount, version optimistic-lock. Called by svc-orchestrator
+  // once the resource reaches RUNNING (03§5.3 step 14).
+  rpc CommitOccupy(CommitOccupyRequest) returns (Ack);
+
+  // ReleaseOccupy rolls back an occupy without consuming it (占用回退), used
+  // both for explicit cancellation and for auto-release after token TTL.
+  rpc ReleaseOccupy(ReleaseOccupyRequest) returns (Ack);
+
+  // DescribeQuotas returns the quota usage of an account, carrying
+  // used + occupying + hard_limit (Quota.DescribeQuotas, 03§4.3.2). The
+  // console renders "占用中/可用/已用" from this.
+  rpc DescribeQuotas(DescribeQuotasRequest) returns (DescribeQuotasResponse);
+
+  // ApplyQuotaIncrease converts a quota-increase request into an approval
+  // work order (转工单审批), reused by svc-ticket via svc-workflow (03§4.3.2).
+  rpc ApplyQuotaIncrease(ApplyQuotaIncreaseRequest) returns (ApplyQuotaIncreaseResponse);
+}
+
+// Ack is a generic success acknowledgment.
+message Ack {}
+
+// OccupyToken is the two-phase reservation handle. TTL-bounded: the server
+// auto-releases the reservation if not committed before expires_at, and the
+// same token must never be committed twice (idempotent via the ledger
+// version/unique constraints).
+message OccupyToken {
+  string token = 1;                 // opaque reservation id
+  int64 account_id = 2;
+  string quota_code = 3;            // e.g. quota_scecs_instance
+  string region = 4;
+  int32 amount = 5;                 // units occupied
+  int64 expires_at = 6;             // unix seconds; auto-release after this
+}
+
+// QuotaUsage mirrors quota_usage (03§6.5): used + occupying + hard_limit.
+message QuotaUsage {
+  string quota_code = 1;            // e.g. quota_scecs_instance
+  string product_code = 2;
+  string region = 3;                // "*" for global
+  int32 used = 4;                   // 已用 (committed resources)
+  int32 occupying = 5;              // 履约中占用 (reserved, not yet committed)
+  int32 hard_limit = 6;             // 账户级覆盖值, 缺省取 definition default
+  // Available = hard_limit - used - occupying; not stored, computed at read.
+  int32 available = 7;
+  string scope = 8;                 // GLOBAL | REGION (03§6.5)
+  bool adjustable = 9;              // whether the quota may be raised (03§6.5)
+}
+
+message CheckAndOccupyRequest {
+  int64 account_id = 1;
+  string quota_code = 2;
+  string region = 3;
+  int32 amount = 4;
+}
+
+message CommitOccupyRequest {
+  string token = 1;
+}
+
+message ReleaseOccupyRequest {
+  string token = 1;
+}
+
+message DescribeQuotasRequest {
+  int64 account_id = 1;
+  string product_code = 2;          // optional filter
+}
+
+message DescribeQuotasResponse {
+  repeated QuotaUsage quotas = 1;
+}
+
+message ApplyQuotaIncreaseRequest {
+  int64 account_id = 1;
+  string quota_code = 2;
+  string region = 3;
+  int32 requested_value = 4;        // desired hard_limit after approval
+  string reason = 5;
+}
+
+message ApplyQuotaIncreaseResponse {
+  // The approval work order id (svc-ticket / svc-workflow based).
+  int64 work_order_id = 1;
+  string status = 2;                // pending | approved | rejected
+}

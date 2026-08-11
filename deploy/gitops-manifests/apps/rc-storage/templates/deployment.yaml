@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Business services sync at wave 10, after middleware (-5) and gateway (0)
+    # (08§4.3).
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      # Business workloads land on the general services pool (04§2.1); the
+      # gateway pool is tainted and reserved for gateway/middleware.
+      nodeSelector:
+        cloud.platform/pool: services
+      # Spread replicas across nodes so a node loss cannot take the service
+      # down entirely.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Chart.Name }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: http
+          env:
+            - name: NACOS_NAMESPACE
+              value: {{ .Values.env.NACOS_NAMESPACE | quote }}
+            - name: SERVICE_GROUP
+              value: {{ .Values.env.SERVICE_GROUP | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probe.readinessPath }}
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probe.livenessPath }}
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          lifecycle:
+            preStop:
+              # Drain before exit: stop accepting new connections and let
+              # in-flight requests finish (08§6.2).
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+      terminationGracePeriodSeconds: 45

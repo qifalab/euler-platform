@@ -1,0 +1,109 @@
+# APISIX config.yaml — data plane
+#
+# Source of truth: 04-middleware-infrastructure.md §3.1 (three-zone split),
+# §3.7 (Nacos discovery), §3.9 (deployment & HA), §10.1 (K8s form).
+#
+# Three independent data-plane clusters (官网开放区 / 控制台区 / OpenAPI 区)
+# share a single 3-node etcd. etcd is split off with the cluster only when
+# OpenAPI-zone QPS exceeds 20k or compliance demands strong isolation
+# (04§3.1). etcd is a gateway single point of failure if unmanaged, so it is on
+# the middleware ops checklist — backup, monitoring, version upgrades
+# (selection pit #3).
+
+apisix:
+  node_listen: 9080
+  enable_admin: false          # Admin API only on the control-plane instances
+  # No Dashboard in any environment: changes go through ADC CLI + GitOps MR
+  # review (04§3.9), so the cluster state always matches Git.
+  enable_control: true
+  control:
+    ip: "127.0.0.1"
+    port: 9090
+  proxy_cache:
+    cache_ttl: 10s
+    zones:
+      - name: disk_cache_one
+        memory_size: 50m
+        disk_size: 1G
+        disk_path: /tmp/disk_cache_one
+        cache_levels: "1:2"
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: etcd
+  etcd:
+    host:
+      - "http://apisix-etcd-0.apisix-etcd-headless.mw-gateway.svc:2379"
+      - "http://apisix-etcd-1.apisix-etcd-headless.mw-gateway.svc:2379"
+      - "http://apisix-etcd-2.apisix-etcd-headless.mw-gateway.svc:2379"
+    prefix: /apisix
+    timeout: 30
+
+# Nacos service discovery.
+#
+# Compatibility (selection pit #2): the discovery plugin speaks the Nacos 1.x
+# HTTP Open API. Nacos is pinned to 2.4.x LTS with auth enabled and a read-only
+# apisix_ro account. Before any upgrade to Nacos 3.x, discovery compatibility
+# must be verified in staging first.
+#
+# The subscription string is {GROUP}@@{serviceName} and must match the
+# registration side exactly — Group equals the application name (04§4.3). A
+# mismatch fails silently: discovery simply returns no upstreams.
+#
+# The prod gateway subscribes to the prod namespace only (04§4.3 订阅边界).
+discovery:
+  nacos:
+    host:
+      - "http://nacos-headless.mw-core.svc:8848"
+    prefix: "/nacos/v1/"
+    fetch_interval: 30
+    weight: 100
+    timeout:
+      connect: 2000
+      send: 2000
+      read: 5000
+    # Credentials come from a K8s Secret, never inline (04§4.2).
+    username: apisix_ro
+    password: ${NACOS_APISIX_PASSWORD}
+
+nginx_config:
+  worker_processes: auto
+  error_log_level: warn
+  http:
+    lua_shared_dict:
+      # sc-authorize L1 decision cache (07§3.5, 30s TTL).
+      sc_authz_cache: 64m
+      # Standard APISIX dictionaries.
+      prometheus-metrics: 20m
+
+plugins:
+  # Order here does not set execution order — that comes from each plugin's
+  # priority field. Listed in chain order for readability (07§5):
+  #   ip-restriction → limit-req → sc-auth → sc-authorize → sc-audit → upstream
+  - real-ip
+  - request-id
+  - ip-restriction
+  - limit-req
+  - limit-count
+  - sc-auth              # custom: CPS1 signature / JWT authentication
+  - sc-authorize         # custom: action-level authorization via svc-iam
+  - sc-audit             # custom: audit side-stream to Kafka
+  - request-validation
+  - proxy-rewrite
+  - traffic-split        # canary by weight (04§3.6)
+  - prometheus
+  - http-logger
+  - api-breaker          # passive circuit breaking (04§3.5)
+
+plugin_attr:
+  prometheus:
+    export_uri: /apisix/prometheus/metrics
+    export_addr:
+      ip: 0.0.0.0
+      port: 9091          # scraped by Prometheus (05§7.2)
+
+# Custom plugins live on a mounted path; the ConfigMap in
+# platform/apisix/apisix-deployment.yaml projects them here.
+apisix_lua_home: /usr/local/apisix
+extra_lua_path: "/opt/sc-plugins/?.lua"

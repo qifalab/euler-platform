@@ -1,0 +1,34 @@
+# Default values for the svc-audit chart.
+# Env-specific overrides live in deploy/gitops-manifests/envs/<env>/values-overrides/.
+
+image:
+  repository: harbor.internal/cloudplatform/svc-audit
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+serviceAccount:
+  name: svc-audit
+
+service:
+  port: 8080
+  targetPort: 8080
+
+# Runtime env shared by all phase-1 services (04§3.4, 08§6.2).
+env:
+  NACOS_NAMESPACE: "public"
+  SERVICE_GROUP: "cloudplatform"
+
+# Probe endpoints (all-Go services expose /healthz /readyz).
+probe:
+  readinessPath: /healthz
+  livenessPath: /healthz
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: "1Gi"

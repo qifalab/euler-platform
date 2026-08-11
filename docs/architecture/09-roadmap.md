@@ -119,7 +119,7 @@ gantt
 | 计费形态 | 包年包月 + 按量(两形态 Day1);免费试用=代金券(内测上线) | 四种形态齐备(含抢占式/资源包)+发票+成本分析 | 商务定价体系、大客户折扣、渠道分账 |
 | IAM | 主账号+实名+AK/SK+基础策略 | RAM 式子账号、角色、策略模拟器 | 多账号组织、SSO/SAML、审计日志全量 |
 | 部署形态 | 单 IDC 单可用区(P1) | 同城双可用区双活(P2) | 两地三中心(异地多活属 P3) |
-| OpenAPI | 内部规范+每个产品全覆盖 | Explorer 在线调试+三语言 SDK | Terraform Provider、生态集成 |
+| OpenAPI | 内部规范+每个产品全覆盖 | Explorer 在线调试+Go/Python SDK | Terraform Provider、生态集成 |
 | 稳定性目标 | 控制面 99.9%/对象存储数据面 99.95% | 整体 99.95%(P2 目标),SLO 体系落地 | 99.99% 关键链路,混沌工程常态化 |
 | 合规 | ICP 备案+实名+数据分级起步 | 等保二级 | 等保三级+定期渗透测试 |
 
@@ -180,7 +180,7 @@ gantt
 | IAM | 注册/登录/实名认证、AK/SK 管理、基础 RBAC 策略、MFA(二期完善) | 平台组 | 《07-security.md》 |
 | 商业化 | 订单中心(新购/续费/退订)、包年包月+按量计费、小时级出账、余额/充值、欠费状态机;免费试用代金券最小实现 | 计费组 | 《03-backend-services.md》 |
 | 产品×7 | SCVPC(网络)、SCECS(云服务器 VM)、SCBS(块存储)、SCOSS(对象存储)、SCRDS(托管 MySQL)、SCMON(监控)、SCEIP(弹性公网 IP) | 产品线组 | 《06-kubernetes-productization.md》 |
-| 平台底座 | K8s 多集群、APISIX、Nacos、Kafka、MySQL 分库分表(ShardingSphere-JDBC,account_id 单键分片)、Redis Cluster | 基础设施组 | 《04-middleware-infrastructure.md》 |
+| 平台底座 | K8s 多集群、APISIX、Nacos、Kafka、MySQL 分库分表(Vitess,account_id 单键分片)、Redis Cluster | 基础设施组 | 《04-middleware-infrastructure.md》 |
 | 可观测 | VictoriaMetrics(长期指标)+ SkyWalking OAP(trace,trace-ES 存储)+ 搜索 ES(三类搜索)+ ClickHouse 日志、统一告警出口 | SRE 组 | 《05-data-observability.md》 |
 | 交付体系 | GitLab CI 流水线模板、ArgoCD GitOps、灰度发布规范 | SRE 组 | 《08-devops-delivery.md》 |
 | 支持通道 | 工单系统(一期可用成熟开源/轻量自研)+ 值班响应 SLA;支持计划模型四档,一期先开放基础/商业两档 | 平台组 | 《01-product-catalog.md》 |
@@ -202,7 +202,7 @@ flowchart LR
 |---|---|---|
 | K8s 管理集群 | 3 master + 3 worker(各 8C16G) | 承载平台控制面服务 |
 | K8s 业务集群 | 6~10 worker(32C128G) | 承载租户容器实例与托管数据库实例(非 12~20 台 16C64G) |
-| MySQL | account_db/trade_db 各 2×16 起步(对齐《04-middleware-infrastructure.md》§6.3 8×16 基线),account_id 单键分片,ShardingSphere-JDBC | 每库 1 主 2 从 MGR |
+| MySQL | account_db/trade_db 各 2×16 起步(对齐《04-middleware-infrastructure.md》§6.3 8×16 基线),account_id 单键分片,Vitess | 每库 1 主 2 从 MGR |
 | Redis Cluster | 6 节点(3 主 3 从,16GB) | 会话/缓存/限流 |
 | Kafka | 3 broker(8C16G,2×1TB NVMe,KRaft) | 计量事件/订单事件 topic,环境隔离靠集群隔离(见《04-middleware-infrastructure.md》§5.3) |
 | MinIO | 4~8 节点,纠删码 EC:4 | 对象存储底座 + 平台自身备份桶 |
@@ -250,7 +250,7 @@ flowchart LR
 
 1. 产品数从 7 扩展到 10~12,形成"计算+存储+网络+数据库+中间件+可观测"的完整骨架类目;
 2. 计费形态齐备:在 Day1 包年包月+按量基础上,补齐抢占式实例、资源包/储值卡;上线发票、成本分析;免费试用代金券在二期扩展为完整试用体系;
-3. OpenAPI 生态成形:OpenAPI Explorer 在线调试、Java/Go/Python SDK、API 版本化与兼容性承诺(语义化版本+弃用政策);
+3. OpenAPI 生态成形:OpenAPI Explorer 在线调试、Go/Python SDK、API 版本化与兼容性承诺(语义化版本+弃用政策);
 4. 完成同城双 AZ(P2)演进,托管 MySQL/云服务器支持跨可用区高可用(三 AZ 不在本期规划,异地多活属 P3);
 5. RAM 式子账号与角色体系上线(见《07-security.md》)。
 
@@ -278,7 +278,7 @@ flowchart LR
 
 > **决策 R-03:弹性容器实例(SCECI)与二期云服务器增强统一复用一期已建成的 K8s 运维体系,VM 形态(SCECS)在一期已以 KubeVirt on K8s 路线交付。**
 >
-> **理由**:① 复用一期已建成的 K8s 运维体系(调度/监控/发布/多集群),不新建一套虚拟化管理栈;② KubeVirt 将 VM 抽象为 K8s CRD,与容器实例共享控制面框架,计量/生命周期状态机直接复用;③ 团队技能收敛在 K8s 一条线上,降低双栈运维风险(见第 8 节风险 R03)。
+> **理由**:① 复用一期已建成的 K8s 运维体系(调度/监控/发布/多集群),不新建一套虚拟化管理栈;② KubeVirt 将 VM 抽象为 K8s CRD,与容器实例共享控制面框架,计量/生命周期状态机直接复用;③ 团队技能收敛在 K8s 一条线上,降低多栈运维风险(见第 8 节风险 R03)。
 > **备选**:自研 IaaS 控制面(libvirt+KVM+自研调度)或 OpenStack 封装。
 > **何时改选**:当 VM 规模超过 5000 台、出现 KubeVirt 性能/网络特性硬瓶颈,或需要裸金属/嵌套虚拟化等 KubeVirt 不支持的形态时,启动自研 IaaS 控制面评估,届时按《06-kubernetes-productization.md》的演进口径立项。
 
@@ -287,7 +287,7 @@ flowchart LR
 | 里程碑 | 时间点 | 内容 |
 |---|---|---|
 | M-4 计费四形态 | T0+12 月 | 抢占式回收链路、资源包抵扣引擎上线(后置二期);对账扩展到"抵扣→账单→发票"三段 |
-| M-5 OpenAPI 生态 | T0+13 月 | Explorer 上线;SDK 三语言发布;API 网关层统一签名鉴权(见《07-security.md》§4.1 CPS1-HMAC-SHA256) |
+| M-5 OpenAPI 生态 | T0+13 月 | Explorer 上线;SDK Go/Python 发布;API 网关层统一签名鉴权(见《07-security.md》§4.1 CPS1-HMAC-SHA256) |
 | M-6 双可用区(P2) | T0+15 月 | 同城双 AZ:Kafka/MySQL/Redis 全部跨 AZ 部署;数据面故障域切换演练通过(三 AZ 不在本期规划,异地多活属 P3) |
 | M-7 产品矩阵 GA | T0+18 月 | 10+ 产品通过统一 GA 门禁(第 6 节);NPS 与工单 SLA 达标 |
 
@@ -300,7 +300,7 @@ flowchart LR
 | B1 | 计费深度 | 四种计费形态全流程无未解释差异;资源包抵扣准确率 100% |
 | B2 | 产品数 | ≥10 个 GA 产品,全部通过统一 GA 门禁 |
 | B3 | 可用性 | 关键产品 SLA 对外承诺 99.95%;可用区级故障切换 RTO ≤ 5min |
-| B4 | OpenAPI | Explorer 覆盖 100% API;SDK 覆盖 Java/Go/Python;破坏性变更 0 次 |
+| B4 | OpenAPI | Explorer 覆盖 100% API;SDK 覆盖 Go/Python;破坏性变更 0 次 |
 | B5 | 租户隔离 | 网络(VPC)+数据+控制面三维度隔离复测通过,含新增 7 个产品 |
 | B6 | 财务合规 | 发票、红冲、退款链路通过财务与税务评审 |
 | B7 | 运营能力 | 免费试用(代金券)限额防薅羊毛策略生效;异常用量检测上线 |
@@ -399,20 +399,20 @@ flowchart LR
 1. **一期按职能,二期起按产品线**:一期人少,按职能组队(平台/产品/前端/SRE)最大化复用;二期产品数翻倍后,产品线组转为"产品小队(产品+研发+测试三角)",平台组转为共享平台部门;
 2. **商业化团队独立建制**:IAM+订单+计费是全局中枢,必须独立团队+资深负责人,不允许摊派到产品线兼职(对标启示 2:计量计费先于产品规划,见《10-research-and-selection-decisions.md》§3.4);
 3. **SRE 与研发责任共担**:SRE 不兜底一切故障;产品线对自己的 SLO 负责,SRE 提供平台、工具与值守框架(见《08-devops-delivery.md》on-call 体系);
-4. **双栈技能收敛**:Java(Spring Cloud)与 Go(Kratos)分工按《10-research-and-selection-decisions.md》§4.2 选型决策总表执行,每名工程师主攻一栈、副修另一栈,避免人人双栈造成维护成本失控。
+4. **技能收敛于统一 Go 栈**:全平台后端统一 Go(Kratos),按《10-research-and-selection-decisions.md》§4.2 选型决策总表执行,消除多语言维护成本、收敛招聘面与代码风格分裂。
 
 ### 7.2 团队划分与职责
 
 | 团队 | 职责范围 | 技术栈倾向 | 交叉引用 |
 |---|---|---|---|
 | 架构委员会(虚拟) | 技术决策、产品接入规范评审、Gate 评审主持 | 全栈资深 | 《03-backend-services.md》《01-product-catalog.md》 |
-| 平台组 | IAM、订单中心、计量计费、消息/通知中心、工单 | Java 为主 | 《03-backend-services.md》《07-security.md》 |
-| 产品线组(存储/计算/数据/中间件) | 各云产品控制面、数据面、运维工具 | 计算/接入类 Go,数据类 Java 混合 | 《06-kubernetes-productization.md》 |
+| 平台组 | IAM、订单中心、计量计费、消息/通知中心、工单 | Go(Kratos) | 《03-backend-services.md》《07-security.md》 |
+| 产品线组(存储/计算/数据/中间件) | 各云产品控制面、数据面、运维工具 | Go(Kratos) | 《06-kubernetes-productization.md》 |
 | 前端组 | 官网、控制台微前端基座、组件库、文档站前端 | Vue + Wujie | 《02-frontend-architecture.md》 |
 | 基础设施组 | K8s、网络、中间件全家桶、机房与容量 | Go/运维开发 | 《04-middleware-infrastructure.md》 |
 | SRE 组 | 可观测平台、值班体系、故障管理、稳定性工程 | 平台开发+值班 | 《05-data-observability.md》《08-devops-delivery.md》 |
 | 安全组 | 安全基线、渗透测试、合规、密钥与审计 | 安全工程 | 《07-security.md》 |
-| 数据组(二期组建) | 成本分析、经营报表、用量风控 | Java/数据工程 | 《05-data-observability.md》 |
+| 数据组(二期组建) | 成本分析、经营报表、用量风控 | Go/数据工程 | 《05-data-observability.md》 |
 | 产品与设计 | 产品规划、定价、UX 设计、文档策略 | — | 《01-product-catalog.md》 |
 | 技术文档工程师 | 文档中心运营、API 文档自动化、快速入门质量 | 文档即代码 | 《01-product-catalog.md》 |
 
@@ -463,14 +463,14 @@ flowchart TB
     CPO --> DOC[技术文档组]
 ```
 
-### 7.5 关键岗位与双栈成本管理
+### 7.5 关键岗位与技能管理
 
-> **决策 R-04:招聘与技能策略——"一主一副、按域定栈"。**
+> **决策 R-04:招聘与技能策略——全栈统一 Go(Kratos)。**
 >
-> **结论**:Java(Spring Cloud)工程师主攻商业化域与数据类 CRUD 密集系统;Go(Kratos)工程师主攻计算/存储控制面、BFF、高并发接入;全员副修另一语言到可 Code Review 程度,但不要求人人双栈开发。
-> **理由**:《10-research-and-selection-decisions.md》§4.2 选型决策总表已确立双栈分工;完全双栈会显著抬高招聘门槛与代码风格分裂成本,完全单栈则无法匹配各域技术特性。
-> **备选**:全 Java 单栈(Go 域用 Spring Cloud 替代)或全 Go 单栈。
-> **何时改选**:若连续两个季度 Go 工程师招聘达成率 < 50%,将非性能敏感的 Go 域(如文件服务、推送)迁回 Java,收敛招聘面;反之若 Java 商业化域引入 Seata/ShardingSphere 之外的重生态需求减少,可评估 Kratos 承接部分商业化服务。
+> **结论**:全平台后端统一 Go(Kratos),工程师围绕单一 Go/Kratos 技术栈招聘与培养,消除多语言维护成本,收敛招聘面与代码风格分裂。
+> **理由**:《10-research-and-selection-decisions.md》§4.2 选型决策总表已确立统一 Go 栈;单栈显著降低招聘门槛、运维面与跨域协作成本。
+> **备选**:多语言混合栈(历史双栈为 Java/Go 按域分工)。
+> **何时改选**:若出现候选池之外的新重型组件硬诉求或域级技术特性确需另一语言,由架构评审重新裁定。
 
 **三个不可替代的关键岗位(缺任一则建议推迟对应里程碑)**:
 
@@ -516,7 +516,7 @@ quadrantChart
     成本超支: [0.68, 0.60]
     多租户泄漏: [0.96, 0.22]
     K8s运维失控: [0.80, 0.42]
-    双栈成本过高: [0.45, 0.55]
+    单栈技能栈过窄: [0.35, 0.35]
     自研与采购失衡: [0.60, 0.50]
     数据丢失: [0.98, 0.12]
     单地域故障: [0.88, 0.18]
@@ -531,7 +531,7 @@ quadrantChart
 | R01 | **计费出错**(多计/少计/重复出账) | 中 | 极高——直接损失客户信任与收入,可能引发退款潮 | ① 计量→出账全链路幂等设计;② 上线前 ≥7 天影子对账,财务签字放行(Gate 硬门禁);③ 每日自动对账+差异工单 24h 内闭环;④ 计费代码变更强制双人评审+灰度 | 对账差异金额 >0 且无法当日解释 |
 | R02 | **多租户数据泄漏/越权** | 低 | 极高——平台生存级事故 | ① 所有数据面请求强制 account_id 上下文(account_id ≡ uid ≡ user_id ≡ tenant_id,见《00-overview.md》附录A),框架层拦截而非业务自觉;② 隔离用例进 CI 回归;③ 每季度红队演练跨租户访问;④ 对象存储/数据库默认最小权限 | 任一隔离用例失败或渗透发现跨租户路径 |
 | R03 | **K8s 运维复杂度失控**(集群故障/升级翻车) | 中 | 高——同时压垮多个产品 | ① 管理面与租户负载物理隔离多集群;② K8s 版本 N-1 保守策略,升级先灰度集群;③ operator 变更走 GitOps 回滚;④ 至少 2 名 K8s 专家,禁止单点 | 集群级故障月均 >1 次或升级回滚发生 |
-| R04 | **Go/Java 双栈人力成本过高** | 中 | 中——拖慢交付、推高招聘成本 | ① 执行"一主一副"策略(R-04);② 统一治理面(Nacos/APISIX/OTel)降低双栈运维分裂;③ 季度复盘双栈 ROI,必要时域级迁栈 | 双栈工程师招聘达成率连续两季 <50% |
+| R04 | **统一 Go 栈人才供给不足**(拖慢交付、推高招聘成本) | 中 | 中——单栈收敛后主要靠招聘达成 | ① 内部 Go/Kratos 培训与基建沉淀(R-04);② 统一治理面(Nacos/APISIX/OTel/Vitess)降低运维面;③ 季度复盘招聘 ROI 与技能缺口 | Go 工程师招聘达成率连续两季 <50% |
 | R05 | **自研与采购失衡**(过度自研延误上线,或过度采购丧失差异化) | 中 | 高——战略级偏航 | ① 以第 10 节 Build vs Buy 清单为准入准出依据,新组件引入需架构委员会评审;② 每季度复核清单;③ 内核自研立项需过"差异化论证" | 任一自研项连续两个里程碑延期 |
 | R06 | **数据丢失**(存储故障/误删/备份失效) | 低 | 极高——不可逆 | ① 对象存储纠删码+版本控制;② 数据库跨 AZ 副本+每日备份+**每季度恢复演练**;③ 关键表 binlog 归档;④ 删除操作冷静期(回收站) | 备份恢复演练失败任一次 |
 | R07 | **合规不达标**(等保/实名/个保法/ICP) | 中 | 高——影响上线资格与经营 | ① 法务顾问前置介入一期立项;② 实名认证接入持牌供应商;③ 日志与审计留存按等保三级标准提前设计(不要事后补);④ 数据分类分级制度随 IAM 一期上线 | 监管问询或备案材料被退回 |
@@ -703,7 +703,7 @@ flowchart TB
         G1["APISIX API 网关:鉴权·限流·灰度·路由"]
     end
 
-    subgraph L3["③ 业务服务层(微服务:Java Spring Cloud + Go Kratos)"]
+    subgraph L3["③ 业务服务层(微服务:统一 Go/Kratos)"]
         direction LR
         P1["产品域<br/>对象存储·容器·数据库<br/>计算·网络·中间件"]
         P2["商业化域<br/>订单·计费·账单·结算"]
@@ -721,7 +721,7 @@ flowchart TB
         direction LR
         M1["Nacos<br/>注册+配置"]
         M2["Kafka"]
-        M3["MySQL 分库分表<br/>ShardingSphere"]
+        M3["MySQL 分库分表<br/>Vitess"]
         M4["Redis Cluster"]
         M5["ClickHouse<br/>日志/审计"]
     end
@@ -752,7 +752,7 @@ flowchart TB
 1. 商业闭环(账号→订单→计量→账单→欠费治理)是一期最高优先级,先于任何产品广度;
 2. 一期 9 个月交付 7 个可售产品(SCVPC/SCECS/SCBS/SCOSS/SCRDS/SCMON/SCEIP),二期扩至 10+,三期双地域+生态;
 3. 产品策略 = 成熟开源内核 + 自研控制面/计量面,不做"从零发明存储或数据库";
-4. 技术栈锁定候选池:APISIX / Nacos / Kafka / MySQL(ShardingSphere)/ Redis / ClickHouse / K8s / MinIO / VictoriaMetrics+OTel+SkyWalking OAP / GitLab CI+ArgoCD,Java+Go 双栈按域分工;
+4. 技术栈锁定候选池:APISIX / Nacos / Kafka / MySQL(Vitess 分库分表)/ Redis / ClickHouse / K8s / MinIO / VictoriaMetrics+OTel+SkyWalking OAP / GitLab CI+ArgoCD,统一 Go/Kratos 后端;
 5. 组织从 ~35 人起步,三期 ~110 人;计费团队独立建制,K8s 与计费专家为不可替代关键岗;
 6. 每阶段设 Gate 门禁:计费对账无未解释差异与租户隔离复测是一票否决项;
 7. 15 项登记风险中,计费出错、多租户泄漏、数据丢失、单地域故障为四项生存级风险,应对措施纳入每次 Gate 必查;

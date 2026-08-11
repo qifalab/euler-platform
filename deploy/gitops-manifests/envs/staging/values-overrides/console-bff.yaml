@@ -1,0 +1,4 @@
+# staging overrides for console-bff (values merge on top of the chart defaults).
+image:
+  tag: v0.1.0-rc
+replicas: 2

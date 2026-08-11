@@ -57,12 +57,12 @@ flowchart TB
 
 | 模块 | 职责 | 技术栈 | 归属章节 |
 |---|---|---|---|
-| `svc-iam` | 账号、RAM 用户/组/角色、STS、AK 管理、Policy 评估、令牌签发 | Java + Spring Cloud(复杂事务域) | 《03-backend-services.md》§4.0 |
+| `svc-iam` | 账号、RAM 用户/组/角色、STS、AK 管理、Policy 评估、令牌签发 | Go + Kratos(统一后端) | 《03-backend-services.md》§4.0 |
 | `auth-console-bff` | 登录/注册/MFA/会话 BFF | Go + Kratos(高并发低延迟) | 《03-backend-services.md》§4.0 |
-| `svc-kms` | 主密钥管理、信封加密、密钥轮转 | Java + Spring Cloud | 本章 §5.3 |
+| `svc-kms` | 主密钥管理、信封加密、密钥轮转 | Go + Kratos | 本章 §5.3 |
 | `svc-audit` | 审计事件收集、查询、投递 | Go + Kratos + Kafka + ClickHouse | 本章 §6.2、《05-data-observability.md》 |
 | APISIX 安全插件 | 签名鉴权、JWT 校验、限流、WAF、防重放 | APISIX + Lua/Coraza | 本章 §5 |
-| `svc-security-product`(二期) | 对外售卖的 DDoS/WAF/证书产品控制面 | Java + Spring Cloud | 本章 §7 |
+| `svc-security-product`(二期) | 对外售卖的 DDoS/WAF/证书产品控制面 | Go + Kratos | 本章 §7 |
 
 > 决策:安全核心服务(IAM/KMS/审计)全部自建,不做第三方 IAM 集成。理由:身份是全平台信任根,自建可控且是等保三级刚需;备选 Keycloak 等开源 IAM 仅适合内部工具,不适合作为云租户身份根。改选条件:仅内部 IT 平台场景可考虑 Keycloak 起步。
 
@@ -86,13 +86,13 @@ flowchart TB
 
 ### 2.2 核心数据模型(表结构示例)
 
-统一落在 IAM 库(MySQL,按 `account_id` 分库,ShardingSphere-JDBC,分片键 account_id 单键,参见《04-middleware-infrastructure.md》§6.3/§6.4)。全书租户标识统一为 `account_id`(≡ uid ≡ user_id ≡ tenant_id,详见《00-overview.md》附录A 全局标识规范);下列 DDL 中 `account_id` 列即租户主键。
+统一落在 IAM 库(MySQL,按 `account_id` 分库,Vitess,分片键 account_id 单键,参见《04-middleware-infrastructure.md》§6.3/§6.4)。全书租户标识统一为 `account_id`(≡ uid ≡ user_id ≡ tenant_id,详见《00-overview.md》附录A 全局标识规范);下列 DDL 中 `account_id` 列即租户主键。
 
 ```sql
 -- 主账号(云账号)
 CREATE TABLE account (
   id              BIGINT PRIMARY KEY,
-  account_id      VARCHAR(32)  NOT NULL UNIQUE COMMENT '全局账号ID(≡ uid)',
+  account_id      BIGINT UNSIGNED NOT NULL UNIQUE COMMENT '全局账号ID(≡ uid)',
   email           VARCHAR(128) NOT NULL UNIQUE,
   mobile          VARCHAR(32)  COMMENT '加密存储,密文+密钥版本',
   password_hash   VARCHAR(128) NOT NULL COMMENT 'argon2id',
@@ -107,7 +107,7 @@ CREATE TABLE account (
 -- RAM 用户(子账号)
 CREATE TABLE iam_user (
   id            BIGINT PRIMARY KEY,
-  account_id    VARCHAR(32) NOT NULL COMMENT '所属主账号',
+  account_id    BIGINT UNSIGNED NOT NULL COMMENT '所属主账号',
   username      VARCHAR(64) NOT NULL,
   display_name  VARCHAR(128),
   login_enabled TINYINT DEFAULT 0,
@@ -122,18 +122,18 @@ CREATE TABLE iam_user (
 
 -- 用户组与成员
 CREATE TABLE user_group (
-  id BIGINT PRIMARY KEY, account_id VARCHAR(32) NOT NULL,
+  id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED NOT NULL,
   group_name VARCHAR(64) NOT NULL, remark VARCHAR(256),
   UNIQUE KEY uk_account_group (account_id, group_name)
 );
 CREATE TABLE group_member (
-  id BIGINT PRIMARY KEY, account_id VARCHAR(32), group_id BIGINT, member_user_id BIGINT,
+  id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED, group_id BIGINT, member_user_id BIGINT,
   UNIQUE KEY uk_group_user (group_id, member_user_id)
 );
 
 -- 角色
 CREATE TABLE iam_role (
-  id BIGINT PRIMARY KEY, account_id VARCHAR(32) NOT NULL,
+  id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED NOT NULL,
   role_name VARCHAR(64) NOT NULL,
   role_type TINYINT COMMENT '1用户角色 2服务角色 3跨账号角色',
   assume_policy JSON NOT NULL COMMENT '信任策略:谁可以扮演',
@@ -143,7 +143,7 @@ CREATE TABLE iam_role (
 
 -- AccessKey(见 §2.5,secret 只存信封加密密文)
 CREATE TABLE access_key (
-  id BIGINT PRIMARY KEY, account_id VARCHAR(32) NOT NULL,
+  id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED NOT NULL,
   owner_type TINYINT COMMENT '1主账号 2RAM用户 3角色',
   owner_id BIGINT NOT NULL,
   ak_id VARCHAR(32) NOT NULL UNIQUE COMMENT 'AK,前缀 SC(替代阿里云 LTAI)',
@@ -156,7 +156,7 @@ CREATE TABLE access_key (
 
 -- MFA 设备
 CREATE TABLE mfa_device (
-  id BIGINT PRIMARY KEY, account_id VARCHAR(32), owner_type TINYINT, owner_id BIGINT,
+  id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED, owner_type TINYINT, owner_id BIGINT,
   device_type TINYINT COMMENT '1 TOTP 2 短信(仅辅助)',
   secret_cipher VARBINARY(256) COMMENT 'TOTP种子,信封加密',
   status TINYINT, bound_at DATETIME,
@@ -398,13 +398,13 @@ sequenceDiagram
 
 ```sql
 CREATE TABLE resource_group (
-  id BIGINT PRIMARY KEY, account_id VARCHAR(32) NOT NULL,
+  id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED NOT NULL,
   rg_id VARCHAR(32) NOT NULL UNIQUE, rg_name VARCHAR(64),
   status TINYINT, created_at DATETIME,
   UNIQUE KEY uk_account_rg (account_id, rg_id)
 );
 -- 所有云产品资源表必须包含:
---   account_id VARCHAR(32) NOT NULL,  resource_group_id VARCHAR(32) NOT NULL,
+--   account_id BIGINT UNSIGNED NOT NULL,  resource_group_id VARCHAR(32) NOT NULL,
 --   region VARCHAR(32) NOT NULL,并建立 (account_id, resource_group_id) 联合索引
 ```
 
@@ -509,11 +509,11 @@ flowchart LR
 
 | 类型 | 攻击形态 | 防护手段 |
 |---|---|---|
-| 横向越权 | 租户 A 用合法身份操作租户 B 的资源(改 resourceId 参数) | ① 所有数据访问强制 `WHERE account_id = ?`(ShardingSphere 分片键即 account_id,物理上跨库);② 服务侧统一"属主校验拦截器":操作前查资源属主,不等于调用者 account_id 直接 404(不暴露存在性);③ 公共 SDK 封装,禁止业务代码手写属主过滤 |
+| 横向越权 | 租户 A 用合法身份操作租户 B 的资源(改 resourceId 参数) | ① 所有数据访问强制 `WHERE account_id = ?`(Vitess 分片键即 account_id,物理上跨库);② 服务侧统一"属主校验拦截器":操作前查资源属主,不等于调用者 account_id 直接 404(不暴露存在性);③ 公共 SDK 封装,禁止业务代码手写属主过滤 |
 | 纵向越权 | RAM 用户执行超出授权的操作(如只读角色发起删除) | ① 网关 action 级鉴权兜底;② 服务端不信任前端按钮/参数中的"角色";③ 管理面高危操作(删库、释放实例、改实名信息)强制二次确认 + MFA 重校验 |
 | 身份伪造 | 伪造 `X-Sc-Account-Id` 头直连服务 | 内网防伪(§4.3)+ NetworkPolicy 禁止外部直达 Pod |
 
-**统一鉴权 SDK(Java / Go 双版本)**:提供 `@RequireAuth(action="scecs:StopInstance")` 注解与资源属主校验切面;新产品代码评审必查项:是否使用该 SDK、是否存在裸 SQL 缺 account_id 条件。SDK 发布纳入《08-devops-delivery.md》统一制品库管理。
+**统一鉴权 SDK(Go 版本)**:提供 `RequireAuth(action="scecs:StopInstance")` 拦截器(如 Kratos middleware / gRPC interceptor)与资源属主校验中间件;新产品代码评审必查项:是否使用该 SDK、是否存在裸 SQL 缺 account_id 条件。SDK 发布纳入《08-devops-delivery.md》统一制品库管理。
 
 ### 5.3 敏感数据加密与密钥管理(KMS)
 
@@ -539,7 +539,7 @@ flowchart LR
 
 1. **基础镜像治理**:统一内部基础镜像(定期重建),禁止业务镜像直连公网 registry;
 2. **CI 扫描门禁**:GitLab CI 流水线强制 `Trivy` 扫描镜像 + 依赖清单(SBOM 生成,可选),Critical 漏洞阻断合入,High 漏洞限期修复白名单审批;
-3. **依赖扫描**:`dependency-check`(Java)+ `govulncheck`(Go)+ Trivy fs 模式,NVD/CNVD 情报每日更新;新引入第三方库需架构组评审(候选池外组件引入必须走评审,见《00-overview.md》选型纪律);
+3. **依赖扫描**:`govulncheck`(Go)+ Trivy fs 模式,NVD/CNVD 情报每日更新;新引入第三方库需架构组评审(候选池外组件引入必须走评审,见《00-overview.md》选型纪律);
 4. **准入控制**:K8s 侧准入 webhook 拒绝无签名/扫描未过镜像(可选:cosign 签名,ArgoCD 部署链校验);
 5. **镜像仓库安全**:仓库凭证短 TTL、按项目最小授权,仓库自身审计接入 svc-audit。
 
@@ -582,7 +582,7 @@ flowchart LR
   "event_source": "scecs.api.starcloud.cn",
   "event_name": "StopInstance",
   "source_ip": "203.0.113.9",
-  "user_agent": "sc-sdk-java/1.2.0",
+  "user_agent": "sc-sdk-go/1.2.0",
   "identity": {
     "type": "ram-user", "account_id": "1001234567890",
     "principal": "user/alice", "ak_id": "SC****3F", "mfa_present": true
@@ -645,7 +645,7 @@ flowchart LR
 | 层面 | 隔离手段 | 边界强度 | 备注 |
 |---|---|---|---|
 | 身份 | account_id 全局唯一,所有资源强制属主;跨租户访问必须走显式授权(角色/共享策略) | 强 | 一切隔离的逻辑根 |
-| 数据库 | ShardingSphere 按 account_id 分库分表,租户间物理分片;单库内统一 `account_id` 列 + 框架级强制过滤 | 强 | 连接账号按服务最小授权 |
+| 数据库 | Vitess 按 account_id 分库分表,租户间物理分片;单库内统一 `account_id` 列 + 框架级强制过滤 | 强 | 连接账号按服务最小授权 |
 | 对象存储 | MinIO 按租户前缀 + Bucket Policy 双保险;跨租户共享仅能走预签名 URL/显式策略 | 中 | 平台侧服务账号与租户账号分离 |
 | 消息 | Kafka topic 级 ACL;租户托管消息产品(若提供)独立 topic + 前缀 | 中 | 生产者/消费者凭证按租户签发 |
 | 容器(租户工作负载) | K8s namespace 隔离 + NetworkPolicy 默认拒绝 + ResourceQuota;高安全诉求租户用独立节点池(二期) | 中→强 | 详见《06-kubernetes-productization.md》 |
@@ -690,7 +690,7 @@ flowchart LR
 
 | # | 决策 | 结论 | 核心理由 | 备选 | 改选条件 |
 |---|---|---|---|---|---|
-| D1 | IAM 实现 | 自建(Spring Cloud) | 身份是信任根,等保与商业刚需 | Keycloak | 仅内部工具平台场景 |
+| D1 | IAM 实现 | 自建(Go/Kratos) | 身份是信任根,等保与商业刚需 | Keycloak | 仅内部工具平台场景 |
 | D2 | 鉴权执行点 | APISIX 统一认证+粗鉴权,服务内属主校验 | 非法身份不入内网;属主校验需业务语义 | OPA 外置引擎 | Condition 运算符 > 50 种或需策略热更灰度时引 OPA |
 | D3 | 会话模式 | 短 TTL JWT + Redis 会话索引 | 无状态扩展 + 可吊销 | 纯 Redis Session | 合规要求任意时刻全量吊销 |
 | D4 | 签名算法 | CPS1-HMAC-SHA256(类 SigV4) | 业界验证、防重放完备、SDK 可生成 | 简单 HMAC 头签名 | 无(算法即契约) |

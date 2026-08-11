@@ -1,0 +1,319 @@
+# APISIX route definitions — OpenAPI zone ({productCode}.api.starcloud.cn)
+#
+# Source of truth: 04-middleware-infrastructure.md §3.2/§3.3 (domain form and
+# route table), §3.5 (rate limiting), §3.7 (Nacos discovery); 07-security.md §5
+# (plugin chain order).
+#
+# Domain form is locked (04§3.2, adjudication S6):
+#   one product = one subdomain {productCode}.api.starcloud.cn
+#   RPC-style Action + date-type Version parameter
+#   the URI does NOT carry a version (no /v1/ prefix)
+#
+# Plugin chain order (07§5) — the order is load-bearing, each stage is cheaper
+# than the next so failing fast also sheds load under attack:
+#   ip-restriction → limit-req → sc-auth → sc-authorize → sc-audit → upstream
+#
+# Managed via ADC CLI + GitOps; there is no APISIX Dashboard in any environment
+# (04§3.9). Changes go through MR review like any other manifest.
+
+routes:
+  # ---------------------------------------------------------------------------
+  # SCECS — 辰云服务器 (云服务器 VM)
+  # ---------------------------------------------------------------------------
+  - id: openapi-scecs
+    name: openapi-compute-scecs          # {zone}-{domain}-{name} (04§3.3)
+    desc: SCECS OpenAPI entry; RPC Action + date Version
+    hosts:
+      - scecs.api.starcloud.cn
+    uris:
+      - /*
+    methods: [GET, POST]
+    # Nacos discovery: the subscription string must be {GROUP}@@{serviceName}
+    # and match the registration side exactly, or discovery silently returns no
+    # upstreams (selection pit #2). Group == service name (04§4.3).
+    upstream:
+      service_name: svc-scecs@@svc-scecs
+      discovery_type: nacos
+      type: roundrobin
+      timeout:
+        connect: 2
+        send: 5
+        read: 5
+    plugins:
+      ip-restriction:
+        # Blacklist / region ban maintained centrally; empty here means the
+        # global rule applies.
+        blacklist: []
+
+      limit-req:
+        # Leaky bucket, avalanche floor for the whole zone.
+        rate: 200
+        burst: 100
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+        rejected_msg: '{"Code":"Common.Throttling","Message":"request throttled"}'
+
+      sc-auth:
+        mode: signature
+        verify_endpoint: http://svc-iam.business.svc/internal/openapi/verify
+        # region/service are bound to the ROUTE. They participate in the
+        # derived signing key, so a signature scoped to scecs cannot be
+        # replayed against scoss (07§4.1).
+        region: cn-north-1
+        service: ecs
+        timeout_ms: 500
+
+      sc-authorize:
+        check_access_endpoint: http://svc-iam.business.svc/internal/authz/check
+        # Action is multiplexed via the RPC-style Action parameter. The prefix
+        # is pinned to this product so a caller cannot name another product's
+        # action (04§3.2).
+        action_from_query: Action
+        action_prefix: scecs
+        region: cn-north-1
+        timeout_ms: 500
+
+      # Per-AK quota. The threshold rides in from the verify endpoint as
+      # X-Sc-Quota-Qps; the default here is the package floor (04§3.5).
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes:
+          - redis-cluster.mw-data.svc:6379
+        redis_cluster_name: sc-redis-cluster
+        rejected_code: 429
+        rejected_msg: '{"Code":"Common.Throttling","Message":"AK quota exceeded"}'
+
+      sc-audit:
+        topic: cloud.sys.audit.action
+        brokers:
+          - host: kafka-0.kafka-headless.mw-core.svc
+            port: 9092
+          - host: kafka-1.kafka-headless.mw-core.svc
+            port: 9092
+          - host: kafka-2.kafka-headless.mw-core.svc
+            port: 9092
+
+  # ---------------------------------------------------------------------------
+  # SCOSS — 辰云对象存储
+  #
+  # Special case: the S3-compatible data plane is exempt from the RPC Action +
+  # Version form (04§3.2) and passes through to the MinIO sell cluster with the
+  # Host header preserved (virtual-host style addressing). Only the management
+  # operations go through the standard control-plane chain.
+  # ---------------------------------------------------------------------------
+  - id: openapi-scoss-control
+    name: openapi-storage-scoss-control
+    desc: SCOSS management operations (bucket CRUD, lifecycle rules, quota)
+    hosts:
+      - scoss.api.starcloud.cn
+    uris:
+      - /
+    methods: [GET, POST]
+    # Only requests carrying an Action parameter are control-plane calls;
+    # everything else is S3 data-plane traffic handled by the route below.
+    vars:
+      - ["arg_Action", "~~", ".+"]
+    upstream:
+      service_name: svc-scoss@@svc-scoss
+      discovery_type: nacos
+      type: roundrobin
+      timeout: { connect: 2, send: 5, read: 5 }
+    plugins:
+      limit-req:
+        rate: 200
+        burst: 100
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+      sc-auth:
+        mode: signature
+        region: cn-north-1
+        service: oss
+      sc-authorize:
+        action_from_query: Action
+        action_prefix: scoss
+        region: cn-north-1
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+      sc-audit:
+        brokers:
+          - { host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }
+
+  - id: openapi-scoss-data
+    name: openapi-storage-scoss-data
+    desc: >
+      SCOSS S3-compatible data plane. Passes through to the MinIO sell cluster
+      with the Host header preserved. Signature verification is MinIO's own
+      SigV4 (S3 ecosystem compatibility, 04§9.4) — NOT CPS1 — so sc-auth does
+      not run here. This is the one documented exemption from the platform
+      signature contract (04§3.2).
+    hosts:
+      - scoss.api.starcloud.cn
+    uris:
+      - /*
+    upstream:
+      # Direct to the MinIO sell cluster; not a Nacos-registered service.
+      nodes:
+        "minio-sell.mw-data.svc:9000": 1
+      type: roundrobin
+      pass_host: pass      # preserve the Host header for virtual-host style
+    plugins:
+      limit-req:
+        rate: 2000         # data plane carries far higher volume
+        burst: 1000
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+
+  # ---------------------------------------------------------------------------
+  # SCRDS / SCVPC / SCBS / SCEIP / SCMON
+  #
+  # Same shape as SCECS; each product gets its own subdomain, its own Nacos
+  # service, and an action_prefix pinned to its product code. Adding a product
+  # is filling this template (01§7.3 "填槽" onboarding checklist step 5).
+  # ---------------------------------------------------------------------------
+  - id: openapi-scrds
+    name: openapi-database-scrds
+    hosts: [scrds.api.starcloud.cn]
+    uris: [/*]
+    upstream:
+      service_name: svc-scrds@@svc-scrds
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
+      sc-auth: { mode: signature, region: cn-north-1, service: rds }
+      sc-authorize: { action_from_query: Action, action_prefix: scrds, region: cn-north-1 }
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  - id: openapi-scvpc
+    name: openapi-network-scvpc
+    hosts: [scvpc.api.starcloud.cn]
+    uris: [/*]
+    upstream:
+      service_name: svc-scvpc@@svc-scvpc
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
+      sc-auth: { mode: signature, region: cn-north-1, service: vpc }
+      sc-authorize: { action_from_query: Action, action_prefix: scvpc, region: cn-north-1 }
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  - id: openapi-scbs
+    name: openapi-storage-scbs
+    hosts: [scbs.api.starcloud.cn]
+    uris: [/*]
+    upstream:
+      service_name: svc-scbs@@svc-scbs
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
+      sc-auth: { mode: signature, region: cn-north-1, service: bs }
+      sc-authorize: { action_from_query: Action, action_prefix: scbs, region: cn-north-1 }
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  - id: openapi-sceip
+    name: openapi-network-sceip
+    hosts: [sceip.api.starcloud.cn]
+    uris: [/*]
+    upstream:
+      service_name: svc-sceip@@svc-sceip
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
+      sc-auth: { mode: signature, region: cn-north-1, service: eip }
+      sc-authorize: { action_from_query: Action, action_prefix: sceip, region: cn-north-1 }
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+  - id: openapi-scmon
+    name: openapi-monitor-scmon
+    hosts: [scmon.api.starcloud.cn]
+    uris: [/*]
+    upstream:
+      service_name: svc-monitor@@svc-monitor
+      discovery_type: nacos
+      type: roundrobin
+    plugins:
+      limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
+      sc-auth: { mode: signature, region: cn-north-1, service: monitor }
+      sc-authorize: { action_from_query: Action, action_prefix: scmon, region: cn-north-1 }
+      limit-count:
+        count: 1200
+        time_window: 60
+        key_type: var
+        key: http_x_sc_ak_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_name: sc-redis-cluster
+      sc-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+
+# Global rules applied to every route in this zone (04§3.1).
+global_rules:
+  - id: openapi-global
+    plugins:
+      real-ip:
+        source: http_x_forwarded_for
+        trusted_addresses: ["10.0.0.0/8"]
+      request-id:
+        # trace_id is generated here and propagated full-chain, aligned with
+        # OTel (04§3.1). Every log line and audit event carries it.
+        header_name: X-Request-Id
+        include_in_response: true
+      prometheus:
+        prefer_name: true
+      http-logger:
+        # Gateway access log → Kafka cloud.sys.audit.access (04§5.4).
+        uri: http://vector.observability.svc:8080/apisix
+        batch_max_size: 1000
+        inactive_timeout: 5
