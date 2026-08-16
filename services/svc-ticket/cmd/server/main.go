@@ -302,6 +302,132 @@ func (a *app) handleClose(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
+// --- Public API handlers (envelope-wrapped) --------------------------------
+
+// apiCreateReq is the POST /api/v1/tickets body. It mirrors createReq but the
+// handler returns the platform envelope so @sc/sdk can unwrap Data.
+type apiCreateReq struct {
+	Category string `json:"category"`
+	Priority string `json:"priority"`
+	Title    string `json:"title"`  // human title; persisted as the first message body
+	Message  string `json:"message"`
+}
+
+// handleAPICreate is the public create endpoint. It reuses the Store/app
+// validation + creation but returns the platform envelope {RequestId,Code,...}.
+func (a *app) handleAPICreate(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := accountFrom(r)
+	if !ok {
+		writeEnvelopedErr(w, r, http.StatusForbidden, "Ticket.MissingAccount", "account_id header required")
+		return
+	}
+	var body apiCreateReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidBody", "invalid JSON body")
+		return
+	}
+	body.Category = strings.TrimSpace(body.Category)
+	body.Priority = strings.ToUpper(strings.TrimSpace(body.Priority))
+	if body.Category == "" {
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidCategory", "category is required")
+		return
+	}
+	switch body.Priority {
+	case "HIGH", "NORMAL", "LOW", "":
+	default:
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidPriority", "priority must be HIGH/NORMAL/LOW")
+		return
+	}
+	// title doubles as the first message body when an explicit message is absent;
+	// the /internal contract requires a non-empty initial message.
+	body.Message = strings.TrimSpace(body.Message)
+	body.Title = strings.TrimSpace(body.Title)
+	if body.Message == "" && body.Title == "" {
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidMessage", "title or message is required")
+		return
+	}
+	if body.Priority == "" {
+		body.Priority = "NORMAL"
+	}
+	initialMsg := body.Message
+	if initialMsg == "" {
+		initialMsg = body.Title
+	}
+
+	now := a.now()
+	t := &Ticket{
+		TicketID:    uuid.NewString(),
+		AccountID:   accountID,
+		Category:    body.Category,
+		Priority:    body.Priority,
+		Status:      StatusOpen,
+		SLADeadline: slaDeadline(body.Priority, now),
+		Assignee:    identifier.ServiceName("ticket"),
+		Messages: []Message{{
+			ID:        uuid.NewString(),
+			Author:    strconv.FormatInt(accountID, 10),
+			FromUser:  true,
+			Body:      initialMsg,
+			CreatedAt: now,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := a.store.Create(t); err != nil {
+		writeEnvelopedErr(w, r, http.StatusInternalServerError, "Common.InternalError", "failed to create ticket")
+		return
+	}
+	writeEnvelope(w, r, http.StatusCreated, "OK", "", toTicketDTO(t))
+}
+
+// handleAPIList is the public list endpoint, scoped to the authenticated
+// account and wrapped in the platform envelope.
+func (a *app) handleAPIList(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := accountFrom(r)
+	if !ok {
+		writeEnvelopedErr(w, r, http.StatusForbidden, "Ticket.MissingAccount", "account_id header required")
+		return
+	}
+	list := a.store.ListByAccount(accountID)
+	dto := make([]ticketDTO, 0, len(list))
+	for _, t := range list {
+		dto = append(dto, toTicketDTO(t))
+	}
+	writeEnvelope(w, r, http.StatusOK, "OK", "", map[string]any{"tickets": dto})
+}
+
+// ticketDTO is the JSON projection surfaced to the console. Field names match
+// the TicketList/CreateTicket frontend contract.
+type ticketDTO struct {
+	TicketID    string       `json:"ticket_id"`
+	Category    string       `json:"category"`
+	Priority    string       `json:"priority"`
+	Status      TicketStatus `json:"status"`
+	Assignee    string       `json:"assignee"`
+	SLADeadline time.Time    `json:"sla_deadline"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+	Message     string       `json:"message"` // first thread message (title)
+}
+
+func toTicketDTO(t *Ticket) ticketDTO {
+	msg := ""
+	if len(t.Messages) > 0 {
+		msg = t.Messages[0].Body
+	}
+	return ticketDTO{
+		TicketID:    t.TicketID,
+		Category:    t.Category,
+		Priority:    t.Priority,
+		Status:      t.Status,
+		Assignee:    t.Assignee,
+		SLADeadline: t.SLADeadline,
+		CreatedAt:   t.CreatedAt,
+		UpdatedAt:   t.UpdatedAt,
+		Message:     msg,
+	}
+}
+
 // --- Routing helpers --------------------------------------------------------
 
 // accountFrom reads the authenticated tenant id injected by the gateway.
@@ -349,14 +475,46 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 
 // --- JSON helpers -----------------------------------------------------------
 
+// writeJSON writes the raw object as JSON. Used by the /internal routes.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// apiResponse wraps every JSON payload with the platform envelope
+// {RequestId, Code, Message, Data} so the @sc/sdk client can branch on a stable
+// Code and unwrap Data (03§9.3). Mirrors svc-notify's envelope.
+type apiResponse struct {
+	Code      string `json:"Code"`
+	Message   string `json:"Message,omitempty"`
+	RequestId string `json:"RequestId"`
+	Data      any    `json:"Data,omitempty"`
+}
+
+// writeEnvelope writes the platform JSON envelope. RequestId rides along so
+// 客服/排障 can correlate (03§9.3). Used by the /api/v1 routes.
+func writeEnvelope(w http.ResponseWriter, r *http.Request, status int, code, msg string, data any) {
+	rid, _ := r.Context().Value(requestIDKey).(string)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(apiResponse{
+		Code:      code,
+		Message:   msg,
+		RequestId: rid,
+		Data:      data,
+	})
+}
+
+// writeErr writes a JSON error envelope with the given status.
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]string{"Code": code, "Message": msg})
+}
+
+// writeEnvelopedErr writes a JSON error using the platform envelope. Used by
+// the /api/v1 routes.
+func writeEnvelopedErr(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	writeEnvelope(w, r, status, code, msg, nil)
 }
 
 // --- main -------------------------------------------------------------------
@@ -397,6 +555,24 @@ func main() {
 		default:
 			writeErr(w, http.StatusNotFound, "Ticket.NotFound", "not found")
 		}
+	})
+
+	// Public API (platform-envelope, consumed by @sc/sdk in web-ticket). The
+	// Vite dev proxy forwards /api/v1/tickets here with X-Sc-Account-Id set.
+	mux.HandleFunc("/api/v1/tickets", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			a.handleAPICreate(w, r)
+		case http.MethodGet:
+			a.handleAPIList(w, r)
+		default:
+			writeEnvelopedErr(w, r, http.StatusMethodNotAllowed, "Common.MethodNotAllowed", "method not allowed")
+		}
+	})
+	mux.HandleFunc("/api/v1/tickets/", func(w http.ResponseWriter, r *http.Request) {
+		// Placeholder for future sub-resource routes (reply/close) on the public
+		// API; the internal routes remain authoritative for now.
+		writeEnvelopedErr(w, r, http.StatusNotFound, "Ticket.NotFound", "not found")
 	})
 
 	srv := &http.Server{

@@ -1,0 +1,26 @@
+{
+  "common": {
+    "console": "辰云控制台",
+    "overview": "总览",
+    "products": "产品",
+    "billing": "费用",
+    "ticket": "工单",
+    "account": "账号",
+    "search": "搜索产品、资源、文档…",
+    "region": "地域",
+    "loading": "加载中…",
+    "empty": "暂无资源",
+    "create": "创建",
+    "back": "返回",
+    "retry": "重试",
+    "logout": "退出登录"
+  },
+  "overview": {
+    "balance": "账户余额",
+    "resources": "资源总数",
+    "pendingOrders": "待支付订单",
+    "goPay": "去支付 →",
+    "allResources": "全部资源",
+    "loadFailed": "无法加载账户概览,请确认 console-bff 已启动"
+  }
+}

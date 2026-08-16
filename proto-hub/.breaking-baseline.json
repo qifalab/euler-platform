@@ -1,0 +1,1360 @@
+{
+  "messages_by_path": {
+    "proto-hub/proto/starcloud\\alert\\v1\\alert.proto": {
+      "AlertEvent": {
+        "fields": {
+          "1": "string",
+          "10": "string",
+          "2": "int64",
+          "3": "AlertLevel",
+          "4": "string",
+          "5": "string",
+          "6": "int64",
+          "7": "int64",
+          "8": "string",
+          "9": "string"
+        }
+      },
+      "DescribeAlertsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64",
+          "4": "AlertLevel",
+          "5": "int32",
+          "6": "int32"
+        }
+      },
+      "DescribeAlertsResponse": {
+        "fields": {
+          "1": "AlertEvent",
+          "2": "int32"
+        }
+      },
+      "EvaluateRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64"
+        }
+      },
+      "EvaluateResponse": {
+        "fields": {
+          "1": "bool",
+          "2": "string"
+        }
+      },
+      "IngestRequest": {
+        "fields": {
+          "1": "AlertEvent"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\apimeta\\v1\\apimeta.proto": {
+      "Action": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "int32",
+          "9": "ActionStatus"
+        }
+      },
+      "DescribeActionRequest": {
+        "fields": {
+          "1": "string"
+        }
+      },
+      "Doc": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "int32",
+          "5": "int64"
+        }
+      },
+      "GenerateDocRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int32"
+        }
+      },
+      "ListActionsRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int32",
+          "3": "int32"
+        }
+      },
+      "ListActionsResponse": {
+        "fields": {
+          "1": "Action",
+          "2": "int32"
+        }
+      },
+      "RegisterActionRequest": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\audit\\v1\\audit.proto": {
+      "AuditEvent": {
+        "fields": {
+          "1": "string",
+          "10": "string",
+          "11": "int32",
+          "12": "string",
+          "13": "string",
+          "14": "string",
+          "15": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "IdentitySnapshot",
+          "8": "string",
+          "9": "string"
+        }
+      },
+      "DescribeAuditTrailRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64"
+        }
+      },
+      "DescribeAuditTrailResponse": {
+        "fields": {
+          "1": "AuditEvent",
+          "2": "string",
+          "3": "bool"
+        }
+      },
+      "IdentitySnapshot": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "bool"
+        }
+      },
+      "PutEventRequest": {
+        "fields": {
+          "1": "AuditEvent"
+        }
+      },
+      "QueryEventsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "int64",
+          "4": "int64",
+          "5": "string",
+          "6": "int32",
+          "7": "int32"
+        }
+      },
+      "QueryEventsResponse": {
+        "fields": {
+          "1": "AuditEvent",
+          "2": "int32"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\billing\\v1\\billing.proto": {
+      "AccountBalance": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "int64"
+        }
+      },
+      "AdjustBalanceRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "string"
+        }
+      },
+      "Bill": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int32",
+          "4": "int32",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "BillStatus",
+          "9": "int64"
+        }
+      },
+      "BillDetail": {
+        "fields": {
+          "1": "int64",
+          "10": "string",
+          "11": "Deduction",
+          "12": "string",
+          "2": "int64",
+          "3": "int64",
+          "4": "string",
+          "5": "string",
+          "6": "int64",
+          "7": "int32",
+          "8": "string",
+          "9": "string"
+        }
+      },
+      "ChargeHourlyRequest": {
+        "fields": {
+          "1": "ChargeLine"
+        }
+      },
+      "ChargeLine": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "int64"
+        }
+      },
+      "Deduction": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string"
+        }
+      },
+      "DescribeBillDetailsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int32",
+          "3": "int32"
+        }
+      },
+      "DescribeBillDetailsResponse": {
+        "fields": {
+          "1": "BillDetail",
+          "2": "int32"
+        }
+      },
+      "DescribeBillsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int32",
+          "3": "int32",
+          "4": "int32",
+          "5": "int32"
+        }
+      },
+      "DescribeBillsResponse": {
+        "fields": {
+          "1": "Bill",
+          "2": "int32"
+        }
+      },
+      "FreezeResourceRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string"
+        }
+      },
+      "GetAccountBalanceRequest": {
+        "fields": {
+          "1": "int64"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\catalog\\v1\\catalog.proto": {
+      "CalculatePriceRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "int32",
+          "5": "int32",
+          "6": "string",
+          "7": "string"
+        }
+      },
+      "DescribeProductsRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int32",
+          "3": "int32"
+        }
+      },
+      "DescribeProductsResponse": {
+        "fields": {
+          "1": "Product",
+          "2": "int32"
+        }
+      },
+      "DescribeSpecsRequest": {
+        "fields": {
+          "1": "string"
+        }
+      },
+      "DescribeSpecsResponse": {
+        "fields": {
+          "1": "Sku"
+        }
+      },
+      "GetPriceSnapshotRequest": {
+        "fields": {
+          "1": "string"
+        }
+      },
+      "PriceResult": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "string"
+        }
+      },
+      "PriceSnapshot": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "string"
+        }
+      },
+      "PricingRule": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "int64",
+          "8": "int64"
+        }
+      },
+      "Product": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "RegionScope",
+          "7": "ProductStatus"
+        }
+      },
+      "Sku": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "ChargeType",
+          "4": "string",
+          "5": "SkuStatus"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\event\\v1\\event.proto": {
+      "AuditAction": {
+        "fields": {
+          "1": "string",
+          "10": "string",
+          "11": "int32",
+          "12": "string",
+          "13": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "IdentitySnapshot",
+          "8": "string",
+          "9": "string"
+        }
+      },
+      "AuthzPolicyChanged": {
+        "fields": {
+          "1": "int64",
+          "2": "int64"
+        }
+      },
+      "BillingAccountEvent": {
+        "fields": {
+          "1": "int64",
+          "2": "BillingAccountState",
+          "3": "int64"
+        }
+      },
+      "Envelope": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "int64",
+          "4": "string",
+          "5": "bytes",
+          "6": "int32"
+        }
+      },
+      "HourlyUsage": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "11": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "int64",
+          "9": "int32"
+        }
+      },
+      "IdentitySnapshot": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "bool"
+        }
+      },
+      "NotifyMessage": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "4": "string"
+        }
+      },
+      "OrderEvent": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "OrderState",
+          "4": "string",
+          "5": "string",
+          "6": "string"
+        }
+      },
+      "PaymentEvent": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64",
+          "4": "PaymentState",
+          "5": "string",
+          "6": "int64"
+        }
+      },
+      "ResourceLifecycleEvent": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "ResourceState",
+          "5": "string",
+          "6": "int64",
+          "7": "int64",
+          "8": "int64",
+          "9": "int64"
+        }
+      },
+      "UsageRecord": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "11": "string",
+          "12": "string",
+          "13": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "int64",
+          "9": "int32"
+        }
+      },
+      "UserEvent": {
+        "fields": {
+          "1": "int64",
+          "2": "UserEventType",
+          "3": "int64"
+        }
+      },
+      "UserLoginEvent": {
+        "fields": {
+          "1": "int64",
+          "2": "bool",
+          "3": "string",
+          "4": "string",
+          "5": "bool",
+          "6": "int64"
+        }
+      },
+      "WorkflowTask": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "bytes"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\iam\\v1\\iam.proto": {
+      "AccessDecision": {
+        "fields": {
+          "1": "bool",
+          "2": "string"
+        }
+      },
+      "AccessKey": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "int64",
+          "5": "AccessKeyStatus",
+          "6": "string",
+          "7": "int32",
+          "8": "int64",
+          "9": "int64"
+        }
+      },
+      "Account": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "AccountStatus",
+          "4": "RealNameStatus",
+          "5": "AccountType",
+          "6": "bool"
+        }
+      },
+      "Ack": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "bool",
+          "5": "bool",
+          "6": "bool"
+        }
+      },
+      "AttachPolicyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "int64"
+        }
+      },
+      "CheckAccessRequest": {
+        "fields": {
+          "1": "Identity",
+          "2": "string",
+          "3": "string"
+        }
+      },
+      "CreateAccessKeyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "int64"
+        }
+      },
+      "DeleteAccessKeyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      },
+      "DeleteUserRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      },
+      "DetachPolicyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "int64"
+        }
+      },
+      "Identity": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "bool",
+          "6": "int64"
+        }
+      },
+      "ListAccessKeysRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string"
+        }
+      },
+      "ListAccessKeysResponse": {
+        "fields": {
+          "1": "AccessKey"
+        }
+      },
+      "ListUsersRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int32",
+          "3": "int32"
+        }
+      },
+      "ListUsersResponse": {
+        "fields": {
+          "1": "RamUser",
+          "2": "int32"
+        }
+      },
+      "LoginRequest": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "string"
+        }
+      },
+      "RamUser": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "bool",
+          "5": "bool",
+          "6": "bool",
+          "7": "RamUserStatus"
+        }
+      },
+      "RegisterRequest": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "AccountType"
+        }
+      },
+      "RotateAccessKeyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      },
+      "Session": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "int64"
+        }
+      },
+      "UpdateAccessKeyStatusRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "AccessKeyStatus"
+        }
+      },
+      "VerifyRequest": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\metering\\v1\\metering.proto": {
+      "DescribeMeteringDataRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "int64",
+          "5": "int64",
+          "6": "bool"
+        }
+      },
+      "DescribeMeteringDataResponse": {
+        "fields": {
+          "1": "UsageRecord",
+          "2": "HourlyUsage"
+        }
+      },
+      "HourlyUsage": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "11": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "int64",
+          "9": "int32"
+        }
+      },
+      "PushMeteringDataResponse": {
+        "fields": {
+          "1": "int32",
+          "2": "int32"
+        }
+      },
+      "UsageRecord": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "11": "string",
+          "12": "string",
+          "13": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "int64",
+          "9": "int32"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\monitor\\v1\\monitor.proto": {
+      "DeleteMetricRuleRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64"
+        }
+      },
+      "DescribeMetricRuleTemplatesRequest": {
+        "fields": {
+          "1": "string"
+        }
+      },
+      "DescribeMetricRuleTemplatesResponse": {
+        "fields": {
+          "1": "MetricRuleTemplate"
+        }
+      },
+      "DescribeMetricRulesRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "int32",
+          "4": "int32"
+        }
+      },
+      "DescribeMetricRulesResponse": {
+        "fields": {
+          "1": "MetricRule",
+          "2": "int32"
+        }
+      },
+      "MetricPoint": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      },
+      "MetricRule": {
+        "fields": {
+          "1": "int64",
+          "10": "string",
+          "11": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "ComparisonOperator",
+          "8": "int32",
+          "9": "int32"
+        }
+      },
+      "MetricRuleTemplate": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "string",
+          "5": "ComparisonOperator",
+          "6": "int32",
+          "7": "int32"
+        }
+      },
+      "PutMetricRuleRequest": {
+        "fields": {
+          "1": "int64",
+          "10": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "ComparisonOperator",
+          "8": "int32",
+          "9": "int32"
+        }
+      },
+      "QueryMetricDataRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "int64",
+          "5": "int64",
+          "6": "string"
+        }
+      },
+      "QueryMetricDataResponse": {
+        "fields": {
+          "1": "MetricPoint",
+          "2": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\notify\\v1\\notify.proto": {
+      "ChannelDelivery": {
+        "fields": {
+          "1": "string",
+          "2": "NotifyStatus",
+          "3": "string",
+          "4": "int32",
+          "5": "int64",
+          "6": "int64"
+        }
+      },
+      "DescribeDeliveryRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64"
+        }
+      },
+      "DescribeDeliveryResponse": {
+        "fields": {
+          "1": "ChannelDelivery"
+        }
+      },
+      "DescribeNotificationsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "NotifyClass",
+          "3": "int32",
+          "4": "int32"
+        }
+      },
+      "DescribeNotificationsResponse": {
+        "fields": {
+          "1": "Notification",
+          "2": "int32"
+        }
+      },
+      "Notification": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "NotifyClass",
+          "4": "string",
+          "6": "string",
+          "7": "NotifyStatus",
+          "8": "int64",
+          "9": "int64"
+        }
+      },
+      "SendRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "NotifyClass",
+          "3": "string",
+          "5": "string",
+          "6": "string"
+        }
+      },
+      "SendResponse": {
+        "fields": {
+          "1": "int64",
+          "2": "NotifyStatus",
+          "3": "int64"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\orchestrator\\v1\\orchestrator.proto": {
+      "Ack": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "11": "int64",
+          "12": "int64",
+          "13": "int64",
+          "14": "int64",
+          "15": "int32",
+          "2": "int64",
+          "3": "int64",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "ResourceStatus",
+          "9": "string"
+        }
+      },
+      "DescribeResourceStatusRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int64"
+        }
+      },
+      "FulfillOrderRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "string"
+        }
+      },
+      "FulfillOrderResponse": {
+        "fields": {
+          "1": "int64",
+          "2": "bool"
+        }
+      },
+      "OnResourceCallbackRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "ResourceStatus",
+          "5": "string"
+        }
+      },
+      "OperateResourceRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "ResourceOperation"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\order\\v1\\order.proto": {
+      "CreateOrderRequest": {
+        "fields": {
+          "1": "int64",
+          "10": "string",
+          "2": "OrderType",
+          "3": "string",
+          "4": "string",
+          "5": "string",
+          "6": "int32",
+          "7": "int32",
+          "8": "string",
+          "9": "string"
+        }
+      },
+      "DescribeOrdersRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "OrderStatus",
+          "3": "int32",
+          "4": "int32"
+        }
+      },
+      "DescribeOrdersResponse": {
+        "fields": {
+          "1": "Order",
+          "2": "int32"
+        }
+      },
+      "Order": {
+        "fields": {
+          "1": "int64",
+          "10": "string",
+          "11": "string",
+          "12": "string",
+          "13": "OrderStatus",
+          "14": "string",
+          "15": "string",
+          "16": "int32",
+          "2": "int64",
+          "3": "OrderType",
+          "4": "string",
+          "5": "ChargeType",
+          "6": "string",
+          "7": "string",
+          "8": "string",
+          "9": "string"
+        }
+      },
+      "PayNotifyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "bool",
+          "4": "string",
+          "5": "string"
+        }
+      },
+      "RefundOrderRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "string"
+        }
+      },
+      "RenewOrderRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "int32",
+          "5": "string",
+          "6": "string"
+        }
+      },
+      "ResizeOrderRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "OrderType",
+          "6": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\org\\v1\\org.proto": {
+      "CreateProjectRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "int64"
+        }
+      },
+      "ListProjectsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int32",
+          "3": "int32"
+        }
+      },
+      "ListProjectsResponse": {
+        "fields": {
+          "1": "Project",
+          "2": "int32"
+        }
+      },
+      "MoveResourceRequest": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "int64"
+        }
+      },
+      "Project": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "int64",
+          "5": "int64",
+          "6": "int64"
+        }
+      },
+      "Tag": {
+        "fields": {
+          "1": "string",
+          "2": "string"
+        }
+      },
+      "TagResourcesRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "Tag"
+        }
+      },
+      "UntagResourcesRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string"
+        }
+      },
+      "UpdateProjectRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\payment\\v1\\payment.proto": {
+      "ChannelCallbackRequest": {
+        "fields": {
+          "1": "string",
+          "2": "bytes",
+          "3": "string",
+          "4": "string"
+        }
+      },
+      "CreatePaymentRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "int64"
+        }
+      },
+      "Payment": {
+        "fields": {
+          "1": "int64",
+          "10": "int64",
+          "2": "int64",
+          "3": "int64",
+          "4": "string",
+          "5": "int64",
+          "6": "PaymentStatus",
+          "7": "string",
+          "8": "int64",
+          "9": "int64"
+        }
+      },
+      "QueryPaymentStatusRequest": {
+        "fields": {
+          "1": "int64"
+        }
+      },
+      "RefundRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\quota\\v1\\quota.proto": {
+      "Ack": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "int32",
+          "6": "int64"
+        }
+      },
+      "ApplyQuotaIncreaseRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "int32",
+          "5": "string"
+        }
+      },
+      "ApplyQuotaIncreaseResponse": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      },
+      "CheckAndOccupyRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "int32"
+        }
+      },
+      "CommitOccupyRequest": {
+        "fields": {
+          "1": "string"
+        }
+      },
+      "DescribeQuotasRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string"
+        }
+      },
+      "DescribeQuotasResponse": {
+        "fields": {
+          "1": "QuotaUsage"
+        }
+      },
+      "QuotaService": {
+        "fields": {}
+      },
+      "QuotaUsage": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "string",
+          "4": "int32",
+          "5": "int32",
+          "6": "int32",
+          "7": "int32",
+          "8": "string",
+          "9": "bool"
+        }
+      },
+      "ReleaseOccupyRequest": {
+        "fields": {
+          "1": "string"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\ticket\\v1\\ticket.proto": {
+      "CreateTicketRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "TicketPriority",
+          "4": "string"
+        }
+      },
+      "ListTicketsRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "TicketStatus",
+          "3": "int32",
+          "4": "int32"
+        }
+      },
+      "ListTicketsResponse": {
+        "fields": {
+          "1": "Ticket",
+          "2": "int32"
+        }
+      },
+      "ReplyTicketRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "bool"
+        }
+      },
+      "Ticket": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "TicketPriority",
+          "5": "TicketStatus",
+          "6": "int64",
+          "7": "int64",
+          "8": "int64",
+          "9": "int64"
+        }
+      },
+      "TicketReply": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64",
+          "4": "string",
+          "5": "bool",
+          "6": "int64"
+        }
+      }
+    },
+    "proto-hub/proto/starcloud\\workflow\\v1\\workflow.proto": {
+      "Ack": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "bytes",
+          "5": "FlowStatus",
+          "6": "int64",
+          "7": "int64",
+          "8": "int64"
+        }
+      },
+      "CompensateFlowRequest": {
+        "fields": {
+          "1": "int64"
+        }
+      },
+      "CompensateFlowResponse": {
+        "fields": {
+          "1": "FlowStatus",
+          "2": "int32"
+        }
+      },
+      "CompleteStepRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "bytes"
+        }
+      },
+      "CompleteStepResponse": {
+        "fields": {
+          "1": "int64",
+          "2": "FlowStatus"
+        }
+      },
+      "StartFlowRequest": {
+        "fields": {
+          "1": "string",
+          "2": "string",
+          "3": "bytes"
+        }
+      },
+      "StartFlowResponse": {
+        "fields": {
+          "1": "int64",
+          "2": "bool"
+        }
+      },
+      "StepInstance": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "bytes",
+          "6": "StepStatus",
+          "7": "int64",
+          "8": "int32",
+          "9": "string"
+        }
+      }
+    }
+  }
+}

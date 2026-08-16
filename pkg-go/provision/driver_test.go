@@ -382,3 +382,111 @@ func TestFinalizerConstant(t *testing.T) {
 		t.Fatalf("finalizer = %s, does not match 06§4.2", Finalizer)
 	}
 }
+
+// --- Preemptor (phase 2, M-4.2): spot reclaim two-step handshake ---
+
+func TestReclaimNoticeWindowIsFiveMinutes(t *testing.T) {
+	if ReclaimNoticeWindow != 5*time.Minute {
+		t.Fatalf("reclaim notice window = %s, want 5m (09 §4.2)", ReclaimNoticeWindow)
+	}
+}
+
+func TestMockDriverImplementsPreemptor(t *testing.T) {
+	// The MockDriver must satisfy Preemptor so spot reclaim testing works
+	// without a cluster (06§6.2 MockDriver验收门槛).
+	var d Driver = newDriver()
+	if _, ok := d.(Preemptor); !ok {
+		t.Fatal("MockDriver must implement Preemptor for spot reclaim testing")
+	}
+}
+
+func TestNotifyReclaimIsIdempotent(t *testing.T) {
+	d := newDriver()
+	if _, err := d.Apply(validSpec()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	first, err := d.NotifyReclaim(validSpec().ResourceID, testNow)
+	if err != nil {
+		t.Fatalf("notify 1: %v", err)
+	}
+	// A replay returns the original delivered instant, not a reset — the
+	// customer keeps their notice time.
+	second, err := d.NotifyReclaim(validSpec().ResourceID, testNow.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("notify 2: %v", err)
+	}
+	if !second.Equal(first) {
+		t.Fatalf("idempotent replay changed delivered instant: %s → %s", first, second)
+	}
+}
+
+func TestReclaimRefusedBeforeNoticeWindowElapses(t *testing.T) {
+	d := newDriver()
+	if _, err := d.Apply(validSpec()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	p := d
+	if _, err := p.NotifyReclaim(validSpec().ResourceID, testNow); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	// Reclaiming 4 minutes later — before the 5m window — must be refused.
+	if err := p.Reclaim(validSpec().ResourceID, testNow.Add(4*time.Minute)); !errors.Is(err, ErrNoticeNotDelivered) {
+		t.Fatalf("reclaim before window: err = %v, want ErrNoticeNotDelivered", err)
+	}
+}
+
+func TestReclaimRefusedWithoutPriorNotice(t *testing.T) {
+	d := newDriver()
+	if _, err := d.Apply(validSpec()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// Reclaiming without ever delivering a notice is forbidden — the platform
+	// cannot reclaim what it has not warned about.
+	if err := d.Reclaim(validSpec().ResourceID, testNow.Add(time.Hour)); !errors.Is(err, ErrNoticeNotDelivered) {
+		t.Fatalf("reclaim without notice: err = %v, want ErrNoticeNotDelivered", err)
+	}
+}
+
+func TestReclaimSucceedsAfterNoticeWindow(t *testing.T) {
+	d := newDriver()
+	if _, err := d.Apply(validSpec()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	p := d
+	if _, err := p.NotifyReclaim(validSpec().ResourceID, testNow); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	// Reclaimable at = notice + 5m.
+	earliest, ok := p.ReclaimableAt(validSpec().ResourceID)
+	if !ok {
+		t.Fatal("ReclaimableAt should report a time after notice")
+	}
+	if !earliest.Equal(testNow.Add(5 * time.Minute)) {
+		t.Fatalf("earliest reclaim = %s, want %s", earliest, testNow.Add(5*time.Minute))
+	}
+	// Reclaiming exactly at the window boundary succeeds.
+	if err := p.Reclaim(validSpec().ResourceID, earliest); err != nil {
+		t.Fatalf("reclaim at window: err = %v", err)
+	}
+}
+
+func TestReclaimOnUnknownResourceErrors(t *testing.T) {
+	d := newDriver()
+	p := d
+	if _, err := p.NotifyReclaim("does-not-exist", testNow); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("notify unknown: err = %v, want ErrNotFound", err)
+	}
+	if err := p.Reclaim("does-not-exist", testNow.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reclaim unknown: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestReclaimableAtFalseBeforeNotice(t *testing.T) {
+	d := newDriver()
+	if _, err := d.Apply(validSpec()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, ok := d.ReclaimableAt(validSpec().ResourceID); ok {
+		t.Fatal("ReclaimableAt should be false before any notice is delivered")
+	}
+}

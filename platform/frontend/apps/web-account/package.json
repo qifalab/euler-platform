@@ -1,0 +1,23 @@
+{
+  "name": "web-account",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud account center — SSO auth domain + console sub-app (02§5, §1.2).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5175",
+    "build": "vite build",
+    "preview": "vite preview --port 5175",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*",
+    "element-plus": "^2.7.0",
+    "pinia": "^2.1.0",
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0"
+  }
+}

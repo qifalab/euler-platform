@@ -1,0 +1,45 @@
+# ArgoCD ApplicationSet — one Application per service chart under apps/ (08§4.3).
+#
+# The App-of-Apps root (app-of-apps.yaml) syncs this ApplicationSet, which fans
+# out to one Application per sub-directory in apps/. Each deploys the service's
+# Helm chart to the target namespace, with env-specific values layered from
+# envs/<env>/values-overrides/<svc>.yaml (dir-as-env, single trunk 08§4.3).
+#
+# Adding a new service = adding a directory under apps/; no Application edit.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: starcloud-services
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+        targetRevision: main
+        directories:
+          - path: deploy/gitops-manifests/apps/*
+  template:
+    metadata:
+      # e.g. starcloud-svc-iam-dev
+      name: 'starcloud-{{path.basename}}-{{branch}}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+        targetRevision: main
+        path: '{{path}}'
+        helm:
+          # Env differences live ONLY here (08§4.3 single trunk).
+          valueFiles:
+            - ../../envs/dev/values-overrides/{{path.basename}}.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: starcloud-{{path.basename}}
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

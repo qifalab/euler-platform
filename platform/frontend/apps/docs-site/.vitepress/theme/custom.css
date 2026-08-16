@@ -1,0 +1,22 @@
+/* StarCloud docs — Google Cloud Glass brand overrides for the VitePress
+   default theme. Values mirror @sc/tokens brand tokens
+   (--sc-color-brand / -hover / -active / -soft). */
+
+:root {
+  --vp-c-brand-1: #1a73e8;
+  --vp-c-brand-2: #1967d2;
+  --vp-c-brand-3: #185abc;
+  --vp-c-brand-soft: rgba(26, 115, 232, 0.08);
+}
+
+/* VitePress toggles the `dark` class on <html> for dark mode. */
+html.dark {
+  --vp-c-brand-1: #8ab4f8;
+  --vp-c-brand-2: #a5c6f9;
+  --vp-c-brand-3: #c6dbfb;
+}
+
+/* Light polish: pill-shaped action buttons. */
+.VPButton {
+  border-radius: 999px;
+}

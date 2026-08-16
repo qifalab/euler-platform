@@ -1,0 +1,393 @@
+// Package main: svc-quota — two-phase quota reservation
+// (03-backend-services.md §4.3.2).
+//
+// Owns the occupy/release protocol (pkg-go/quota). Provisioning is async and
+// can fail minutes after the order is placed, so a reservation token reserves
+// capacity up front; the fulfilment saga then commits it (resource exists) or
+// releases it (it didn't). Both failure directions are bounded — an
+// uncommitted reservation's TTL is swept back. The invariant the service is
+// built around: in-flight reservations count against the limit, so two
+// concurrent orders cannot both claim the last slot.
+//
+// Routes (gateway-authorized, X-Sc-Account-Id injected):
+//
+//	POST /api/v1/quota/occupy  — two-phase reserve (body: productCode, resourceType, count)
+//	POST /api/v1/quota/release — release a reservation (body: reservationId)
+//	GET  /api/v1/quota/usage   — usage position (?productCode=, ?region=)
+//
+// stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
+// (MySQL sharded by account_id + Redis read cache in production).
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/starcloud/sc-platform/quota"
+)
+
+const accountIDHeader = "X-Sc-Account-Id"
+
+// quotaStore is an in-memory quota.Store. Production uses MySQL (sharded by
+// account_id, version column for the optimistic lock) with Redis as a read
+// accelerator; the optimistic lock lives in both.
+type quotaStore struct {
+	mu     sync.Mutex
+	defs   map[string]quota.Definition
+	usage  map[string]quota.Usage
+	tokens map[string]quota.Token
+}
+
+func newQuotaStore() *quotaStore {
+	s := &quotaStore{
+		defs:   make(map[string]quota.Definition),
+		usage:  make(map[string]quota.Usage),
+		tokens: make(map[string]quota.Token),
+	}
+	s.seed()
+	return s
+}
+
+func (s *quotaStore) seed() {
+	// Seed the scecs-instance quota definition (limit 20, region-scoped) and a
+	// pre-seeded usage row for account 100123 so GET /usage returns the real
+	// shape before any occupy.
+	s.defs["quota_scecs_instance"] = quota.Definition{
+		QuotaCode:    "quota_scecs_instance",
+		ProductCode:  "scecs",
+		DefaultValue: 20,
+		Scope:        quota.ScopeRegion,
+		Adjustable:   true,
+	}
+	// Global-scope definition too, so the productCode→quotaCode path is real for
+	// scoss buckets as well (and to demonstrate scope handling).
+	s.defs["quota_scoss_bucket"] = quota.Definition{
+		QuotaCode:    "quota_scoss_bucket",
+		ProductCode:  "scoss",
+		DefaultValue: 100,
+		Scope:        quota.ScopeGlobal,
+	}
+	// Pre-seed account 100123's usage at the default limit of 20. NewManager's
+	// CheckAndOccupy would lazily create this on first reserve from the
+	// definition; seeding it makes the usage endpoint return real data before
+	// any reservation exists, matching the console-bff seed for account 100123.
+	s.usage[usageKey(100123, "quota_scecs_instance", "cn-north-1")] = quota.Usage{
+		AccountID: 100123, QuotaCode: "quota_scecs_instance", Region: "cn-north-1",
+		Used: 0, Occupying: 0, HardLimit: 20, Version: 0,
+	}
+}
+
+func usageKey(accountID int64, quotaCode, region string) string {
+	return fmt.Sprintf("%d|%s|%s", accountID, quotaCode, region)
+}
+
+func (s *quotaStore) GetDefinition(code string) (quota.Definition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.defs[code]
+	if !ok {
+		return quota.Definition{}, quota.ErrUnknownQuota
+	}
+	return d, nil
+}
+
+func (s *quotaStore) GetUsage(accountID int64, quotaCode, region string) (quota.Usage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.usage[usageKey(accountID, quotaCode, region)]
+	if !ok {
+		return quota.Usage{AccountID: accountID, QuotaCode: quotaCode, Region: region}, nil
+	}
+	return u, nil
+}
+
+func (s *quotaStore) UpdateUsage(u quota.Usage, expectedVersion int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := usageKey(u.AccountID, u.QuotaCode, u.Region)
+	cur, ok := s.usage[k]
+	curVersion := 0
+	if ok {
+		curVersion = cur.Version
+	}
+	if curVersion != expectedVersion {
+		return quota.ErrVersionConflict
+	}
+	u.Version = curVersion + 1
+	s.usage[k] = u
+	return nil
+}
+
+func (s *quotaStore) PutToken(t quota.Token) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokens[t.TokenID] = t
+	return nil
+}
+
+func (s *quotaStore) GetToken(id string) (quota.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tokens[id]
+	if !ok {
+		return quota.Token{}, quota.ErrTokenNotFound
+	}
+	return t, nil
+}
+
+func (s *quotaStore) DeleteToken(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tokens, id)
+	return nil
+}
+
+func (s *quotaStore) ListExpiredTokens(now time.Time) ([]quota.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []quota.Token
+	for _, t := range s.tokens {
+		if t.Expired(now) {
+			out = append(out, t)
+		}
+	}
+	quota.SortTokens(out)
+	return out, nil
+}
+
+// quotaCodeFor maps a productCode to its quota code. Each product has exactly
+// one primary resource-count quota; this mapping is what turns a provisioning
+// request ("reserve 3 scecs instances") into a quota code.
+func quotaCodeFor(productCode string) string {
+	switch productCode {
+	case "scecs":
+		return "quota_scecs_instance"
+	case "scoss":
+		return "quota_scoss_bucket"
+	default:
+		return "quota_" + productCode + "_instance"
+	}
+}
+
+type occupyRequest struct {
+	ProductCode  string `json:"productCode"`
+	ResourceType string `json:"resourceType"` // informational: instance/bucket/...
+	Region       string `json:"region"`
+	Count        int    `json:"count"`
+	BizKey       string `json:"bizKey"` // the order/saga this reservation belongs to
+}
+
+func (s *quotaStore) handleOccupy(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req occupyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+	if req.ProductCode == "" {
+		writeErr(w, "Common.InvalidParameter", 400, "productCode is required")
+		return
+	}
+	if req.Count <= 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "count must be positive")
+		return
+	}
+	if req.Region == "" {
+		req.Region = "cn-north-1"
+	}
+	if req.BizKey == "" {
+		req.BizKey = fmt.Sprintf("acct-%d", acct)
+	}
+	mgr := quota.NewManager(s, time.Now, nil)
+	tok, err := mgr.CheckAndOccupy(acct, quotaCodeFor(req.ProductCode), req.Region, req.Count, req.BizKey)
+	if err != nil {
+		switch {
+		case errors.Is(err, quota.ErrQuotaExceeded):
+			writeErr(w, "Quota.Exceeded", 409, err.Error())
+		case errors.Is(err, quota.ErrVersionConflict):
+			writeErr(w, "Quota.VersionConflict", 409, err.Error())
+		case errors.Is(err, quota.ErrUnknownQuota):
+			writeErr(w, "Quota.UnknownQuota", 404, err.Error())
+		case errors.Is(err, quota.ErrInvalidAmount):
+			writeErr(w, "Common.InvalidParameter", 400, err.Error())
+		default:
+			writeErr(w, "Quota.OccupyFailed", 500, err.Error())
+		}
+		return
+	}
+	writeJSON(w, "OK", map[string]any{
+		"reservationId": tok.TokenID,
+		"quotaCode":     tok.QuotaCode,
+		"region":        tok.Region,
+		"amount":        tok.Amount,
+		"expiresAt":      tok.ExpiresAt.Format(time.RFC3339),
+		"bizKey":         tok.BizKey,
+	})
+}
+
+type releaseRequest struct {
+	ReservationId string `json:"reservationId"`
+}
+
+func (s *quotaStore) handleRelease(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req releaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+	if req.ReservationId == "" {
+		writeErr(w, "Common.InvalidParameter", 400, "reservationId is required")
+		return
+	}
+	mgr := quota.NewManager(s, time.Now, nil)
+	// ReleaseOccupy is saga-compensation: it succeeds for unknown/already-released
+	// tokens. But the token, if it exists, must belong to this account — a
+	// cross-account release is a real error, not a silent no-op.
+	tok, err := s.GetToken(req.ReservationId)
+	if err == nil && tok.AccountID != acct {
+		writeErr(w, "Quota.NotFound", 404, "reservation does not belong to this account")
+		return
+	}
+	if err := mgr.ReleaseOccupy(req.ReservationId); err != nil {
+		writeErr(w, "Quota.ReleaseFailed", 500, err.Error())
+		return
+	}
+	writeJSON(w, "OK", map[string]any{"reservationId": req.ReservationId, "released": true})
+}
+
+func (s *quotaStore) handleUsage(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	productCode := r.URL.Query().Get("productCode")
+	if productCode == "" {
+		productCode = "scecs"
+	}
+	region := r.URL.Query().Get("region")
+	if region == "" {
+		region = "cn-north-1"
+	}
+	mgr := quota.NewManager(s, time.Now, nil)
+	u, err := mgr.Describe(acct, quotaCodeFor(productCode), region)
+	if err != nil {
+		if errors.Is(err, quota.ErrUnknownQuota) {
+			writeErr(w, "Quota.UnknownQuota", 404, err.Error())
+			return
+		}
+		writeErr(w, "Quota.DescribeFailed", 500, err.Error())
+		return
+	}
+	writeJSON(w, "OK", map[string]any{
+		"accountId":  u.AccountID,
+		"quotaCode":  u.QuotaCode,
+		"region":     u.Region,
+		"used":       u.Used,
+		"occupying":  u.Occupying,
+		"hardLimit":  u.HardLimit,
+		"available":  u.Available(),
+		"warn":       quota.ShouldWarn(u),
+		"version":    u.Version,
+	})
+}
+
+func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.Header.Get(accountIDHeader)
+	if raw == "" {
+		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		return 0, false
+	}
+	return id, true
+}
+
+func writeJSON(w http.ResponseWriter, code string, data any) {
+	rid := w.Header().Get("X-Sc-TraceId")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
+}
+
+func writeErr(w http.ResponseWriter, code string, status int, msg string) {
+	rid := w.Header().Get("X-Sc-TraceId")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
+}
+
+func requestIDMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Sc-TraceId")
+		if id == "" {
+			id = fmt.Sprintf("quota-%d", time.Now().UnixNano())
+		}
+		w.Header().Set("X-Sc-TraceId", id)
+		h.ServeHTTP(w, r)
+	})
+}
+
+func recoverMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic", "rec", rec, "path", r.URL.Path)
+				writeErr(w, "Common.InternalError", 500, "internal error")
+			}
+		}()
+		h.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	addr := flag.String("http", ":9208", "HTTP listen address")
+	flag.Parse()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	store := newQuotaStore()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })
+	mux.HandleFunc("POST /api/v1/quota/occupy", store.handleOccupy)
+	mux.HandleFunc("POST /api/v1/quota/release", store.handleRelease)
+	mux.HandleFunc("GET /api/v1/quota/usage", store.handleUsage)
+
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		slog.Info("svc-quota listening", "addr", *addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("listen failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	slog.Info("shutdown signal received, draining")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("graceful shutdown failed", "err", err)
+	}
+}

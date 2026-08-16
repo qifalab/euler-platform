@@ -1,0 +1,31 @@
+# ArgoCD App-of-Apps root (08-devops-delivery.md §4.3).
+#
+# The root Application points at this directory; ArgoCD syncs every child
+# Application below it (dir-as-env, single trunk). Each child points at a
+# per-service Helm chart under apps/<svc>/ with env-specific values from
+# envs/<env>/values-overrides/. This is the single GitOps entry point.
+#
+# Apply once per cluster:
+#   kubectl apply -f deploy/gitops-manifests/app-of-apps.yaml -n argocd
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: starcloud-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+    targetRevision: main
+    path: deploy/gitops-manifests/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

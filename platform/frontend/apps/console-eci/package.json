@@ -1,0 +1,26 @@
+{
+  "name": "console-eci",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud elastic container instance sub-app (SCECI, M-7.1) — Wujie child.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5183",
+    "build": "vite build",
+    "preview": "vite preview --port 5183",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/console-kit": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*",
+    "vue-router": "^4.3.0"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0",
+    "element-plus": "^2.7.0",
+    "vue-router": "^4.3.0"
+  }
+}

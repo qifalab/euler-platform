@@ -16,7 +16,7 @@
 |---|---|---|
 | 对标启示/选型决策/兼容性坑清单 | **10-research-and-selection-decisions.md** | 全书"对标启示 N""选型坑清单 #N"等编号引用均指向本文件锚点(§3.4/§4.2/§4.4) |
 | 产品 code/命名/品牌前缀 | **01-product-catalog.md §1.1 决策 D0** | `sc` 前缀体系(scecs/scoss/scrds…) |
-| 一期产品集/批次排期/部署阶段映射/一期 GA 验收/一期规模基线 | **09-roadmap.md**(经本裁决书 §5/§4 修订后) | R-01 一期产品集被本裁决书推翻重定(见 C1+S1) |
+| 一期产品集/批次排期/部署阶段映射/一期 GA 验收/一期规模基线 | **09-roadmap.md**(经本裁决书 §5/§4 修订后) | D-01(原编号 R-01)一期产品集被本裁决书推翻重定(见 C1+S1) |
 | 欠费生命周期参数 | **01-product-catalog.md §5.4 决策 D8 参数表** | 宽限 24h/72h、锁定保留 30 天、包年包月保留 15 天、提醒 30/15/7/3/1、释放前 24h |
 | Kafka topic 命名/分区/保留/环境隔离 | **04-middleware-infrastructure.md §5.4** | `cloud.{domain}.{aggregate}.{event}` 规范,topic 不含环境,集群隔离 |
 | 服务清单/职责/语言栈 | **03-backend-services.md §4.0 服务总表** | `svc-{domain}` 命名;04 §4.3 为命名模式/Group/Data ID 事实源 |
@@ -37,7 +37,7 @@
 
 | issueIds | 裁决结论 | 事实源 | 涉及文件与改法 |
 |---|---|---|---|
-| **C1+S1** | 一期 MVP 可售产品集统一为:**IAM/计费骨架/商品化中台 + SCVPC(网络) + SCECS(云服务器 VM) + SCBS(块存储) + SCOSS(对象存储) + SCRDS(托管 MySQL) + SCMON(监控) + SCEIP(弹性公网 IP)**;**SCECI(弹性容器实例)后置二期**。理由:VPC 是 ECS 前置依赖、ECS 需块存储做系统盘、VM 是用户预期旗舰产品、ECI 依赖 K8s 调度难度高;同时满足 00§1.1 最小可售闭环(计算+存储+网络+托管数据库)与 01§3.2 第一批矩阵。**09 R-01"ECI 替代 VM、VPC 后置"被否决。** | 01§3.2 第一批 + 00§1.1 | 09:改写 R-01/R-02/§3.1/§2.1 甘特/§3.3"产品×3"→"产品×7";09§3.2 决策 R-01 备选方案 A(VM+块存储+VPC)转为正选结论;01§3.2 维持(确认为事实源);02§1.2 MVP 子应用已含 console-rds/ecs/vpc 等,确认无需改;03§11 一期上线顺序补 rc-network/rc-database(现仅 rc-compute/rc-storage);00§1.1 确认维持 |
+| **C1+S1** | 一期 MVP 可售产品集统一为:**IAM/计费骨架/商品化中台 + SCVPC(网络) + SCECS(云服务器 VM) + SCBS(块存储) + SCOSS(对象存储) + SCRDS(托管 MySQL) + SCMON(监控) + SCEIP(弹性公网 IP)**;**SCECI(弹性容器实例)后置二期**。理由:VPC 是 ECS 前置依赖、ECS 需块存储做系统盘、VM 是用户预期旗舰产品、ECI 依赖 K8s 调度难度高;同时满足 00§1.1 最小可售闭环(计算+存储+网络+托管数据库)与 01§3.2 第一批矩阵。**09 D-01(原编号 R-01)"ECI 替代 VM、VPC 后置"被否决。** | 01§3.2 第一批 + 00§1.1 | 09:改写 D-01/D-02/§3.1/§2.1 甘特/§3.3"产品×3"→"产品×7";09§3.2 决策 D-01 备选方案 A(VM+块存储+VPC)转为正选结论;01§3.2 维持(确认为事实源);02§1.2 MVP 子应用已含 console-rds/ecs/vpc 等,确认无需改;03§11 一期上线顺序补 rc-network/rc-database(现仅 rc-compute/rc-storage);00§1.1 确认维持 |
 | **C6+S30** | 计费形态节奏统一:**一期 Day1 = 包年包月 + 按量(两形态);资源包 + 抢占式 后置二期**。免费试用 = 试用代金券,**一期落地**(由 svc-catalog 提供代金券最小实现);**满减/折扣券后置二期**。**01 D6 改为"Day1 支持包年包月+按量,资源包二期"**;**09 §4.1 与 §6.1 自相矛盾修正为:免费试用(代金券)一期内测上线,资源包二期**;03§4.2.1"优惠券后置"改为"代金券一期最小实现,满减/折扣券后置";00§1.2 计费四形态行改为"四形态模型 Day1 预留,抢占式售卖后置(见 01 D6)" | 01 D6/D7 | 01:改 D6/D7 表述;09:改 §4.1 免费试用表述、§6.1 timeline 免费试用条目、§4.3 M-4 资源包排期确认二期;03:改 §4.2.1;00:改 §1.2 照搬档计费四形态行 |
 
 ### 2.2 Kafka topic / 计量服务 / 命名 / 分片键
@@ -45,7 +45,7 @@
 | issueIds | 裁决结论 | 事实源 | 涉及文件与改法 |
 |---|---|---|---|
 | **C2+S8** | Kafka topic 唯一事实源 = **04§5.3 的 `cloud.{domain}.{aggregate}.{event}` 规范**;topic 名**不含环境标识**,环境隔离一律靠**集群隔离**(否决 05 附录A 的 `prod.`/`staging.` 前缀方案);分区数以 04§5.4 清单为准(usage.raw=64)。各数据流统一命名:计量原始 `cloud.metering.usage.raw`、计量小时聚合 `cloud.metering.billing.event`、账单事件 `cloud.billing.account.event`、订单事件 `cloud.trade.order.event`、资源生命周期 `cloud.resource.lifecycle.event`、通知 `cloud.notify.message`、审计 `cloud.sys.audit.action`、告警 `cloud.sys.alert.event`。03/05/06/07/02 的 topic 表全部改为**引用 04§5.4 清单**而非各自定义 | 04§5.4 | 04:作为事实源,确认清单完整(已含 cloud.* 全量);03§7 topic 表(iam.event.v1/order.event.v1/metering.raw.v1/billing.charge.v1/resource.event.v1/audit.event.v1/notify.task.v1/workflow.task.v1 等)全部改写为引用 04 清单的 cloud.* 名;05§4.1 已引用 04(确认);06§9 topic 表(provision.task/provision.status/metering.raw.oss-bucket/metering.raw.host/agent.command/audit.agent.exec/infra.node.lifecycle/infra.etcd.backup)改写为引用 04 清单对应名(cloud.resource.provision.task/provision.status、cloud.sys.host.metrics、cloud.sys.agent.command、cloud.sys.audit.agent、cloud.sys.node.lifecycle、cloud.sys.etcd.backup);07§6.2 的 `sec.audit.events`/`sec.login-events`/`sec.authz.policy-changed`/`sec.threat.events` 改为 04 清单的 `cloud.sys.audit.action`/`cloud.user.login.event`/`cloud.sys.authz.policy.changed`/`cloud.sys.threat.event`;05 附录A"prod./staging. 前缀"删除并改为"集群隔离(见 04§5.3)";02§11 的 `web.rum.events` 改引用 04 清单 `cloud.sys.rum.event` |
-| **C3+S7** | 计量聚合服务语言 = **Go**,统一服务名 **svc-metering**(归 03§4.0 服务总表,语言栈 Go);05 的 `metering-aggregator` 已改名 svc-metering 并标注 Go(05§5.1/§5.4 已确认);06§4.4 时序图计量服务标注为 svc-metering(Go)。理由:高频写入管道+数据接入型符合 03§2.2"吞吐和连接归 Go"口诀与 09 R-04 双栈分工 | 03§4.0/§4.2.5 | 03:确认 svc-metering=Go(已符合);05:确认 svc-metering(Go)(已符合);06:§4.4 时序图/§4.1 范式图计量服务统一标注 svc-metering(Go),删除任何"计量服务(Java)"表述(若有) |
+| **C3+S7** | 计量聚合服务语言 = **Go**,统一服务名 **svc-metering**(归 03§4.0 服务总表,语言栈 Go);05 的 `metering-aggregator` 已改名 svc-metering 并标注 Go(05§5.1/§5.4 已确认);06§4.4 时序图计量服务标注为 svc-metering(Go)。理由:高频写入管道+数据接入型符合 03§2.2"吞吐和连接归 Go"口诀与 09 D-04(原编号 R-04)统一 Go 栈决策 | 03§4.0/§4.2.5 | 03:确认 svc-metering=Go(已符合);05:确认 svc-metering(Go)(已符合);06:§4.4 时序图/§4.1 范式图计量服务统一标注 svc-metering(Go),删除任何"计量服务(Java)"表述(若有) |
 | **C4+S11** | 全局命名规范:服务名一律 `svc-{domain}`(svc-iam/svc-order/svc-billing/svc-orchestrator/svc-audit/svc-metering/svc-catalog/svc-quota/svc-workflow/svc-monitor/svc-notify/svc-ticket/svc-api-meta/**svc-payment**/svc-kms/svc-doc/svc-idgen/console-bff/site-bff/auth-console-bff),Nacos Group 一律用应用名(Group=服务名,如 Group=svc-order),**废止 `{DOMAIN}_GROUP` 形式**;接入层 BFF 用 `{场景}-bff`,数据面控制器 `rc-*`,告警组件 `alert-engine`/`alert-center`。03§4.0 服务总表为唯一事实源。04/06/07 中新出现的服务(kms-service→svc-kms、resource-center→svc-orchestrator、provision-bridge→rc-* 履约执行层、site-bff/svc-doc/svc-idgen/auth-console-bff)全部改为 svc-* 或规范名并补录进 03§4.0/04§4.3 补录清单。04 APISIX 路由与 `{GROUP}@@{serviceName}` 订阅串全部按 svc-* 重写。**注:支付服务规范名为 `svc-payment`(03§4.0 事实源),全书凡 `svc-pay` 均为简写别名,统一替换为 `svc-payment`** | 03§4.0 + 04§4.3 | 03§4.0:补录 svc-kms/svc-doc/svc-idgen/auth-console-bff/site-bff(语言栈标注),支付服务名锁定 svc-payment;04§4.3:已锁定 Group=应用名(确认);04§3.3 路由表/§3.8 示例已用 svc-* (确认);07§1.3:`iam-service`→`svc-iam`、`kms-service`→`svc-kms`、`audit-service`→`svc-audit`、`auth-console-bff` 保留(规范名);06:resource-center→svc-orchestrator(§4.0 已映射,确认)、provision-bridge→rc* 履约执行层(§4.0 已映射,确认);08§7.2:`ORDER_GROUP`/`BILLING_GROUP` 改为 Group=应用名(svc-order/svc-billing);00§3.2 应用视图 SVC_PAY/PAY/交易账务行的 `svc-pay` 改为 `svc-payment` |
 | **C5+S12** | 租户标识字段名统一为 **account_id**,并在 00 附录A 术语表显式声明 `account_id ≡ uid ≡ user_id ≡ tenant_id`(全书凡出现 uid/user_id/tenant_id 指代租户的,改为 account_id 或标注等价)。分片键:账号/交易/资源/计量四库统一以 account_id 分片(**否决 05§3.1 的 region+account_id 组合路由**;资源元数据仍可携带 region_id 字段但不作分片键)。分库分表数以 04§6.3 为准:垂直拆四库(account_db/trade_db/resource_db/metering_db),水平 8 库×16 表起步(倍增扩容);09§3.4 的"MySQL 2 分片"改为对齐 8×16 起步口径(一期预算不足可按 account_db 2×16、trade_db 2×16 最小起步,逻辑库边界与分片键不变)。资源 ID 格式内嵌 2 位分片因子(见 C9) | 04§6.3/§6.4 + 00 附录A | 00附录A:新增 account_id 映射声明 + 全局标识规范(见 §3);04§6.3/§6.4:已锁定(确认);05§3.1:已对齐 account_id 单键、region 不作分片键(确认);03§6:已用 account_id(确认);06:product_instance 表废弃(见 S21),tenant_id 改 account_id;07:uid 改为 account_id(或标注 uid=account_id);09§3.4"MySQL 2 分片×主从"改为"MySQL account_db/trade_db 各 2×16 起步(对齐 04§6.3 8×16 基线,预算不足最小起步)" |
 
@@ -59,7 +59,7 @@
 
 | issueIds | 裁决结论 | 事实源 | 涉及文件与改法 |
 |---|---|---|---|
-| **C8+S15** | 部署演进统一为三阶段(以 **00§4.2 为基线**,00 为部署事实源):**P1 单 IDC 单可用区(0–6 月,一期内测/GA 前期)、P2 同城双可用区双活(6–18 月,一期 GA 后期至二期)、P3 两地三中心(18 月+,三期)**。一期(0–9 月)对应 P1 单机房单 AZ;**09§2.3/R12"一期双机房"修正为"P1 单机房,P2 起双机房"**;**09§4.3 M-6"同城三机房/三可用区"修正为"同城双 AZ(P2),三 AZ 不在本期规划,异地多活属 P3"**。09 一期/二期/三期 与 00 P1/P2/P3 建立映射表写入 09§2.3。阶段窗口统一:一期=9 月 GA(6 月 GA 内测、9 月 GA 正式) | 00§4.2 | 00§4.2:确认 P1/P2/P3(事实源);09§2.3:改"单地域双机房(同城)"→"P1 单机房单 AZ(对齐 00§4.2)",新增一期/二期/三期↔P1/P2/P3 映射表;09§4.3 M-6:改"同城三机房/三可用区"→"同城双 AZ(P2)";09 R12:改"一期至少同城双机房"→"一期 P1 单机房,P2 起双机房";04 P2 跨 AZ 设计:移除任何"三可用区"表述(确认 04§4.4 P2 图为双 AZ) |
+| **C8+S15** | 部署演进统一为三阶段(以 **00§4.2 为基线**,00 为部署事实源):**P1 单 IDC 单可用区(0–9 月,即一期全程)、P2 同城双可用区双活(9–18 月,二期)、P3 两地三中心(18 月+,三期)**。一期(0–9 月)对应 P1 单机房单 AZ;**09§2.3/R12"一期双机房"修正为"P1 单机房,P2 起双机房"**;**09§4.3 M-6"同城三机房/三可用区"修正为"同城双 AZ(P2),三 AZ 不在本期规划,异地多活属 P3"**。09 一期/二期/三期 与 00 P1/P2/P3 建立映射表写入 09§2.3。阶段窗口统一:一期=9 个月(T0+6 月 GA 内测、T0+9 月 GA 正式) | 00§4.2 | 00§4.2:确认 P1/P2/P3(事实源);09§2.3:改"单地域双机房(同城)"→"P1 单机房单 AZ(对齐 00§4.2)",新增一期/二期/三期↔P1/P2/P3 映射表;09§4.3 M-6:改"同城三机房/三可用区"→"同城双 AZ(P2)";09 R12:改"一期至少同城双机房"→"一期 P1 单机房,P2 起双机房";04 P2 跨 AZ 设计:移除任何"三可用区"表述(确认 04§4.4 P2 图为双 AZ) |
 | **S16** | 可用性数字区分"阶段承诺值"与"目标值":**一期 GA 门禁以 09 A4/00§4.2 的 控制面≥99.9%、对象存储数据面≥99.95% 为准**;**00§1.4 的 99.95%/99.99% 标注为 P2 阶段目标(非一期验收口径)**。消除 00§1.4 与 00§4.2 的同章内部矛盾 | 09 A4 + 00§4.2 | 00§1.4 可用性行:"一期验收口径"列改为"P2 阶段目标(一期验收口径见 09§3.5 A4:控制面≥99.9%/对象存储数据面≥99.95%)"；00§4.2 维持 P1=99.9%/P2=99.95%+99.99%；09§3.5 A4 维持(事实源) |
 | **S17** | 对账差异口径统一:**商业验收表述为"无未解释差异"**(09 Gate 用语);**工程阈值 covered_ratio<100% 或差异率>0.1% 仅用于触发补数与产出差异明细**。00§1.4 措辞由"对账差异=0"改为"无未解释差异";05§5.5.2 的 0.5% 阈值改为"差异率>0.1% 触发补数,>0.5% 触发告警"分层;05§12 P1 出口标准"对账差异<0.1%"改为"无未解释差异(covered_ratio=100%)" | 09 Gate 用语 | 09§3.5 A2/§6.2 Gate:维持"对账零差异"语义改为"无未解释差异"(确认);00§1.4:"出账对账差异=0"→"出账无未解释差异";05§5.5.2:0.5% 单阈值改为分层(>0.1% 补数、>0.5% 告警);05§12 P1 出口标准:"对账差异<0.1%"→"无未解释差异(covered_ratio=100%)" |
 
@@ -174,7 +174,7 @@
 
 | 阶段 | 09 命名 | 00 命名 | 时间窗 | 拓扑 | 可用性承诺 | AZ 形态 |
 |---|---|---|---|---|---|---|
-| 一期 MVP | 一期(内测→GA) | P1 | T0 ~ T0+9 月(6 月 GA 内测、9 月 GA 正式) | 单 IDC 单可用区 | 控制面≥99.9%、对象存储数据面≥99.95% | 单机房单 AZ |
+| 一期 MVP | 一期(内测→GA) | P1 | T0 ~ T0+9 月(T0+6 月 GA 内测、T0+9 月 GA 正式) | 单 IDC 单可用区 | 控制面≥99.9%、对象存储数据面≥99.95% | 单机房单 AZ |
 | 二期 扩展 | 二期 | P2 | T0+9 ~ T0+18 月 | 同城双可用区双活 | 控制面≥99.95%、核心数据面≥99.99%(P2 目标) | 同城双 AZ |
 | 三期 规模化 | 三期 | P3 | T0+18 月+ | 两地三中心(同城双活+异地灾备) | 关键数据 RPO≈0、RTO≤30min | 两地三中心(异地多活属 P3) |
 
@@ -195,6 +195,8 @@
 | **S6(版本载体)** | 推荐"版本载体=URI 路径版本 /v1/" | **维持 04§3.2 现状"Action+日期型 Version,URI 不承载版本号"**(仅采纳推荐的"一产品一子域名"域名形态) | 推荐的 /v1/ URI 版本与权威源 **10-research 启示 5**(RPC 风格、Action、参数显式)及 **03§9.1 已论证的"RPC 风格(Action+Version),与阿里云生态习惯对齐"**产生**阻塞性矛盾**;且 04§3.2(本裁决书认定的事实源)已锁定"Action+日期型 Version,URI 不承载版本号",03§9.1/04§3.8 已按此实现。采纳 /v1/ 将迫使 03§9.1 放弃 RPC 风格论证、与"对标阿里云"全书策略及 10-research 启示 5 冲突,属阻塞性矛盾,故推翻版本载体部分 |
 
 其余 29 条推荐裁决均**全量采纳**,无推翻。
+
+> **二期实装追溯(2026-08,非裁决变更)**:本裁决书裁决的 C1–C10/S1–S30 跨章冲突在二期工程(M-4~M-7)中已按裁决结论实装完成——例如 C5+S12 的 `account_id` 单键分片已贯穿四库 DDL、C8+S15 的 P1/P2/P3 三阶段映射在 M-6 双 AZ 已落地、C6+S30 的资源包/抢占式后置在 M-4 已交付、S21 的"CRD 阶段为证据、平台状态机为权威"由 M-7 各 rc-* controller 的 MockDriver 验收门槛承载。实装状态详见《09-roadmap.md》§4.0。本条为追溯登记,不改变裁决结论(裁决是规范事实源,实装是其落地验证)。
 
 ---
 

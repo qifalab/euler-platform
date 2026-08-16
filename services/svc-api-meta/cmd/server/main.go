@@ -41,16 +41,28 @@ func main() {
 	slog.SetDefault(logger)
 
 	store := newMetaStore()
+	registry := newRegistryStore()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
 	mux.HandleFunc("/readyz", readyz)
 	mux.HandleFunc("/metrics", metrics)
 
+	// Console sub-app registry — public to the shell at boot (02§4.1).
+	mux.HandleFunc("GET /api/v1/meta/console/apps", registry.handleConsoleApps)
+
 	// Internal control-plane endpoints (APISIX/gateway intranet only).
 	mux.HandleFunc("POST /internal/actions", store.handleRegisterAction)
 	mux.HandleFunc("GET /internal/actions/{product}/{action}", store.handleGetAction)
 	mux.HandleFunc("GET /internal/actions", store.handleListActions)
+
+	// OpenAPI Explorer debug console (M-5.1, 03§9.4 rule ⑤): signs a product API
+	// call with the SAME cps1 implementation the SDK ships and the gateway
+	// verifies, and optionally proxies it to a configured target.
+	mux.HandleFunc("POST /api/v1/apimeta/explorer", store.handleExplorer)
+	// Explorer action catalogue (the dropdown of signable Actions): a read view
+	// of the registered metadata, account-gated.
+	mux.HandleFunc("GET /api/v1/apimeta/explorer/actions", store.handleListActions)
 
 	srv := &http.Server{
 		Addr:              *httpAddr,

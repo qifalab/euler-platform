@@ -1,0 +1,25 @@
+{
+  "name": "console-base",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud console shell — Wujie micro-frontend base (02§4).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5173",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/console-kit": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*",
+    "element-plus": "^2.7.0",
+    "pinia": "^2.1.0",
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0",
+    "wujie": "^1.0.0"
+  }
+}

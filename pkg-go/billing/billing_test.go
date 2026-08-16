@@ -348,3 +348,47 @@ func TestNegativeUnitPriceRejected(t *testing.T) {
 		t.Fatalf("expected ErrNoUnitPrice, got %v", err)
 	}
 }
+
+// --- Cost analysis (phase 2, M-4.3) ---
+
+func TestCostAnalysisBreaksDownByProduct(t *testing.T) {
+	charges := []Charge{
+		{AccountID: 100123, BillPeriod: "2026-08", ProductCode: "scecs", ResourceID: "r1", PretaxAmount: amt("700"), CoveredRatio: 100},
+		{AccountID: 100123, BillPeriod: "2026-08", ProductCode: "scecs", ResourceID: "r2", PretaxAmount: amt("300"), CoveredRatio: 100},
+		{AccountID: 100123, BillPeriod: "2026-08", ProductCode: "scoss", ResourceID: "r3", PretaxAmount: amt("50"), CoveredRatio: 100},
+		// Other account/period must not leak in.
+		{AccountID: 999, BillPeriod: "2026-08", ProductCode: "scecs", ResourceID: "x", PretaxAmount: amt("999"), CoveredRatio: 100},
+		{AccountID: 100123, BillPeriod: "2026-07", ProductCode: "scecs", ResourceID: "r1", PretaxAmount: amt("100"), CoveredRatio: 100},
+	}
+	r := CostAnalysis(100123, "2026-08", charges)
+	if r.ByProduct["scecs"] != amt("1000") {
+		t.Fatalf("scecs = %s, want 1000", r.ByProduct["scecs"])
+	}
+	if r.ByProduct["scoss"] != amt("50") {
+		t.Fatalf("scoss = %s, want 50", r.ByProduct["scoss"])
+	}
+	if r.ByResource["r1"] != amt("700") {
+		t.Fatalf("r1 = %s, want 700", r.ByResource["r1"])
+	}
+	if r.Total != amt("1050") {
+		t.Fatalf("total = %s, want 1050", r.Total)
+	}
+}
+
+func TestCostAnalysisAgreesWithSummarize(t *testing.T) {
+	// The cost report and the bill must agree on total — a divergence is the
+	// exact 无未解释差异 the Gate review rejects (09 A2).
+	charges := []Charge{
+		{AccountID: 100123, BillPeriod: "2026-08", ProductCode: "scecs", ResourceID: "r1",
+			PretaxAmount: amt("700"), PayAmount: amt("700"), CoveredRatio: 100,
+			Deductions: []Deduction{{Source: SourceBalance, Amount: amt("700")}}},
+		{AccountID: 100123, BillPeriod: "2026-08", ProductCode: "scoss", ResourceID: "r2",
+			PretaxAmount: amt("300"), PayAmount: amt("300"), CoveredRatio: 100,
+			Deductions: []Deduction{{Source: SourceBalance, Amount: amt("300")}}},
+	}
+	bill := Summarize(100123, "2026-08", charges)
+	report := CostAnalysis(100123, "2026-08", charges)
+	if bill.TotalAmount != report.Total {
+		t.Fatalf("bill total %s != cost total %s", bill.TotalAmount, report.Total)
+	}
+}

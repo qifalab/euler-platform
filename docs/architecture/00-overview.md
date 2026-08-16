@@ -27,7 +27,7 @@
 
 **以自建基础设施为底座,以 Kubernetes 为核心资源池,对外提供"计算 + 存储 + 网络 + 托管数据库"最小可售闭环的自研云服务平台;以完全透明的计量计费与资源生命周期管理建立商业信任,以 API First 与标准化产品目录支撑产品线的持续扩张。**
 
-我们不追求在第一天复刻阿里云的 300+ 产品,而是先把"账号—购买—开通—计量—出账—续费—到期—释放"这条主链路做到金融级可靠,再按产品目录逐个"填槽"。一期 MVP 可售产品集为:**IAM/计费骨架/商品化中台 + SCVPC(网络)+ SCECS(云服务器 VM)+ SCBS(块存储)+ SCOSS(对象存储)+ SCRDS(托管 MySQL)+ SCMON(监控)+ SCEIP(弹性公网 IP)**,SCECI(弹性容器实例)后置二期(详见《01-product-catalog.md》§3.2、《09-roadmap.md》R-01;对标启示见《10-research-and-selection-decisions.md》§3.4);该组合满足上述最小可售闭环(计算 + 存储 + 网络 + 托管数据库)。
+我们不追求在第一天复刻阿里云的 300+ 产品,而是先把"账号—购买—开通—计量—出账—续费—到期—释放"这条主链路做到金融级可靠,再按产品目录逐个"填槽"。一期 MVP 可售产品集为:**IAM/计费骨架/商品化中台 + SCVPC(网络)+ SCECS(云服务器 VM)+ SCBS(块存储)+ SCOSS(对象存储)+ SCRDS(托管 MySQL)+ SCMON(监控)+ SCEIP(弹性公网 IP)**,SCECI(弹性容器实例)后置二期(详见《01-product-catalog.md》§3.2、《09-roadmap.md》决策 D-01;对标启示见《10-research-and-selection-decisions.md》§3.4);该组合满足上述最小可售闭环(计算 + 存储 + 网络 + 托管数据库)。
 
 ### 1.2 对标阿里云:全面学习,有限实现
 
@@ -390,15 +390,17 @@ flowchart LR
 | 工单站 | 独立站 + 控制台子应用双入口(ticket.starcloud.cn 子域) | 提交/查询工单 |
 | 运维/运营后台 | 独立应用(内网) | 客服工单、运营配置、审计查询 |
 
-**后端服务清单(17 个核心服务)**(详见《03-backend-services.md》§4.0 服务总表,以此处为全书统一口径):
+**后端服务清单(17 个核心服务)**(详见《03-backend-services.md》§4.0 服务总表,名单以该表为准:总表 18 行、一期 17 个服务,alert-center 后置二期):
 
 | 分组 | 服务 | 语言/框架 |
 |---|---|---|
-| 接入 | 控制台 BFF(console-bff)、站点 BFF(site-bff) | Go / Kratos |
-| 账号权限 | svc-iam、svc-audit、svc-kms | Go / Kratos |
+| 接入 | 控制台 BFF(console-bff) | Go / Kratos |
+| 账号权限 | svc-iam、svc-org、svc-audit | Go / Kratos |
 | 交易账务 | svc-order、svc-catalog(代金券最小实现)、svc-payment、svc-metering、svc-billing | Go / Kratos |
 | 资源管控 | svc-orchestrator(资源生命周期唯一所有者)、svc-api-meta、各产品 rc-* 数据面控制器 | Go / Kratos |
-| 支撑 | svc-notify、svc-ticket、svc-quota、svc-workflow、svc-monitor、alert-engine、alert-center | Go / Kratos |
+| 支撑 | svc-notify、svc-ticket、svc-quota、svc-workflow、svc-monitor、alert-engine、alert-center(后置二期) | Go / Kratos |
+
+> KMS 不单设微服务(svc-iam 调用平台 KMS);site-bff 为文档站/站点静态资源接入点,不计入微服务数(均见《03-backend-services.md》§4.0 附注)。
 
 > OpenAPI 入口由 APISIX + svc-api-meta 承担,**不单设 OpenAPI BFF 服务**;APISIX 完成签名验证/限流/路由后,请求直达对应业务服务。
 
@@ -451,7 +453,7 @@ flowchart LR
 
 | 阶段 | 拓扑 | 时间窗(参考) | 可用性承诺 | 触发条件(满足任一即启动) |
 |---|---|---|---|---|
-| P1 | 单 IDC 单可用区 | 0~6 个月(一期:6 月 GA 内测、9 月 GA 正式) | 控制面 ≥ 99.9%、对象存储数据面 ≥ 99.95%(一期验收口径) | 立项即建 |
+| P1 | 单 IDC 单可用区 | 0~9 个月(一期:T0+6 月 GA 内测、T0+9 月 GA 正式) | 控制面 ≥ 99.9%、对象存储数据面 ≥ 99.95%(一期验收口径) | 立项即建 |
 | P2 | 同城双可用区双活 | 6~18 个月 | 99.95%(管控面)/99.99%(核心数据面,均为 P2 阶段目标) | 付费客户 > 500 或签下 ≥99.95% SLA 合同或等保三级要求 |
 | P3 | 两地三中心(同城双活 + 异地灾备);异地多活写属 P3,三 AZ 不在本期规划 | 18 个月+ | 关键数据 RPO≈0、RTO ≤ 30min | 监管要求 / 金融类客户容灾合同 / 单城风险不可接受 |
 

@@ -1,0 +1,26 @@
+{
+  "name": "devops-explorer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud OpenAPI Explorer — 在线调试台 (M-5.1, 03§9.4). Signs a product API call with the same CPS1 implementation the SDK ships and the gateway verifies; optionally proxies it to a configured target.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5182",
+    "build": "vite build",
+    "preview": "vite preview --port 5182",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/console-kit": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*",
+    "vue-router": "^4.3.0"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0",
+    "element-plus": "^2.7.0",
+    "vue-router": "^4.3.0"
+  }
+}

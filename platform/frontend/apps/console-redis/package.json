@@ -1,0 +1,26 @@
+{
+  "name": "console-redis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud managed Redis sub-app (SCREDIS, M-7.5) — Wujie child.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5187",
+    "build": "vite build",
+    "preview": "vite preview --port 5187",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/console-kit": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*",
+    "vue-router": "^4.3.0"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0",
+    "element-plus": "^2.7.0",
+    "vue-router": "^4.3.0"
+  }
+}

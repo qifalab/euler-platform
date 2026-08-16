@@ -114,12 +114,16 @@ func TestNonNewTypesRequireResourceID(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsDeferredChargeType(t *testing.T) {
+func TestCreateAcceptsResourcePackChargeType(t *testing.T) {
+	// Phase 2 (09-roadmap M-4.1) opens 资源包 for sale. A resource-pack order
+	// is TypeNew + ChargeResourcePack: it buys quota, not a resource instance,
+	// so it must NOT require a ResourceID and must pass the sellable gate.
 	m := newMachine()
 	req := validCreateReq()
 	req.ChargeType = pricing.ChargeResourcePack
-	if _, _, err := m.Create(req, 1, "x"); err == nil {
-		t.Fatal("resource-pack order must be rejected in phase 1 (D6)")
+	req.ResourceID = ""
+	if _, _, err := m.Create(req, 1, "x"); err != nil {
+		t.Fatalf("resource-pack order must be accepted in phase 2, got %v", err)
 	}
 }
 

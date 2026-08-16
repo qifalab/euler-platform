@@ -1,0 +1,291 @@
+# SCKAFKA instance CRD (06-kubernetes-productization.md §4.2)
+#
+# One cloud product = four artifacts (06§4.1):
+#   1. product definition (catalogue registration — svc-catalog, M-7.5)
+#   2. CRD              (this file — the desired-state model)
+#   3. Operator         (rc-kafka — provision/operate engine, Go)
+#   4. metering point   (status.usage → cloud.metering.usage.raw)
+#
+# SCKAFKA 托管 Kafka (M-7.5, 09-roadmap §4.3 M-7, P1 managed/middleware
+# productization): the platform's own kafka-kraft ops experience (M-6.2a)
+# turned into a managed product. ZONAL with a cross-AZ HA replica set
+# (brokers spread across AZs) — a managed Kafka whose brokers survive an AZ
+# loss. Both prepay and postpay (managed services offer both, like scrds /
+# scredis). Fulfilled by DriverK8s, bound in
+# provision.Registry.BindProduct("sckafka", DriverK8s).
+#
+# The four iron rules this schema enforces (same as scecs/scredis CRD):
+#   * the CR is the only fact interface — no SSH, no reaching into internals
+#   * status is machine-readable: structured phase + conditions, never a log
+#     line to be parsed
+#   * the Operator is idempotent and re-entrant
+#   * no metering, no launch — status.usage is required, not optional
+#
+# Adding a product means copying this file and changing the names. That is the
+# "填槽" onboarding path (01§7.3): a new product should be configuration work,
+# not platform work.
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sckafkainstances.products.cloud.platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # CRDs before the Operator that uses them
+spec:
+  group: products.cloud.platform
+  scope: Namespaced
+  names:
+    kind: SckafkaInstance
+    listKind: SckafkaInstanceList
+    plural: sckafkainstances
+    singular: sckafkainstance
+    shortNames: [sckafka]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      # Printer columns so `kubectl get sckafka` answers the questions an
+      # operator actually asks, without a describe.
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Tenant
+          type: string
+          jsonPath: .metadata.labels['cloud\.platform/tenant']
+        - name: Edition
+          type: string
+          jsonPath: .spec.edition
+        - name: Brokers
+          type: integer
+          jsonPath: .spec.params.brokerCount
+        - name: HA
+          type: boolean
+          jsonPath: .spec.params.crossAz
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [edition, params]
+              properties:
+                edition:
+                  type: string
+                  description: >
+                    Registered SKU edition. Only values registered in
+                    svc-catalog are accepted; an unregistered edition has no
+                    price and no metering item, so it cannot be billed.
+                  enum: [standard, large]
+                params:
+                  type: object
+                  description: Purchase parameters, matching the OpenAPI create call.
+                  required: [engine, version, brokerCount, partitionCount]
+                  properties:
+                    engine:
+                      type: string
+                      description: Kafka engine (the managed broker this product wraps).
+                      enum: [kafka]
+                    version:
+                      type: string
+                      description: Engine version, e.g. 3.7.
+                    brokerCount:
+                      type: integer
+                      minimum: 1
+                      maximum: 30
+                      description: Number of brokers in the cluster — the priced instance dimension.
+                    partitionCount:
+                      type: integer
+                      minimum: 1
+                      maximum: 1000
+                      description: Total partition count across all topics.
+                    retentionHours:
+                      type: integer
+                      minimum: 1
+                      maximum: 720
+                      default: 72
+                      description: Default message retention in hours before log compaction/roll.
+                    crossAz:
+                      type: boolean
+                      default: true
+                      description: >
+                        Cross-AZ HA: brokers spread across AZs (a broker set
+                        where the quorum survives an AZ loss). When true the
+                        backing topology reuses the M-6.2a kafka-kraft 3-broker
+                        cross-AZ placement (min.insync.replicas=2 tolerates
+                        one AZ loss).
+                    vpcId:
+                      type: string
+                      description: SCVPC network boundary; managed Kafka requires a VPC (decision R-02).
+                    subnetId: { type: string }
+                suspend:
+                  type: boolean
+                  default: false
+                  description: >
+                    Arrears freeze. The Operator stops serving traffic but NEVER
+                    deletes the data or the brokers — a suspended managed Kafka
+                    must come back with its topics/data intact when the customer
+                    pays (01§5.4 D8). The commercial-trust floor for a message
+                    broker is the same as for a managed DB: data loss is
+                    irreversible.
+                region:
+                  type: string
+                  pattern: '^(cn|ap|us|eu)-[a-z]+-[0-9]+$'
+                zone:
+                  type: string
+                  description: >
+                    The AZ the lead broker is pinned to. ZONAL product (M-6,
+                    00§4.4): create-time placement. When crossAz=true the
+                    remaining brokers land across the other AZ(s).
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: >
+                    Observed state. This is EVIDENCE, not authority: the
+                    platform's resource_instance.status is the source of truth
+                    (adjudication S21). svc-orchestrator maps this phase onto a
+                    proposed transition and validates it against its own state
+                    machine.
+                  enum: [Pending, Provisioning, Ready, Modifying, Suspended, Failed, Deleting]
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: >
+                    The spec generation this status reflects. A status whose
+                    observedGeneration lags metadata.generation describes the
+                    OLD spec — treating it as current is how a scale-out appears
+                    to have finished before it starts.
+                conditions:
+                  type: array
+                  description: >
+                    Structured conditions. Consumers key on type/status/reason,
+                    never on message — parsing a human string to decide whether
+                    a customer is billed breaks on the first wording change.
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        enum: [Provisioned, ClusterReady, BrokerReady, Degraded]
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+                usage:
+                  type: array
+                  description: >
+                    Metering readings, a FIRST-CLASS status field (06§4.1 rule
+                    4). A product that cannot report usage cannot be launched.
+                    These are published to cloud.metering.usage.raw. SCKAFKA is
+                    billed by broker-hour, partition-hour and traffic — broker
+                    count is the priced instance dimension.
+                  items:
+                    type: object
+                    required: [meteringItem, quantity, windowStart, windowSeconds]
+                    properties:
+                      meteringItem:
+                        type: string
+                        description: Must be registered in metering_catalog before launch.
+                        enum: [broker_hour, partition_hour, traffic_gb]
+                      quantity:
+                        type: string
+                        description: >
+                          Decimal STRING, never a float. Float accumulation
+                          across millions of hourly rows drifts, and a drifting
+                          quantity produces a bill nobody can reconcile.
+                        pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+                      windowStart: { type: string, format: date-time }
+                      windowSeconds: { type: integer, minimum: 1, maximum: 3600 }
+                endpoints:
+                  type: array
+                  description: The Kafka bootstrap endpoint(s) the client connects to.
+                  items: { type: string }
+                message:
+                  type: string
+                  description: Human-facing detail only; never parsed by consumers.
+---
+# Example CR, showing the mandatory labels and the finalizer.
+#
+# The object name is the platform resource id verbatim (06§4.2), so a cluster
+# operator and a support engineer reading a bill are looking at the same string.
+apiVersion: products.cloud.platform/v1
+kind: SckafkaInstance
+metadata:
+  name: sckafka-cn-north-1-01-c1d2e3f4
+  namespace: plat-sckafka
+  labels:
+    # All four are mandatory. Without them a cluster object cannot be
+    # attributed to a tenant, which breaks isolation, billing and audit at once.
+    cloud.platform/tenant: "100123"
+    cloud.platform/project: "1"
+    cloud.platform/product: sckafka
+    cloud.platform/instance: sckafka-cn-north-1-01-c1d2e3f4
+  finalizers:
+    # The Operator reclaims backing brokers and pushes a FINAL metering
+    # reading before removing this. "CR truly gone" is the release-complete
+    # signal; without the finalizer, deletion races the last usage report and
+    # the customer is mis-billed for their final hour.
+    - products.cloud.platform/cleanup
+spec:
+  edition: standard
+  region: cn-north-1
+  zone: cn-north-1-a
+  suspend: false
+  params:
+    engine: kafka
+    version: "3.7"
+    brokerCount: 3
+    partitionCount: 12
+    retentionHours: 72
+    crossAz: true
+    vpcId: scvpc-cn-north-1-01-11223344
+    subnetId: subnet-01
+status:
+  phase: Ready
+  observedGeneration: 1
+  conditions:
+    - type: BrokerReady
+      status: "True"
+      reason: BrokersOnline
+      message: 3 brokers online across cn-north-1-a/b
+      lastTransitionTime: "2026-08-16T05:02:10Z"
+    - type: ClusterReady
+      status: "True"
+      reason: QuorumFormed
+      message: KRaft quorum formed, controller leader elected
+      lastTransitionTime: "2026-08-16T05:02:18Z"
+    - type: Provisioned
+      status: "True"
+      reason: Ready
+      message: managed kafka is serving
+      lastTransitionTime: "2026-08-16T05:02:18Z"
+  # Broker-hour + partition-hour + traffic metering, 60-second windows folded to hourly.
+  usage:
+    - meteringItem: broker_hour
+      quantity: "3"
+      windowStart: "2026-08-16T05:03:00Z"
+      windowSeconds: 60
+    - meteringItem: partition_hour
+      quantity: "0.2"
+      windowStart: "2026-08-16T05:03:00Z"
+      windowSeconds: 60
+    - meteringItem: traffic_gb
+      quantity: "0.000278"
+      windowStart: "2026-08-16T05:03:00Z"
+      windowSeconds: 60
+  endpoints:
+    - "s-sckafka-xxxxx.kafka.starcloud.cn:9092"

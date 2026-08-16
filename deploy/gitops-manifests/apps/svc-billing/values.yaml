@@ -32,3 +32,10 @@ resources:
   limits:
     cpu: "1"
     memory: "1Gi"
+
+# Cross-AZ topology (M-6, 00§4.4 P2). Default off (P1 single-AZ dev); prod
+# and staging overrides turn zoneSpread on so replicas hard-spread across AZs.
+topology:
+  zoneSpread: false                  # set true in prod/staging values-overrides
+  maxSkew: 1                         # the smallest skew a P2 service tolerates
+  whenUnsatisfiable: DoNotSchedule   # hard, not ScheduleAnyway (P2 is a promise)

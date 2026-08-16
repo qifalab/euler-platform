@@ -338,3 +338,44 @@ func Summarize(accountID int64, period string, charges []Charge) MonthlyBill {
 	}
 	return bill
 }
+
+// CostReport breaks an account's charges down by product and tag, the
+// FinOps view opened in phase 2 (09-roadmap M-4.3). It allocates each charge's
+// pretax amount to its product code and to the resource tags carried on the
+// charge (the four-tuple cloud.platform/{tenant,project,product,instance},
+// projected to ResourceID here — full tag attribution arrives with the tag
+// service).
+//
+// The report is a re-aggregation of the same charges behind Summarize, never a
+// separate data path: a cost figure and a bill figure that disagree is exactly
+// the 无未解释差异 the Gate review rejects.
+type CostReport struct {
+	AccountID  int64
+	BillPeriod string
+	// ByProduct is the pretax spend per product code.
+	ByProduct map[string]pricing.Amount
+	// ByResource is the pretax spend per resource id — the finest grain a
+	// customer can attribute cost to.
+	ByResource map[string]pricing.Amount
+	// Total is the sum of all charges in the period.
+	Total pricing.Amount
+}
+
+// CostAnalysis aggregates an account's charges for a period into a CostReport.
+func CostAnalysis(accountID int64, period string, charges []Charge) CostReport {
+	r := CostReport{
+		AccountID:  accountID,
+		BillPeriod: period,
+		ByProduct:  make(map[string]pricing.Amount),
+		ByResource: make(map[string]pricing.Amount),
+	}
+	for _, c := range charges {
+		if c.AccountID != accountID || c.BillPeriod != period {
+			continue
+		}
+		r.ByProduct[c.ProductCode] = r.ByProduct[c.ProductCode].Add(c.PretaxAmount)
+		r.ByResource[c.ResourceID] = r.ByResource[c.ResourceID].Add(c.PretaxAmount)
+		r.Total = r.Total.Add(c.PretaxAmount)
+	}
+	return r
+}

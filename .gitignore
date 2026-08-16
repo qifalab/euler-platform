@@ -31,9 +31,16 @@ dist/
 # IDE
 .idea/
 .vscode/
+.trae-html-share-packages/
+roadmap-review/
 *.swp
 *.swo
 *~
+
+# Test output
+test-results/
+playwright-report/
+.nyc_output/
 
 # OS
 .DS_Store

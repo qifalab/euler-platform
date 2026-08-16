@@ -473,3 +473,64 @@ func TestFullArrearsToReleaseJourney(t *testing.T) {
 		t.Fatalf("final state = %s, releasedAt = %v", inst.State, inst.ReleasedAt)
 	}
 }
+
+// --- Preemptible (spot) reclaim path (phase 2, M-4.2) ---
+
+func TestPreemptingIsLegalFromRunning(t *testing.T) {
+	// A spot resource enters PREEMPTING from RUNNING once the 5-minute
+	// warning is delivered. It does not pass through LOCKED — this is a
+	// platform-initiated reclaim, not an arrears freeze.
+	m := newMachineAt(base)
+	inst := newInstance(StateRunning)
+	if _, err := m.Transition(inst, StatePreempting, 0, "spot reclaim noticed"); err != nil {
+		t.Fatalf("RUNNING → PREEMPTING: %v", err)
+	}
+	if inst.State != StatePreempting {
+		t.Fatalf("state = %s, want PREEMPTING", inst.State)
+	}
+	// From PREEMPTING, the only legal forward move is to RELEASING (the
+	// controller reclaims then the finalizer completes release).
+	if _, err := m.Transition(inst, StateReleasing, 1, "notice window elapsed, reclaiming"); err != nil {
+		t.Fatalf("PREEMPTING → RELEASING: %v", err)
+	}
+}
+
+func TestPreemptingBillsUntilReleasing(t *testing.T) {
+	// A preempted instance is still running until RELEASING — the customer
+	// keeps using it through the notice window, so it keeps billing. Stopping
+	// billing the instant notice is delivered would be a silent over-refund.
+	if !StatePreempting.Billable() {
+		t.Fatal("PREEMPTING must be billable (instance runs through notice window)")
+	}
+}
+
+func TestPreemptingIsIntermediate(t *testing.T) {
+	// PREEMPTING is a transient state with a timeout backstop, like CREATING
+	// and RELEASING — a spot instance stuck in PREEMPTING must not sit forever.
+	if !StatePreempting.Intermediate() {
+		t.Fatal("PREEMPTING must be an intermediate state with a timeout")
+	}
+	if Timeouts[StatePreempting] <= 0 {
+		t.Fatal("PREEMPTING must have a positive timeout")
+	}
+}
+
+func TestPreemptingMayNotJumpToRunning(t *testing.T) {
+	// Once the platform has committed to reclaiming a spot instance, the
+	// customer cannot "un-reclaim" it. There is no PREEMPTING → RUNNING.
+	m := newMachineAt(base)
+	inst := newInstance(StatePreempting)
+	if _, err := m.Transition(inst, StateRunning, 0, "undo reclaim"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("PREEMPTING → RUNNING: err = %v, want ErrInvalidTransition", err)
+	}
+}
+
+func TestPreemptingMayNotGoDirectlyToReleased(t *testing.T) {
+	// Same guard as RUNNING → RELEASED: the controller must confirm reclaim
+	// via RELEASING first, so the final metering reading is not lost.
+	m := newMachineAt(base)
+	inst := newInstance(StatePreempting)
+	if _, err := m.Transition(inst, StateReleased, 0, "skip release"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("PREEMPTING → RELEASED: err = %v, want ErrInvalidTransition", err)
+	}
+}

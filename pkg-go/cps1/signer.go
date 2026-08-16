@@ -437,11 +437,21 @@ func Sign(req Request, creds Credentials, region, service string, now time.Time)
 // signedHeaderList returns the SignedHeaders value for the Authorization header,
 // recomputed from the header set.
 func signedHeaderList(headers map[string]string) string {
-	_, list, err := canonicalHeaders(headers)
+	list, err := SignedHeaderList(headers)
 	if err != nil {
 		return ""
 	}
 	return list
+}
+
+// SignedHeaderList returns the SignedHeaders clause (header names lowercase,
+// semicolon-separated, sorted) for the given header set. It is exported so SDKs
+// and the OpenAPI Explorer can render the same SignedHeaders value the gateway
+// verifies, without re-implementing the canonicalization (07§4.1, adjudication
+// D4: one definition of the algorithm, consumed by every implementation).
+func SignedHeaderList(headers map[string]string) (string, error) {
+	_, list, err := canonicalHeaders(headers)
+	return list, err
 }
 
 // Verify recomputes the signature for an incoming request and compares it in

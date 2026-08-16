@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -139,15 +140,29 @@ func TestPhase1ChargeTypeGate(t *testing.T) {
 	}
 }
 
-func TestCalculateRejectsDeferredChargeType(t *testing.T) {
+func TestPhase2SellableGate(t *testing.T) {
+	// Phase 2 (09-roadmap M-4) opens all four billing forms for sale: 资源包
+	// (M-4.1) and 抢占式 (M-4.2, with the spot price engine + reclaim path).
+	// With M-4.2 complete, ChargeSpot is sellable.
+	for _, c := range []ChargeType{ChargePrepaid, ChargePostpaid, ChargeResourcePack, ChargeSpot} {
+		if !c.Sellable() {
+			t.Fatalf("%s must be sellable in phase 2", c)
+		}
+	}
+}
+
+func TestCalculateRejectsGatedChargeType(t *testing.T) {
+	// With all four billing forms sellable in phase 2, the gate rejects only
+	// an UNKNOWN charge type — one the catalogue never registered. The gate
+	// fires before any rule lookup, so no pricing rule is needed.
 	e := Engine{}
 	_, err := e.Calculate(Request{
 		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
-		RegionID: "cn-north-1", ChargeType: ChargeResourcePack,
+		RegionID: "cn-north-1", ChargeType: ChargeType("UNKNOWN"),
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, nil)
-	if err == nil {
-		t.Fatal("resource-pack order must be rejected in phase 1")
+	if !errors.Is(err, ErrChargeTypeUnsold) {
+		t.Fatalf("unknown charge type must be rejected as unsold, got %v", err)
 	}
 }
 

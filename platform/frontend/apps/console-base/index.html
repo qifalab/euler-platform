@@ -4,11 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>辰云控制台 · StarCloud Console</title>
+    <script>
+      // FOUC guard: resolve the theme before first paint so the --sc-* token
+      // set (mesh background, glass surfaces) never flashes light/dark.
+      // Mirrors the logic in App.vue: localStorage['sc:theme'] wins,
+      // otherwise follow prefers-color-scheme.
+      (function () {
+        var theme;
+        try {
+          theme = localStorage.getItem("sc:theme");
+        } catch (e) {
+          theme = null;
+        }
+        if (theme !== "dark" && theme !== "light") {
+          theme =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
   </head>
   <body>
-    <div id="app">
-      <!-- Root component (App.vue) is mounted here -->
-    </div>
-    <script type="module" src="/src/main.js"></script>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

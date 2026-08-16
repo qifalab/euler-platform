@@ -255,7 +255,7 @@ func (r CreateRequest) Validate() error {
 	if r.Type.RequiresExistingResource() && r.ResourceID == "" {
 		return fmt.Errorf("%w: %s requires ResourceID", ErrMissingResource, r.Type)
 	}
-	if !r.ChargeType.SellableInPhase1() {
+	if !r.ChargeType.Sellable() {
 		return fmt.Errorf("%w: %s", pricing.ErrChargeTypeUnsold, r.ChargeType)
 	}
 	if !r.SnapshotExpiresAt.IsZero() && !r.At.Before(r.SnapshotExpiresAt) {

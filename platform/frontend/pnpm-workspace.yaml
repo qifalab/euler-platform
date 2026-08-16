@@ -1,7 +1,13 @@
-# pnpm workspace for the StarCloud frontend scaffold.
-# Each console sub-app is an independent workspace package so it can be
-# developed and published independently (per the architecture doc).
+# pnpm workspace for the StarCloud frontend.
+# Public shared packages live under packages/ (published as @sc/* from a
+# private registry in production; here they are workspace: protocol deps).
+# Each app under apps/ is an independent build target.
 packages:
-  - "apps/console-base"
-  - "apps/console-ecs"
-  - "apps/site"
+  - "packages/*"
+  - "apps/*"
+# pnpm 11 blocks package install scripts by default (supply-chain safety).
+# esbuild ships a platform binary postinstall that vite needs at build time;
+# vue-demi's postinstall switches the active Vue version for element-plus.
+allowBuilds:
+  esbuild: true
+  vue-demi: true
