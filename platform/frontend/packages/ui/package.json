@@ -1,0 +1,30 @@
+{
+  "name": "@sc/ui",
+  "version": "0.1.0",
+  "description": "Design-system component library — Element Plus thin-wrap + business display components (02§10.2).",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./style.css": "./dist/style.css"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build && vue-tsc",
+    "dev": "vite build --watch",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0",
+    "element-plus": "^2.7.0"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "common": {
+    "console": "StarCloud Console",
+    "overview": "Overview",
+    "products": "Products",
+    "billing": "Billing",
+    "ticket": "Support",
+    "account": "Account",
+    "search": "Search products, resources, docs…",
+    "region": "Region",
+    "loading": "Loading…",
+    "empty": "No resources",
+    "create": "Create",
+    "back": "Back",
+    "retry": "Retry",
+    "logout": "Sign out"
+  },
+  "overview": {
+    "balance": "Account Balance",
+    "resources": "Total Resources",
+    "pendingOrders": "Pending Orders",
+    "goPay": "Pay now →",
+    "allResources": "All Resources",
+    "loadFailed": "Failed to load account overview (is console-bff running?)"
+  }
+}

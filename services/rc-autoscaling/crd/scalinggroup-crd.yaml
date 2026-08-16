@@ -1,0 +1,300 @@
+# ScalingGroup CRD (06-kubernetes-productization.md §4.2)
+#
+# One cloud product = four artifacts (06§4.1):
+#   1. product definition (catalogue registration — svc-catalog, M-7.3)
+#   2. CRD              (this file — the desired-state model)
+#   3. Operator         (rc-autoscaling — provision/operate engine, Go)
+#   4. metering point   (status.usage → cloud.metering.usage.raw)
+#
+# 弹性伸缩 SCAS (M-7.3, 09-roadmap §4.3 M-7, 06 §2.6): a scaling group is the
+# POLICY layer over the execution surface (HPA / VPA / Cluster-Autoscaler). The
+# group holds the replica bounds, the trigger rules and the cooldown; the
+# executor (rc-autoscaling controller → HPA/VPA/CA) turns a Decision from
+# pkg-go/autoscaling into actual pod/node changes. Managed instances (ECS or
+# ECI) bill separately under their own products; this product bills the scaling-
+# group-hour management fee.
+#
+# REGIONAL: a scaling group spans a region's compute pool (not pinned to one
+# AZ), so there is no zone field — the policy dispatches across whatever the
+# managed_type's driver provisions.
+#
+# The four iron rules this schema enforces (same as scecs/sceci-instance-crd):
+#   * the CR is the only fact interface — no SSH, no reaching into internals
+#   * status is machine-readable: structured phase + conditions, never a log
+#     line to be parsed
+#   * the Operator is idempotent and re-entrant
+#   * no metering, no launch — status.usage is required, not optional
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: scalinggroups.products.cloud.platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # CRDs before the Operator that uses them
+spec:
+  group: products.cloud.platform
+  scope: Namespaced
+  names:
+    kind: ScalingGroup
+    listKind: ScalingGroupList
+    plural: scalinggroups
+    singular: scalinggroup
+    shortNames: [scas]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      # Printer columns so `kubectl get scas` answers the questions an
+      # operator actually asks, without a describe.
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Tenant
+          type: string
+          jsonPath: .metadata.labels['cloud\.platform/tenant']
+        - name: Managed
+          type: string
+          jsonPath: .spec.params.managedType
+        - name: Replicas
+          type: integer
+          jsonPath: .status.currentReplicas
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+        # scale subresource so kubectl / HPA can read+write currentReplicas
+        # without touching the full status.
+        scale:
+          specReplicasPath: .spec.params.desiredReplicas
+          statusReplicasPath: .status.currentReplicas
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [edition, params]
+              properties:
+                edition:
+                  type: string
+                  description: >
+                    Registered SKU edition. Only values registered in
+                    svc-catalog are accepted; an unregistered edition has no
+                    price and no metering item, so it cannot be billed.
+                  enum: [standard, general]
+                params:
+                  type: object
+                  description: Purchase parameters, matching the OpenAPI create call.
+                  required: [minReplicas, maxReplicas, desiredReplicas, managedType]
+                  properties:
+                    minReplicas:
+                      type: integer
+                      minimum: 0
+                      maximum: 1000
+                    maxReplicas:
+                      type: integer
+                      minimum: 1
+                      maximum: 10000
+                    desiredReplicas:
+                      type: integer
+                      minimum: 0
+                      description: >
+                        The replica count the group reconciles toward. The
+                        scale subresource reads+writes this; HPA may also move
+                        it within [min,max].
+                    managedType:
+                      type: string
+                      description: >
+                        Which compute product the group scales — ecs (SCECS VMs)
+                        or eci (SCECI containers). The managed instances bill
+                        under their own products; this field routes the executor.
+                      enum: [ecs, eci]
+                    vpcId:
+                      type: string
+                      description: SCVPC network boundary (decision R-02).
+                    rules:
+                      type: array
+                      description: >
+                        Scaling triggers. First matching rule wins; a rule
+                        matches only if its metric is present AND the comparison
+                        holds (pkg-go/autoscaling). Missing metric → no match.
+                      items:
+                        type: object
+                        required: [metricName, threshold, operator, action, step]
+                        properties:
+                          metricName:
+                            type: string
+                            description: e.g. "cpu", "mem" — must be present in the metrics snapshot to match.
+                          threshold: { type: number }
+                          operator:
+                            type: string
+                            enum: ["<", ">"]
+                          action:
+                            type: string
+                            enum: [scale_up, scale_down]
+                          step:
+                            type: integer
+                            minimum: 1
+                    cooldownSeconds:
+                      type: integer
+                      minimum: 0
+                      default: 300
+                      description: >
+                        Anti-flapping: any action within this window of the
+                        last action is suppressed. A metric spike must not
+                        trigger five scales in a minute.
+                suspend:
+                  type: boolean
+                  default: false
+                  description: >
+                    Arrears freeze. The Operator stops scaling activity but
+                    NEVER deletes the policy/config — a suspended group must
+                    come back intact when the customer pays (01§5.4 D8).
+                region:
+                  type: string
+                  pattern: '^(cn|ap|us|eu)-[a-z]+-[0-9]+$'
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: >
+                    Observed state. This is EVIDENCE, not authority: the
+                    platform's resource_instance.status is the source of truth
+                    (adjudication S21). svc-orchestrator maps this phase onto a
+                    proposed transition and validates it against its own state
+                    machine.
+                  enum: [Pending, Provisioning, Ready, Modifying, Suspended, Failed, Deleting]
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: >
+                    The spec generation this status reflects. A status whose
+                    observedGeneration lags metadata.generation describes the
+                    OLD spec — treating it as current is how a policy edit
+                    appears to have taken effect before it did.
+                conditions:
+                  type: array
+                  description: >
+                    Structured conditions. Consumers key on type/status/reason,
+                    never on message — parsing a human string to decide whether
+                    a customer is billed breaks on the first wording change.
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        enum: [Provisioned, ScalingActive, PolicyEvaluated, Degraded]
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+                usage:
+                  type: array
+                  description: >
+                    Metering readings, a FIRST-CLASS status field (06§4.1 rule
+                    4). A product that cannot report usage cannot be launched.
+                    These are published to cloud.metering.usage.raw. SCAS bills
+                    the scaling-group-hour management fee at HOUR granularity;
+                    the managed ECS/ECI instances carry their own (per-second /
+                    per-hour) metering under their own resource ids.
+                  items:
+                    type: object
+                    required: [meteringItem, quantity, windowStart, windowSeconds]
+                    properties:
+                      meteringItem:
+                        type: string
+                        description: Must be registered in metering_catalog before launch.
+                        enum: [scaling_group_hour]
+                      quantity:
+                        type: string
+                        description: >
+                          Decimal STRING, never a float. Float accumulation
+                          across millions of hourly rows drifts, and a drifting
+                          quantity produces a bill nobody can reconcile.
+                        pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+                      windowStart: { type: string, format: date-time }
+                      windowSeconds: { type: integer, minimum: 1, maximum: 3600 }
+                currentReplicas:
+                  type: integer
+                  description: The replica count the executor last reported as live.
+                endpoints:
+                  type: array
+                  items: { type: string }
+                message:
+                  type: string
+                  description: Human-facing detail only; never parsed by consumers.
+---
+# Example CR, showing the mandatory labels and the finalizer.
+#
+# The object name is the platform resource id verbatim (06§4.2), so a cluster
+# operator and a support engineer reading a bill are looking at the same string.
+apiVersion: products.cloud.platform/v1
+kind: ScalingGroup
+metadata:
+  name: scas-cn-north-1-01-7b8c9d0e
+  namespace: plat-scas
+  labels:
+    # All four are mandatory. Without them a cluster object cannot be
+    # attributed to a tenant, which breaks isolation, billing and audit at once.
+    cloud.platform/tenant: "100123"
+    cloud.platform/project: "1"
+    cloud.platform/product: scas
+    cloud.platform/instance: scas-cn-north-1-01-7b8c9d0e
+  finalizers:
+    # The Operator reclaims backing resources and pushes a FINAL metering
+    # reading before removing this. "CR truly gone" is the release-complete
+    # signal; without the finalizer, deletion races the last usage report and
+    # the customer is mis-billed for their final hour.
+    - products.cloud.platform/cleanup
+spec:
+  edition: standard
+  region: cn-north-1
+  suspend: false
+  params:
+    minReplicas: 1
+    maxReplicas: 10
+    desiredReplicas: 3
+    managedType: eci
+    vpcId: scvpc-cn-north-1-01-11223344
+    cooldownSeconds: 300
+    rules:
+      - metricName: cpu
+        threshold: 0.8
+        operator: ">"
+        action: scale_up
+        step: 1
+      - metricName: mem
+        threshold: 0.2
+        operator: "<"
+        action: scale_down
+        step: 1
+status:
+  phase: Ready
+  observedGeneration: 1
+  currentReplicas: 3
+  conditions:
+    - type: Provisioned
+      status: "True"
+      reason: Ready
+      message: scaling group active
+      lastTransitionTime: "2026-08-16T03:04:09Z"
+    - type: ScalingActive
+      status: "True"
+      reason: PolicyEvaluated
+      message: cooldown window respected
+      lastTransitionTime: "2026-08-16T03:05:00Z"
+  usage:
+    - meteringItem: scaling_group_hour
+      quantity: "1"
+      windowStart: "2026-08-16T03:05:00Z"
+      windowSeconds: 3600

@@ -1,98 +1,71 @@
-// Package main: console-bff domain model and in-memory aggregation store.
+// Package main: console-bff fan-out aggregation store.
 //
 // console-bff is the control-plane aggregation layer (03§4, console-bff node
-// in the 03§3 diagram). There is no pkg-go/console package: the BFF fans out
-// to the internal services (svc-billing/ledger, svc-orchestrator/resource,
-// svc-order) and aggregates their responses for the web console. Phase-1 keeps
-// each handler returning stub-but-shaped responses because the services are
-// separate processes, but the shapes here reuse the pkg-go domain types so the
-// fan-out targets can be swapped in without changing the JSON contract.
+// in the 03§3 diagram). Unlike a stub, this store fans out to the internal
+// services behind it and aggregates their responses into the shapes the web
+// console needs:
 //
-//   - balance stubs come from pkg-go/ledger (Balance) behind an in-memory Store
-//   - resource list uses pkg-go/resource (Instance) fields
-//   - bills use pkg-go/billing (Charge -> Summarize MonthlyBill)
-//   - pending-order count derives from pkg-go/order (Order.State)
+//   - resources + resource count → svc-orchestrator (/api/v1/orchestrator/resources)
+//   - balance → svc-billing (/internal/balance)
+//   - bills → svc-billing (/internal/bills, one period per call)
+//   - pending orders → svc-order (/api/v1/orders)
 //
-// Every handler emits the platform envelope {RequestId, Code, Message, Data}
-// (03§9.3). Account identity is injected by the APISIX gateway via the
-// X-Sc-Account-Id header; a missing header is a 403 (07§3.3).
+// Internal service base URLs come from env (SC_SVC_*), defaulting to the dev
+// ports. The account id is gateway-injected (X-Sc-Account-Id header) and
+// forwarded verbatim to each downstream service — the BFF never falls back to a
+// client-supplied account in the body (07§3.3).
+//
+// Each handler emits the platform envelope {RequestId, Code, Message, Data}
+// (03§9.3). A downstream that is unreachable returns 503 Common.UpstreamUnavailable
+// rather than silently degrading to stale data — a half-real BFF is worse than
+// an honest error (the whole point of wiring fan-out is that what the console
+// shows IS what the services have).
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/billing"
 	"github.com/starcloud/sc-platform/errors"
-	"github.com/starcloud/sc-platform/ledger"
-	"github.com/starcloud/sc-platform/order"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/resource"
 )
 
 // accountIDHeader is injected by the APISIX gateway on every request.
 const accountIDHeader = "X-Sc-Account-Id"
 
-// consoleStore is the in-memory aggregation store. In the target architecture
-// the BFF caches aggregated views in Redis (03§4 console-bff storage); here the
-// struct holds stub-but-shaped domain data keyed by account.
+// consoleStore is a fan-out client: it holds nothing of its own except the
+// downstream base URLs and a shared HTTP client. In the target architecture
+// the BFF also caches aggregated views in Redis (03§4 console-bff storage);
+// phase-1 fan-out is live, caching is not.
 type consoleStore struct {
-	mu       sync.RWMutex
-	ledger   *ledger.Ledger
-	ledgerDB *memLedgerStore
-	instances []resource.Instance
-	charges   []billing.Charge
-	orders    []order.Order
+	httpClient    *http.Client
+	orchestratorURL string // e.g. http://localhost:9203
+	billingURL      string // e.g. http://localhost:9206
+	orderURL        string // e.g. http://localhost:9204
 }
 
 func newConsoleStore() *consoleStore {
-	db := newMemLedgerStore()
-	s := &consoleStore{
-		ledgerDB: db,
-		ledger:   ledger.New(db, time.Now, nil),
+	return &consoleStore{
+		httpClient:      &http.Client{Timeout: 5 * time.Second},
+		orchestratorURL: envOrDefault("SC_SVC_ORCHESTRATOR_URL", "http://localhost:9203"),
+		billingURL:      envOrDefault("SC_SVC_BILLING_URL", "http://localhost:9206"),
+		orderURL:        envOrDefault("SC_SVC_ORDER_URL", "http://localhost:9204"),
 	}
-	// Seed a small deterministic dataset so the console renders non-empty
-	// (dev/phase-1; a real BFF reads from the services).
-	seedConsoleData(s)
-	return s
 }
 
-// seedConsoleData fills a fixed account with stub-but-shaped rows across the
-// domains the console aggregates. Account 100123 matches the shared dev seed.
-func seedConsoleData(s *consoleStore) {
-	_, _, _ = s.ledger.Recharge(100123, pricing.MustParseAmount("500.00"),
-		"seed", "seed-recharge-1", "phase-1 seed balance")
-
-	now := time.Now()
-	s.instances = []resource.Instance{
-		{ResourceID: "scecs-cn-north-1-01-a1b2c3d4", AccountID: 100123,
-			ProductCode: "scecs", Region: "cn-north-1", ChargeType: resource.ChargePrepaid,
-			State: resource.StateRunning, SpecCode: "scecs.s2.large", BillingStart: now.Add(-72 * time.Hour),
-			CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now},
-		{ResourceID: "scoss-cn-north-1-01-b2c3d4e5", AccountID: 100123,
-			ProductCode: "scoss", Region: "cn-north-1", ChargeType: resource.ChargePostpaid,
-			State: resource.StateRunning, SpecCode: "scoss.standard", BillingStart: now.Add(-24 * time.Hour),
-			CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now},
+func envOrDefault(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
 	}
-
-	period := now.Format("2006-01")
-	s.charges = []billing.Charge{
-		{ChargeID: "chg-0001", AccountID: 100123, ResourceID: "scecs-cn-north-1-01-a1b2c3d4",
-			ProductCode: "scecs", MeteringItem: "instance.hour", BillPeriod: period,
-			PretaxAmount: pricing.MustParseAmount("0.25"), PayAmount: pricing.MustParseAmount("0.25"),
-			SettledAt: now},
-	}
-
-	s.orders = []order.Order{
-		{OrderID: 9001, OrderNo: "SO202608110001", AccountID: 100123,
-			Type: order.TypeNew, State: order.StatePendingPayment,
-			ProductCode: "scecs", PayableAmount: pricing.MustParseAmount("2160"),
-			CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now},
-	}
+	return def
 }
 
 // --- HTTP helpers -------------------------------------------------------------
@@ -144,28 +117,128 @@ func writeError(w http.ResponseWriter, e *errorsx.Error) {
 	_ = json.NewEncoder(w).Encode(envelope{RequestId: requestID(w), Code: e.Code, Message: e.Message})
 }
 
-// --- console aggregation handlers --------------------------------------------
+// upstreamEnvelope mirrors the {RequestId,Code,Message,Data} body every internal
+// service returns (03§9.3). Only Data is consumed by the BFF.
+type upstreamEnvelope struct {
+	Code    string          `json:"Code"`
+	Message string          `json:"Message"`
+	Data    json.RawMessage `json:"Data"`
+}
+
+// getJSON calls a downstream service and unwraps its response. The account id
+// header is forwarded so the downstream sees the same caller identity. A
+// transport error or non-2xx status becomes a 503 Common.UpstreamUnavailable —
+// never a silent fallback (see package doc).
+//
+// Two wire conventions exist among the phase-1 services and both are handled:
+//  1. Platform envelope {Code,Message,Data} (svc-orchestrator, svc-order) —
+//     a 2xx with Code=="OK" is unwrapped to Data; a non-OK Code is surfaced.
+//  2. Bare body (svc-billing success) — the JSON is the payload directly;
+//     errors still use {Code,Message} with a non-2xx status.
+// getJSON detects by whether the body has a top-level "Data" field AND a
+// "Code" field. Bare bodies without those keys are taken as-is.
+func (s *consoleStore) getJSON(ctx context.Context, url string, accountID int64, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "无法构造下游请求")
+	}
+	req.Header.Set(accountIDHeader, strconv.FormatInt(accountID, 10))
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable,
+			"下游服务不可达: "+url)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	// Try the envelope shape first. svc-orchestrator/svc-order wrap every
+	// response; svc-billing wraps only errors. A body that decodes into an
+	// envelope with a non-empty Code is treated as envelope-shaped.
+	var env upstreamEnvelope
+	if jsonErr := json.Unmarshal(body, &env); jsonErr == nil && env.Code != "" {
+		if resp.StatusCode >= 500 {
+			return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable,
+				fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
+		}
+		if resp.StatusCode != 200 || env.Code != "OK" {
+			status := resp.StatusCode
+			if status < 400 {
+				status = http.StatusBadGateway
+			}
+			return errorsx.New(env.Code, status, env.Message)
+		}
+		// Envelope success: unwrap Data. If Data is absent/empty, leave out as-is.
+		if out == nil || len(env.Data) == 0 {
+			return nil
+		}
+		return json.Unmarshal(env.Data, out)
+	}
+
+	// Bare-body convention (svc-billing success). A non-2xx here is an error
+	// even though it lacked the envelope Code field.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable,
+			fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
+	}
+	if out == nil || len(body) == 0 {
+		return nil
+	}
+	return json.Unmarshal(body, out)
+}
+
+// --- console aggregation handlers ---------------------------------------------
 
 // handleOverview aggregates the account overview the console home renders:
-// cash balance (ledger stub), resource count, pending orders (03§4). Each
-// section would be a fan-out to the owning service; here it is in-memory.
+// cash balance (svc-billing), resource count (svc-orchestrator), pending
+// orders (svc-order) — fanned out concurrently (03§4). Each leg is
+// independent; a leg failure fails the whole overview (no partial/seed data).
 func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 	acct, ok := accountIDFrom(w, r)
 	if !ok {
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	ctx := r.Context()
 
-	bal, err := s.ledger.Balance(acct)
-	if err != nil {
-		writeError(w, errorsx.New("Billing.InternalError", errorsx.StatusInternalError, err.Error()))
-		return
+	type balanceResp struct {
+		Available string `json:"Available"`
+		Frozen    string `json:"Frozen"`
+		Total     string `json:"Total"`
+	}
+	type resourceRow struct {
+		ResourceId string `json:"resourceId"`
+	}
+	type orderRow struct {
+		State string `json:"state"`
+	}
+
+	var (
+		bal      balanceResp
+		resources []resourceRow
+		orders    []orderRow
+		balErr, resErr, ordErr error
+	)
+
+	// Concurrent fan-out: each leg writes to its own slot; no shared state.
+	var done [3]chan struct{}
+	for i := range done {
+		done[i] = make(chan struct{})
+	}
+	go func() { balErr = s.getJSON(ctx, s.billingURL+"/internal/balance", acct, &bal); close(done[0]) }()
+	go func() { resErr = s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &resources); close(done[1]) }()
+	go func() { ordErr = s.getJSON(ctx, s.orderURL+"/api/v1/orders", acct, &orders); close(done[2]) }()
+	<-done[0]; <-done[1]; <-done[2]
+
+	for _, e := range []error{balErr, resErr, ordErr} {
+		if e != nil {
+			writeError(w, e.(*errorsx.Error))
+			return
+		}
 	}
 
 	var pending int64
-	for _, o := range s.orders {
-		if o.AccountID == acct && o.State == order.StatePendingPayment {
+	for _, o := range orders {
+		if strings.EqualFold(o.State, "PENDING_PAYMENT") {
 			pending++
 		}
 	}
@@ -173,160 +246,362 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"AccountId": acct,
 		"Balance": map[string]any{
-			"Available": bal.Available.String(),
-			"Frozen":    bal.Frozen.String(),
-			"Total":     bal.Total().String(),
+			"Available": bal.Available,
+			"Frozen":    bal.Frozen,
+			"Total":     bal.Total,
 		},
 		"ResourceCount": map[string]any{
-			"Total": len(s.instancesFor(acct)),
+			"Total": len(resources),
 		},
 		"PendingOrders": pending,
 	})
 }
 
-// handleResources returns the account's resource list (03§4 console 资源列表).
+// handleResources returns the account's resource list, fanned out to
+// svc-orchestrator (03§4 console 资源列表). Orchestrator returns camelCase;
+// the BFF re-maps to the PascalCase contract the frontend already consumes
+// (sdk.ts ResourceItem), so the frontend does not change.
 func (s *consoleStore) handleResources(w http.ResponseWriter, r *http.Request) {
 	acct, ok := accountIDFrom(w, r)
 	if !ok {
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	ctx := r.Context()
 
-	list := s.instancesFor(acct)
-	res := make([]map[string]any, 0, len(list))
-	for _, inst := range list {
+	type orchResource struct {
+		ResourceId   string `json:"resourceId"`
+		ProductCode  string `json:"productCode"`
+		Region       string `json:"region"`
+		ChargeType   string `json:"chargeType"`
+		State        string `json:"state"`
+		SpecCode     string `json:"specCode"`
+		BillingStart string `json:"billingStart"`
+		CreatedAt    string `json:"createdAt"`
+		ExpiredAt    string `json:"expiredAt"`
+	}
+	var orch []orchResource
+	if err := s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &orch); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+
+	res := make([]map[string]any, 0, len(orch))
+	for _, o := range orch {
 		res = append(res, map[string]any{
-			"ResourceId":   inst.ResourceID,
-			"ProductCode":  inst.ProductCode,
-			"Region":       inst.Region,
-			"ChargeType":   inst.ChargeType,
-			"State":        inst.State,
-			"SpecCode":     inst.SpecCode,
-			"BillingStart": inst.BillingStart.Format(time.RFC3339),
-			"ExpiredAt":    formatOrEmpty(inst.ExpiredAt),
-			"CreatedAt":    inst.CreatedAt.Format(time.RFC3339),
+			"ResourceId":   o.ResourceId,
+			"ProductCode":  o.ProductCode,
+			"Region":       o.Region,
+			"ChargeType":   o.ChargeType,
+			"State":        o.State,
+			"SpecCode":     o.SpecCode,
+			"BillingStart": o.BillingStart,
+			"ExpiredAt":    o.ExpiredAt,
+			"CreatedAt":    o.CreatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleBills returns the account's bill list, summarized per period through
-// pkg-go/billing.Summarize (03§4 账单列表).
+// handleBills returns the account's bill list, one row per period, fanned out
+// to svc-billing (/internal/bills, which returns a single period per call).
+// The BFF queries the current period + the preceding 5 (6 total) and returns
+// them as a list (03§4 账单列表). svc-billing produces a zero-amount bill for
+// periods with no charges, which surfaces as a legitimate "暂无账单" empty state.
 func (s *consoleStore) handleBills(w http.ResponseWriter, r *http.Request) {
 	acct, ok := accountIDFrom(w, r)
 	if !ok {
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	ctx := r.Context()
 
-	// Group the account's charges by period and summarize each with the pkg-go
-	// domain logic so the JSON contract matches what svc-billing would return.
-	byPeriod := map[string][]billing.Charge{}
-	for _, c := range s.charges {
-		if c.AccountID == acct {
-			byPeriod[c.BillPeriod] = append(byPeriod[c.BillPeriod], c)
+	now := time.Now().UTC()
+	periods := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		t := now.AddDate(0, -i, 0)
+		periods = append(periods, t.Format("2006-01"))
+	}
+
+	type billRow struct {
+		BillPeriod        string `json:"BillPeriod"`
+		TotalAmount       string `json:"TotalAmount"`
+		PaidAmount        string `json:"PaidAmount"`
+		ChargeCount       int    `json:"ChargeCount"`
+		IncompleteCharges int    `json:"IncompleteCharges"`
+		UnreconciledCount int    `json:"UnreconciledCount"`
+		Final             bool   `json:"Final"`
+	}
+
+	// Query each period concurrently; collect the rows that come back.
+	results := make([]*billRow, len(periods))
+	errs := make([]error, len(periods))
+	var wg sync.WaitGroup
+	for i, p := range periods {
+		wg.Add(1)
+		go func(idx int, period string) {
+			defer wg.Done()
+			var row billRow
+			u := s.billingURL + "/internal/bills?period=" + period
+			if err := s.getJSON(ctx, u, acct, &row); err != nil {
+				errs[idx] = err
+				return
+			}
+			// svc-billing may return the row with a zeroed period if it normalises;
+			// stamp it from what we asked for so the list is always labelled.
+			if row.BillPeriod == "" {
+				row.BillPeriod = period
+			}
+			results[idx] = &row
+		}(i, p)
+	}
+	wg.Wait()
+
+	// If every period failed (e.g. svc-billing down), surface the error. A
+	// single period erroring is tolerated (its slot stays nil) so one bad
+	// period does not blank the whole list.
+	allFailed := true
+	for i := range periods {
+		if errs[i] == nil {
+			allFailed = false
+			break
 		}
 	}
-	periods := make([]string, 0, len(byPeriod))
-	for p := range byPeriod {
-		periods = append(periods, p)
+	if allFailed && len(periods) > 0 {
+		writeError(w, e2ptr(errs[0]))
+		return
 	}
 
-	bills := make([]map[string]any, 0, len(periods))
-	for _, p := range periods {
-		mb := billing.Summarize(acct, p, s.charges)
+	bills := make([]map[string]any, 0, len(results))
+	for _, row := range results {
+		if row == nil {
+			continue
+		}
 		bills = append(bills, map[string]any{
-			"BillPeriod":        mb.BillPeriod,
-			"TotalAmount":       mb.TotalAmount.String(),
-			"PaidAmount":        mb.PaidAmount.String(),
-			"ChargeCount":       mb.ChargeCount,
-			"IncompleteCharges": mb.IncompleteCharges,
-			"UnreconciledCount": mb.UnreconciledCount,
-			"Final":             mb.Final(),
+			"BillPeriod":        row.BillPeriod,
+			"TotalAmount":       row.TotalAmount,
+			"PaidAmount":        row.PaidAmount,
+			"ChargeCount":       row.ChargeCount,
+			"IncompleteCharges": row.IncompleteCharges,
+			"UnreconciledCount": row.UnreconciledCount,
+			"Final":             row.Final,
 		})
-	}
-	if bills == nil {
-		bills = []map[string]any{}
 	}
 	writeJSON(w, http.StatusOK, bills)
 }
 
-// instancesFor returns the account's seeded instances.
-func (s *consoleStore) instancesFor(acct int64) []resource.Instance {
-	var out []resource.Instance
-	for _, inst := range s.instances {
-		if inst.AccountID == acct {
-			out = append(out, inst)
+// --- error helpers ------------------------------------------------------------
+
+// postJSON forwards a POST to a downstream service, streaming the request body
+// through and unwrapping the response with the same envelope/bare-body logic as
+// getJSON. It forwards the account-id header verbatim. Used for the phase-2
+// billing mutations (resource-pack purchase, invoice draft/issue/void) which
+// the BFF proxies rather than aggregates — the BFF never invents billing state.
+func (s *consoleStore) postJSON(ctx context.Context, url string, accountID int64, body io.Reader, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "无法构造下游请求")
+	}
+	req.Header.Set(accountIDHeader, strconv.FormatInt(accountID, 10))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "下游服务不可达: "+url)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	// svc-billing bare-body on success, envelope {Code,Message,Data} on error.
+	var env upstreamEnvelope
+	if jsonErr := json.Unmarshal(respBody, &env); jsonErr == nil && env.Code != "" {
+		if resp.StatusCode >= 500 {
+			return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
 		}
+		if resp.StatusCode != 200 || env.Code != "OK" {
+			status := resp.StatusCode
+			if status < 400 {
+				status = http.StatusBadGateway
+			}
+			return errorsx.New(env.Code, status, env.Message)
+		}
+		if out == nil || len(env.Data) == 0 {
+			return nil
+		}
+		return json.Unmarshal(env.Data, out)
 	}
-	return out
-}
-
-func formatOrEmpty(t time.Time) string {
-	if t.IsZero() {
-		return ""
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
 	}
-	return t.Format(time.RFC3339)
-}
-
-// --- in-memory ledger store (replaced by trade_db + Redis in phase 2) ---------
-
-type memLedgerStore struct {
-	mu       sync.RWMutex
-	balances map[int64]ledger.Balance
-	entries  map[int64][]ledger.Entry
-	byIDKey  map[string]ledger.Entry
-}
-
-func newMemLedgerStore() *memLedgerStore {
-	return &memLedgerStore{
-		balances: make(map[int64]ledger.Balance),
-		entries:  make(map[int64][]ledger.Entry),
-		byIDKey:  make(map[string]ledger.Entry),
+	if out == nil || len(respBody) == 0 {
+		return nil
 	}
+	return json.Unmarshal(respBody, out)
 }
 
-func (m *memLedgerStore) GetBalance(accountID int64) (ledger.Balance, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if b, ok := m.balances[accountID]; ok {
-		return b, nil
+// --- phase-2 billing-form handlers (M-4.4) -----------------------------------
+
+// handleReservePacks lists the account's active resource packs (fan-out
+// svc-billing /internal/reservepacks).
+func (s *consoleStore) handleReservePacks(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
 	}
-	return ledger.Balance{AccountID: accountID}, nil
-}
-
-func (m *memLedgerStore) Apply(entry ledger.Entry, newBalance ledger.Balance, expectedVersion int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	cur, ok := m.balances[entry.AccountID]
-	v := 0
-	if ok {
-		v = cur.Version
+	var raw map[string]any
+	if err := s.getJSON(r.Context(), s.billingURL+"/internal/reservepacks", acct, &raw); err != nil {
+		writeError(w, e2ptr(err))
+		return
 	}
-	if v != expectedVersion {
-		return ledger.ErrVersionConflict
+	writeJSON(w, http.StatusOK, raw)
+}
+
+type reservePackPurchaseReq struct {
+	PackID      string `json:"packId"`
+	ProductCode string `json:"productCode"`
+	SKUCode     string `json:"skuCode"`
+	FaceValue   string `json:"faceValue"`
+	ExpireAt    string `json:"expireAt"`
+	OrderKey    string `json:"orderKey"`
+}
+
+// handleReservePackPurchase proxies a resource-pack purchase to svc-billing.
+func (s *consoleStore) handleReservePackPurchase(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
 	}
-	m.balances[entry.AccountID] = newBalance
-	m.entries[entry.AccountID] = append(m.entries[entry.AccountID], entry)
-	m.byIDKey[idKey(entry.AccountID, entry.IdempotencyKey)] = entry
-	return nil
+	var req reservePackPurchaseReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
+		return
+	}
+	body, _ := json.Marshal(req)
+	var out map[string]any
+	if err := s.postJSON(r.Context(), s.billingURL+"/internal/reservepacks", acct, bytes.NewReader(body), &out); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
-func (m *memLedgerStore) FindByIdempotencyKey(accountID int64, key string) (ledger.Entry, bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	e, ok := m.byIDKey[idKey(accountID, key)]
-	return e, ok, nil
+// handleInvoices lists the account's invoices (fan-out svc-billing).
+func (s *consoleStore) handleInvoices(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var raw map[string]any
+	if err := s.getJSON(r.Context(), s.billingURL+"/internal/invoices", acct, &raw); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, raw)
 }
 
-func (m *memLedgerStore) ListEntries(accountID int64) ([]ledger.Entry, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.entries[accountID], nil
+type invoiceDraftReq struct {
+	InvoiceID  string             `json:"invoiceId"`
+	BillPeriod string             `json:"billPeriod"`
+	Title      string             `json:"title"`
+	TaxNo      string             `json:"taxNo"`
+	Items      []invoiceDraftItem `json:"items"`
+}
+type invoiceDraftItem struct {
+	Description string `json:"description"`
+	Amount      string `json:"amount"`
 }
 
-func idKey(accountID int64, key string) string {
-	return strconv.FormatInt(accountID, 10) + "|" + key
+// handleInvoiceDraft proxies an invoice draft to svc-billing.
+func (s *consoleStore) handleInvoiceDraft(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req invoiceDraftReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
+		return
+	}
+	body, _ := json.Marshal(req)
+	var out map[string]any
+	if err := s.postJSON(r.Context(), s.billingURL+"/internal/invoices", acct, bytes.NewReader(body), &out); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleInvoiceIssue proxies an invoice issue to svc-billing.
+func (s *consoleStore) handleInvoiceIssue(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		InvoiceID string `json:"invoiceId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
+		return
+	}
+	body, _ := json.Marshal(req)
+	var out map[string]any
+	if err := s.postJSON(r.Context(), s.billingURL+"/internal/invoices/issue", acct, bytes.NewReader(body), &out); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleInvoiceVoid proxies a 红冲 reversal to svc-billing.
+func (s *consoleStore) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		OriginalID string `json:"originalId"`
+		ReversalID string `json:"reversalId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
+		return
+	}
+	body, _ := json.Marshal(req)
+	var out map[string]any
+	if err := s.postJSON(r.Context(), s.billingURL+"/internal/invoices/void", acct, bytes.NewReader(body), &out); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCostAnalysis returns the account's cost breakdown (fan-out svc-billing
+// /internal/cost-analysis, scoped to a billing period).
+func (s *consoleStore) handleCostAnalysis(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = time.Now().UTC().Format("2006-01")
+	}
+	var raw map[string]any
+	u := s.billingURL + "/internal/cost-analysis?period=" + period
+	if err := s.getJSON(r.Context(), u, acct, &raw); err != nil {
+		writeError(w, e2ptr(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, raw)
+}
+
+// --- error helpers (original) ------------------------------------------------
+
+// e2ptr narrows an error returned by getJSON back to the *errorsx.Error it
+// always produces. getJSON only ever returns *errorsx.Error, so this is safe.
+func e2ptr(err error) *errorsx.Error {
+	if err == nil {
+		return errorsx.New("Common.InternalError", errorsx.StatusInternalError, "")
+	}
+	if e, ok := err.(*errorsx.Error); ok {
+		return e
+	}
+	return errorsx.New("Common.InternalError", errorsx.StatusInternalError, err.Error())
 }

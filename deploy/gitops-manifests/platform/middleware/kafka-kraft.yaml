@@ -1,0 +1,200 @@
+# Kafka — cross-AZ KRaft 3-broker (04§5, 00§4.4 P2, 09-roadmap §4.3 M-6)
+#
+# Phase-1 had Kafka declared in the topology diagram (09§3.4: 3 broker, 8C16G,
+# 2×1TB NVMe, KRaft) but the manifest was not written. M-6 writes it with the
+# P2 cross-AZ placement baked in: 3 brokers spread one-per-AZ so the ISR can
+# tolerate losing one AZ, with hard podAntiAffinity on the zone topology key.
+#
+# KRaft (no ZooKeeper): 3 controllers co-located with brokers (combined mode),
+# which is the minimal footprint a 6-person SRE team can operate (04§5.3 chose
+# KRaft over ZK for exactly this reason). Each broker is also a controller, so
+# 3 brokers = 3 controllers = a quorum that survives one AZ gone.
+#
+# Topic names MUST NOT carry env identifiers (C2/S8); env isolation is by
+# cluster. That policy lives in pkg-go/event (the topic constants); this
+# manifest only carries the broker topology.
+#
+# Source-only: not applied (no cluster). Structurally validated by
+# tools/check-yaml-syntax.py and tools/check-topology-spread.py (M-6.2c).
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-kraft-config
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # middleware before gateway (0) & business (10)
+data:
+  server.properties: |
+    # KRaft combined mode (broker+controller). process.roles=broker,controller
+    process.roles=broker,controller
+    # node.id + controller.quorum.voters are set per-broker via the init
+    # container below (they must differ per pod; KRaft has no ZooKeeper to
+    # hand them out). The init container derives node.id from the pod ordinal.
+    controller.quorum.voters=1@kafka-0.kafka-headless.mw-mq:9093,2@kafka-1.kafka-headless.mw-mq:9093,3@kafka-2.kafka-headless.mw-mq:9093
+    listeners=PLAINTEXT://:9092,CONTROLLER://:9093
+    listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+    inter.broker.listener.name=PLAINTEXT
+    # min.insync.replicas=2 + replication.factor=3 = tolerate one broker (one
+    # AZ) down and still ack writes. This is the P2 AZ-loss contract in Kafka
+    # terms (00§4.4 point 3): a client tolerates one AZ gone.
+    min.insync.replicas=2
+    default.replication.factor=3
+    # Retention by size+time; audit/metering topics have their own per-topic
+    # overrides applied by the topic provisioner, not here.
+    log.retention.hours=168
+    log.segment.bytes=1073741824
+    auto.create.topics.enable=false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  serviceName: kafka-headless
+  replicas: 3                              # one broker per AZ (00§4.4)
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9094"
+        prometheus.io/path: /metrics
+    spec:
+      nodeSelector:
+        cloud.platform/pool: services
+      # Hard anti-affinity on ZONE: no two Kafka brokers in the same AZ.
+      # requiredDuringScheduling makes it a hard gate — a 3-broker cluster
+      # with two in one AZ has no ISR tolerance for that AZ's loss, which is
+      # the exact failure the P2 contract says must be survived.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: kafka
+              topologyKey: topology.kubernetes.io/zone
+      # Belt-and-suspenders: even if anti-affinity is relaxed in a future
+      # edit, the spread constraint re-states the intent (maxSkew:1, hard).
+      # Defined once in pkg-go/topology.FaultDomainSpread; serialised here.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      initContainers:
+        - name: init-node-id
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # node.id = ordinal + 1 (KRaft node ids are 1-based). Derive
+              # from the hostname suffix so each pod gets a unique id without
+              # a sidecar or a per-pod StatefulSet slice.
+              ORDINAL=${HOSTNAME##*-}
+              NODE_ID=$((ORDINAL + 1))
+              echo "node.id=${NODE_ID}" >> /config/server.properties
+              cp /etc/kafka/server.properties /config/server.properties
+          volumeMounts:
+            - name: config-template
+              mountPath: /etc/kafka
+            - name: config
+              mountPath: /config
+      containers:
+        - name: kafka
+          image: bitnami/kafka:3.7.0
+          ports:
+            - containerPort: 9092
+              name: client
+            - containerPort: 9093
+              name: controller
+            - containerPort: 9094
+              name: metrics
+          env:
+            - name: KAFKA_CFG_PROCESS_ROLES
+              value: "broker,controller"
+            - name: ALLOW_PLAINTEXT_LISTENER
+              value: "yes"
+          volumeMounts:
+            - name: config
+              mountPath: /opt/bitnami/kafka/config
+            - name: data
+              mountPath: /bitnami/kafka/data
+          resources:
+            # 8C16G (09§3.4). Metering/audit throughput is bursty; requests
+            # set to keep a broker from being starved during backfill.
+            requests: { cpu: "4", memory: "8Gi" }
+            limits:   { cpu: "8", memory: "16Gi" }
+          readinessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      terminationGracePeriodSeconds: 120   # let replicas catch up before exit
+      volumes:
+        - name: config-template
+          configMap:
+            name: kafka-kraft-config
+        - name: config
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ceph-rbd-ssd
+        resources:
+          requests:
+            storage: 1Ti                # 2×1TB NVMe (09§3.4)
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kafka
+  namespace: mw-mq
+spec:
+  # At most one broker down voluntarily (04§10.1). min.insync.replicas=2 means
+  # losing one is safe; losing two is a write outage.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: mw-mq
+spec:
+  clusterIP: None                         # headless for StatefulSet DNS
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - port: 9092
+      name: client
+    - port: 9093
+      name: controller
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: mw-mq
+spec:
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - port: 9092
+      name: client

@@ -48,7 +48,39 @@ type actionStore struct {
 }
 
 func newMetaStore() *actionStore {
-	return &actionStore{actions: make(map[string]Action)}
+	s := &actionStore{actions: make(map[string]Action)}
+	s.seedActions()
+	return s
+}
+
+// seedActions registers a representative slice of the phase-1 product API
+// surface so the Explorer and docs have real Actions to show before the
+// services register their own (03§9.4 rule ①: a route is not mounted until its
+// metadata is registered here). These mirror the OpenAPI Actions the gateway
+// actually routes for scecs/scoss/scvpc.
+func (s *actionStore) seedActions() {
+	seed := []Action{
+		{ID: "scecs.RunInstances", ProductCode: "scecs", ActionName: "RunInstances", Version: "2026-08-01",
+			ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceType","ImageId"],"properties":{"InstanceType":{"type":"string","description":"spec code, e.g. s2.large"},"ImageId":{"type":"string"},"InstanceName":{"type":"string"},"ChargeType":{"type":"string","enum":["Prepaid","Postpaid"]}}}`),
+			ErrorCodes:  []string{"scecs.InvalidInstanceType", "scecs.QuotaExceeded", "scecs.InsufficientBalance"}},
+		{ID: "scecs.DescribeInstances", ProductCode: "scecs", ActionName: "DescribeInstances", Version: "2026-08-01",
+			ParamSchema: json.RawMessage(`{"type":"object","properties":{"InstanceIds":{"type":"array","items":{"type":"string"}},"PageNumber":{"type":"integer"},"PageSize":{"type":"integer"}}}`),
+			ErrorCodes:  []string{"scecs.InstanceNotFound"}},
+		{ID: "scecs.StartInstance", ProductCode: "scecs", ActionName: "StartInstance", Version: "2026-08-01",
+			ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceId"],"properties":{"InstanceId":{"type":"string"}}}`),
+			ErrorCodes:  []string{"scecs.InstanceNotFound", "scecs.IncorrectStatus"}},
+		{ID: "scoss.CreateBucket", ProductCode: "scoss", ActionName: "CreateBucket", Version: "2026-08-01",
+			ParamSchema: json.RawMessage(`{"type":"object","required":["BucketName"],"properties":{"BucketName":{"type":"string"},"StorageClass":{"type":"string","enum":["Standard","IA","Archive"]}}}`),
+			ErrorCodes:  []string{"scoss.BucketAlreadyExists", "scoss.InvalidBucketName"}},
+		{ID: "scvpc.CreateVpc", ProductCode: "scvpc", ActionName: "CreateVpc", Version: "2026-08-01",
+			ParamSchema: json.RawMessage(`{"type":"object","required":["CidrBlock"],"properties":{"CidrBlock":{"type":"string"},"VpcName":{"type":"string"}}}`),
+			ErrorCodes:  []string{"scvpc.InvalidCidrBlock", "scvpc.QuotaExceeded"}},
+	}
+	for _, a := range seed {
+		a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		a.UpdatedBy = "system-seed"
+		s.actions[a.ID] = a
+	}
 }
 
 // id builds the canonical Action id: {product}.{Action} (identifier convention).

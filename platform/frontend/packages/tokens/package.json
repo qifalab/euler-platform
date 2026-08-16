@@ -1,0 +1,23 @@
+{
+  "name": "@sc/tokens",
+  "version": "0.1.0",
+  "description": "StarCloud design tokens — single source of truth (02§10.1). Emits CSS variables with --sc-* prefix.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./style.css": "./dist/style.css"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build && tsc",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  }
+}

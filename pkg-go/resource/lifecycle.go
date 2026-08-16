@@ -54,9 +54,10 @@ const (
 	StateStopped      State = "STOPPED"       // 用户主动停止
 	StateUpgrading    State = "UPGRADING"     // 变配中
 	StateLocked       State = "LOCKED"        // 欠费停服锁定,数据保留
+	StatePreempting   State = "PREEMPTING"    // 抢占式回收中(已发5分钟通知,等待窗口结束)
 	StateExpired      State = "EXPIRED"       // 包年包月到期
 	StateReleasing    State = "RELEASING"     // 回收中
-	StateReleased     State = "RELEASED"      // 已释放(终态)
+	StateReleased     State = "RELEASED"     // 已释放(终态)
 	StateCreateFailed State = "CREATE_FAILED" // 创建失败(终态,已回滚)
 )
 
@@ -74,13 +75,13 @@ func (s State) Terminal() bool {
 // disk is still allocated" is a conversation to have deliberately in phase 2
 // with a separate storage meter, not to stumble into now.
 func (s State) Billable() bool {
-	return s == StateRunning || s == StateUpgrading
+	return s == StateRunning || s == StateUpgrading || s == StatePreempting
 }
 
 // Intermediate reports whether the state is a transient one that must not be
 // left indefinitely. Each has a timeout backstop (§Timeouts).
 func (s State) Intermediate() bool {
-	return s == StateCreating || s == StateUpgrading || s == StateReleasing
+	return s == StateCreating || s == StateUpgrading || s == StatePreempting || s == StateReleasing
 }
 
 // transitions is the complete legal transition table (03§5.2 state diagram).
@@ -89,11 +90,14 @@ func (s State) Intermediate() bool {
 var transitions = map[State][]State{
 	StateInit:      {StateCreating, StateCreateFailed},
 	StateCreating:  {StateRunning, StateCreateFailed},
-	StateRunning:   {StateStopped, StateUpgrading, StateLocked, StateExpired, StateReleasing},
+	StateRunning:   {StateStopped, StateUpgrading, StateLocked, StatePreempting, StateExpired, StateReleasing},
 	StateStopped:   {StateRunning, StateLocked, StateExpired, StateReleasing},
 	StateUpgrading: {StateRunning, StateReleasing},
 	// Recharging unlocks; retention expiry releases.
 	StateLocked: {StateRunning, StateReleasing},
+	// A preempted spot instance proceeds to release once the 5-minute notice
+	// window elapses (09-roadmap §4.2). It bills until RELEASING, like RUNNING.
+	StatePreempting: {StateReleasing},
 	// Renewing within the retention window restores; retention expiry releases.
 	StateExpired:      {StateRunning, StateReleasing},
 	StateReleasing:    {StateReleased},
@@ -115,9 +119,10 @@ func CanTransition(from, to State) bool {
 // intermediate state is either a lost callback or a genuinely failed operation;
 // either way it must not sit there forever consuming quota.
 var Timeouts = map[State]time.Duration{
-	StateCreating:  15 * time.Minute,
-	StateUpgrading: 30 * time.Minute,
-	StateReleasing: 30 * time.Minute,
+	StateCreating:   15 * time.Minute,
+	StateUpgrading:  30 * time.Minute,
+	StatePreempting: 10 * time.Minute, // notice window (5m) + reclaim headroom
+	StateReleasing:  30 * time.Minute,
 }
 
 // PollInterval is how often svc-orchestrator polls rc.QueryStatus for

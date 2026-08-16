@@ -1,0 +1,25 @@
+{
+  "name": "console-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud monitor sub-app (SCMON) — alert rules + monitoring dashboard. Wujie child.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5179",
+    "build": "vite build",
+    "preview": "vite preview --port 5179",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/console-kit": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0",
+    "element-plus": "^2.7.0",
+    "vue-router": "^4.3.0"
+  }
+}

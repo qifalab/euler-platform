@@ -1,0 +1,99 @@
+# Application repository CI pipeline (08-devops-delivery.md §5.3).
+#
+# This pipeline runs in every SERVICE repo (svc-*, rc-*, console-bff). It builds,
+# tests, scans, and publishes the container image, then triggers the manifest
+# repo to update the Helm chart version. The manifest repo's own pipeline
+# (manifest-repo-pipeline.yml) is the last gate before ArgoCD applies.
+#
+# Trigger: every MR + main push. Image tag = commit SHA (immutable); the manifest
+# repo bumps the chart's image.tag on merge via the trigger job.
+stages: [verify, build, scan, publish, trigger]
+
+variables:
+  GO_IMAGE: golang:1.26
+  # harbor.internal/cloudplatform/<svc> — set per-service in CI/CD settings
+  IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+# ---------------------------------------------------------------------------
+# Verify: go vet + go test (the service's own + the shared pkg-go replace).
+# ---------------------------------------------------------------------------
+verify:vet:
+  stage: verify
+  image: $GO_IMAGE
+  script:
+    - go vet ./...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+verify:test:
+  stage: verify
+  image: $GO_IMAGE
+  script:
+    - go test -race -count=1 ./...   # -race needs cgo; CI runner has gcc
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ---------------------------------------------------------------------------
+# Build: multi-stage Dockerfile (the service's cmd/server) → distroless image.
+# ---------------------------------------------------------------------------
+build:image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - /kaniko/executor
+        --context="$CI_PROJECT_DIR"
+        --dockerfile="Dockerfile"
+        --destination="$IMAGE"
+        --cache=true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ---------------------------------------------------------------------------
+# Scan: trivy on the built image (supply-chain, 07§5.4).
+# ---------------------------------------------------------------------------
+scan:trivy:
+  stage: scan
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  script:
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL "$IMAGE"
+  needs: ["build:image"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ---------------------------------------------------------------------------
+# Publish: the kaniko build already pushed to the registry; here we tag the
+# commit SHA as a version anchor for rollback.
+# ---------------------------------------------------------------------------
+publish:tag:
+  stage: publish
+  image: $GO_IMAGE
+  script:
+    - echo "published $IMAGE"
+  needs: ["build:image", "scan:trivy"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ---------------------------------------------------------------------------
+# Trigger: tell the manifest repo to bump this service's image.tag to the new
+# SHA. The manifest repo's pipeline then validates + ArgoCD syncs.
+# ---------------------------------------------------------------------------
+trigger:manifest:
+  stage: trigger
+  image: curlimages/curl:latest
+  script:
+    - |
+      curl -X POST --fail
+        -F "token=$MANIFEST_TRIGGER_TOKEN"
+        -F "ref=main"
+        -F "variables[SVC]=$CI_PROJECT_NAME"
+        -F "variables[IMAGE_TAG]=$CI_COMMIT_SHORT_SHA"
+        "$CI_API_V4_URL/projects/$MANIFEST_PROJECT_ID/trigger/pipeline"
+  needs: ["publish:tag"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

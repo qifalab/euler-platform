@@ -230,9 +230,20 @@ const (
 	ChargeSpot ChargeType = "SPOT"
 )
 
-// SellableInPhase1 reports whether this charge type may be sold now. The order
-// service calls this so a phase-2 charge type cannot be ordered through an API
-// that happens to accept the enum value.
+// Sellable reports whether this charge type may be sold in the current phase.
+// The order service and pricing engine call this so a not-yet-sold charge type
+// cannot be ordered through an API that happens to accept the enum value.
+//
+// Phase 2 (09-roadmap M-4) opens 资源包 (M-4.1) and 抢占式 (M-4.2, once the spot
+// price engine in pkg-go/spot and the reclaim path in pkg-go/provision land)
+// for sale. All four billing forms are now sellable.
+func (c ChargeType) Sellable() bool {
+	return c == ChargePrepaid || c == ChargePostpaid || c == ChargeResourcePack || c == ChargeSpot
+}
+
+// SellableInPhase1 reports whether this charge type was sellable during phase 1
+// (包年包月 + 按量 only, decision D6). Retained as the phase-1 historical record
+// so the phase-1 gate semantics stay legible; new code uses Sellable.
 func (c ChargeType) SellableInPhase1() bool {
 	return c == ChargePrepaid || c == ChargePostpaid
 }
@@ -241,10 +252,12 @@ func (c ChargeType) SellableInPhase1() bool {
 type DurationUnit string
 
 const (
-	DurationMonth DurationUnit = "MONTH"
-	DurationYear  DurationUnit = "YEAR"
-	DurationHour  DurationUnit = "HOUR"
-	DurationUsage DurationUnit = "USAGE" // metered, quantity supplied by 计量
+	DurationMonth  DurationUnit = "MONTH"
+	DurationYear   DurationUnit = "YEAR"
+	DurationHour   DurationUnit = "HOUR"
+	DurationMinute DurationUnit = "MINUTE" // phase 2: spot/preemptible per-minute cycles
+	DurationSecond DurationUnit = "SECOND" // phase 2: SCECI per-second metering (09 §4.2)
+	DurationUsage  DurationUnit = "USAGE"  // metered, quantity supplied by 计量
 )
 
 // PricingRule is one row of t_pricing_rule. Rules are append-only: a price
@@ -273,6 +286,13 @@ func (r PricingRule) active(t time.Time) bool {
 	return true
 }
 
+// Active is the exported form of active, so a service that needs to inspect
+// rules outside the engine (svc-catalog deriving a quote's DurationUnit from
+// the matched rule, rather than hardcoding it) can reuse the same selection
+// logic the engine uses internally — one source of truth for "which rule
+// matches this request".
+func (r PricingRule) Active(t time.Time) bool { return r.active(t) }
+
 // specificity scores how closely a rule targets the request. A region-specific
 // rule beats a wildcard; a customer-level rule beats an unscoped one. This is
 // what lets a single 目录价 coexist with regional and enterprise overrides
@@ -287,6 +307,11 @@ func (r PricingRule) specificity() int {
 	}
 	return score
 }
+
+// Specificity is the exported form of specificity, paired with Active so a
+// service can find the most-specific active rule for a SKU without duplicating
+// selectRule's internals.
+func (r PricingRule) Specificity() int { return r.specificity() }
 
 // PromoType is the promotion mechanism.
 type PromoType string
@@ -457,7 +482,7 @@ type CouponUse struct {
 // Errors.
 var (
 	ErrNoPricingRule    = errors.New("pricing: no active pricing rule for request")
-	ErrChargeTypeUnsold = errors.New("pricing: charge type not sellable in phase 1")
+	ErrChargeTypeUnsold = errors.New("pricing: charge type not sellable in the current phase")
 	ErrInvalidDuration  = errors.New("pricing: prepaid orders require a positive duration")
 )
 
@@ -473,7 +498,7 @@ type Engine struct{}
 // payment time. Quoting must not spend a coupon — a user browsing prices would
 // otherwise drain their own trial credit.
 func (e Engine) Calculate(req Request, rules []PricingRule, promos []Promotion, coupons []Coupon) (Result, error) {
-	if !req.ChargeType.SellableInPhase1() {
+	if !req.ChargeType.Sellable() {
 		return Result{}, fmt.Errorf("%w: %s", ErrChargeTypeUnsold, req.ChargeType)
 	}
 	if req.Quantity <= 0 {

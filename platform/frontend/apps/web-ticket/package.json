@@ -1,0 +1,22 @@
+{
+  "name": "web-ticket",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StarCloud ticket support — dual-form site (02§1.2).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5181",
+    "build": "vite build",
+    "preview": "vite preview --port 5181",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sc/tokens": "workspace:*",
+    "@sc/ui": "workspace:*",
+    "@sc/sdk": "workspace:*",
+    "@sc/wujie-bridge": "workspace:*",
+    "element-plus": "^2.7.0",
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0"
+  }
+}

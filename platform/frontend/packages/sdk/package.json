@@ -1,0 +1,22 @@
+{
+  "name": "@sc/sdk",
+  "version": "0.1.0",
+  "description": "Unified request/OpenAPI client (02§9.1). Token injection, 401 single-flight refresh, structured error codes, requestId.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build && tsc",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  }
+}

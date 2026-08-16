@@ -1,0 +1,333 @@
+# Redis Cluster — cross-AZ 6-node (04§7, 00§4.4 P2, 09-roadmap §4.3 M-6)
+#
+# Phase-1 declared "Redis Cluster 3主3从" (09§3.4, 04§7.3) but wrote no manifest.
+# M-6 writes it with cross-AZ placement: 6 nodes = 3 masters + 3 replicas,
+# arranged as 3 master/replica pairs, one pair per AZ.
+#
+# Why Redis CAN satisfy either-AZ survival where MySQL MGR (2-AZ) cannot:
+#   Redis Cluster shards by key (16384 slots), each shard = 1 master + 1 replica.
+#   Placing each shard's master+replica in DIFFERENT AZs means losing either AZ
+#   keeps every shard alive (the survivor promotes). 3 shards across 2 AZs:
+#     shard1: master-A  replica-B
+#     shard2: master-B  replica-A
+#     shard3: master-A  replica-B   (or B/A — the point is the pair spans AZs)
+#   Lose AZ-A: shard1 replica-B promotes, shard2 master-B survives, shard3
+#   replica-B promotes. All 3 shards alive. This is the generic
+#   topology.SurvivesAZLoss contract, and unlike MGR it IS satisfiable on 2 AZs
+#   because the unit of replication (the shard pair) spans the AZs.
+#
+# The hard anti-affinity below is keyed to a per-shard label, not the cluster
+# label: a master and its replica must NOT be in the same AZ. We model each
+# shard as its own StatefulSet of 2 (master+replica) with cross-AZ anti-affinity,
+# which is the bitnami redis-cluster topology idiom.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: mw-cache
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # middleware before gateway/business
+data:
+  redis.conf: |
+    # Redis Cluster mode (04§7). cluster-require-full-coverage=no so a downed
+    # shard's keys are unavailable but the rest of the cluster keeps serving —
+    # the P2 contract is "client tolerates one AZ gone", not "no data loss".
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout 5000
+    cluster-require-full-coverage no
+    appendonly yes
+    appendfsync everysec
+    # TTL is mandatory (04§7.2); enforced at app layer, not here, but the
+    # default is defensive. maxmemory-policy=allkeys-lru so a full node evicts
+    # least-recent cache, not writes — a cache node should never OOM on writes.
+    maxmemory-policy allkeys-lru
+---
+# Three shards, each a 2-node StatefulSet (master + replica) pinned to span AZs.
+# Shard 0 shown in full; shards 1 and 2 are the same shape with the shard label
+# incremented. (In production this would be templated; the source-only artifact
+# shows shard 0 verbatim and shards 1-2 with the label swapped, so the topology
+# is legible to a reviewer without helm render.)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-shard-0
+  namespace: mw-cache
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  serviceName: redis-shard-0-headless
+  replicas: 2                            # 1 master + 1 replica, spanning AZs
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+      cloud.platform/shard: "0"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-cluster
+        cloud.platform/shard: "0"
+    spec:
+      nodeSelector:
+        cloud.platform/pool: services
+      # HARD anti-affinity on ZONE within the shard: master and replica MUST
+      # be in different AZs. This is the invariant that makes either-AZ survival
+      # hold — if both landed in one AZ, losing it would drop the shard.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: redis-cluster
+                  cloud.platform/shard: "0"
+              topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: redis
+          image: bitnami/redis-cluster:7.4
+          ports:
+            - containerPort: 6379
+              name: client
+            - containerPort: 16379
+              name: bus
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: redis-cluster-credentials, key: password }
+            - name: REDIS_NODES
+              # All 6 nodes across 3 shards, so the cluster gossip can form.
+              value: "redis-shard-0-0.redis-shard-0-headless.mw-cache redis-shard-0-1.redis-shard-0-headless.mw-cache redis-shard-1-0.redis-shard-1-headless.mw-cache redis-shard-1-1.redis-shard-1-headless.mw-cache redis-shard-2-0.redis-shard-2-headless.mw-cache redis-shard-2-1.redis-shard-2-headless.mw-cache"
+          volumeMounts:
+            - name: data
+              mountPath: /bitnami/redis/data
+          resources:
+            # 6 nodes total, 3主3从 16GB (09§3.4). Per-node modest; cache fits.
+            requests: { cpu: "1", memory: "4Gi" }
+            limits:   { cpu: "4", memory: "8Gi" }
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "redis-cli -a $REDIS_PASSWORD ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      terminationGracePeriodSeconds: 60
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ceph-rbd-ssd
+        resources:
+          requests:
+            storage: 16Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-shard-0
+  namespace: mw-cache
+spec:
+  # One replica per shard at a time: a shard is 2 nodes (master+replica), and
+  # both down = shard unavailable. maxUnavailable:1 keeps one alive always.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+      cloud.platform/shard: "0"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-shard-0-headless
+  namespace: mw-cache
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis-cluster
+    cloud.platform/shard: "0"
+  ports:
+    - port: 6379
+      name: client
+    - port: 16379
+      name: bus
+---
+# Shard 1 — same shape, shard label "1".
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-shard-1
+  namespace: mw-cache
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  serviceName: redis-shard-1-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+      cloud.platform/shard: "1"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-cluster
+        cloud.platform/shard: "1"
+    spec:
+      nodeSelector:
+        cloud.platform/pool: services
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: redis-cluster
+                  cloud.platform/shard: "1"
+              topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: redis
+          image: bitnami/redis-cluster:7.4
+          ports:
+            - containerPort: 6379
+            - containerPort: 16379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: redis-cluster-credentials, key: password }
+            - name: REDIS_NODES
+              value: "redis-shard-0-0.redis-shard-0-headless.mw-cache redis-shard-0-1.redis-shard-0-headless.mw-cache redis-shard-1-0.redis-shard-1-headless.mw-cache redis-shard-1-1.redis-shard-1-headless.mw-cache redis-shard-2-0.redis-shard-2-headless.mw-cache redis-shard-2-1.redis-shard-2-headless.mw-cache"
+          volumeMounts:
+            - name: data
+              mountPath: /bitnami/redis/data
+          resources:
+            requests: { cpu: "1", memory: "4Gi" }
+            limits:   { cpu: "4", memory: "8Gi" }
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "redis-cli -a $REDIS_PASSWORD ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      terminationGracePeriodSeconds: 60
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ceph-rbd-ssd
+        resources:
+          requests:
+            storage: 16Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-shard-1
+  namespace: mw-cache
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+      cloud.platform/shard: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-shard-1-headless
+  namespace: mw-cache
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis-cluster
+    cloud.platform/shard: "1"
+  ports:
+    - port: 6379
+    - port: 16379
+---
+# Shard 2 — same shape, shard label "2".
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-shard-2
+  namespace: mw-cache
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  serviceName: redis-shard-2-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+      cloud.platform/shard: "2"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-cluster
+        cloud.platform/shard: "2"
+    spec:
+      nodeSelector:
+        cloud.platform/pool: services
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: redis-cluster
+                  cloud.platform/shard: "2"
+              topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: redis
+          image: bitnami/redis-cluster:7.4
+          ports:
+            - containerPort: 6379
+            - containerPort: 16379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: redis-cluster-credentials, key: password }
+            - name: REDIS_NODES
+              value: "redis-shard-0-0.redis-shard-0-headless.mw-cache redis-shard-0-1.redis-shard-0-headless.mw-cache redis-shard-1-0.redis-shard-1-headless.mw-cache redis-shard-1-1.redis-shard-1-headless.mw-cache redis-shard-2-0.redis-shard-2-headless.mw-cache redis-shard-2-1.redis-shard-2-headless.mw-cache"
+          volumeMounts:
+            - name: data
+              mountPath: /bitnami/redis/data
+          resources:
+            requests: { cpu: "1", memory: "4Gi" }
+            limits:   { cpu: "4", memory: "8Gi" }
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "redis-cli -a $REDIS_PASSWORD ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      terminationGracePeriodSeconds: 60
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ceph-rbd-ssd
+        resources:
+          requests:
+            storage: 16Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-shard-2
+  namespace: mw-cache
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+      cloud.platform/shard: "2"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-shard-2-headless
+  namespace: mw-cache
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis-cluster
+    cloud.platform/shard: "2"
+  ports:
+    - port: 6379
+    - port: 16379

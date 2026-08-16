@@ -1,0 +1,304 @@
+// Package main: svc-order — order center (03-backend-services.md §4.2.2, 五种交易类型一个模型).
+//
+// Owns the unified order model + state machine (pkg-go/order). A paid order is
+// the ONLY trigger for provisioning (svc-orchestrator fans out on PAID).
+// Five transaction types share one model: NEW / RENEW / UPGRADE / DOWNGRADE / REFUND.
+//
+// Routes (gateway-authorized, X-Sc-Account-Id injected):
+//
+//	POST   /api/v1/orders             — create an order (TypeNew/RENEW/UPGRADE/...)
+//	GET    /api/v1/orders             — list the account's orders
+//	GET    /api/v1/orders/{id}        — order detail
+//	POST   /api/v1/orders/{id}/pay    — mark order paid (→ triggers orchestrator in real deploy)
+//	POST   /api/v1/orders/{id}/cancel — cancel a pending order
+//
+// stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
+// (MySQL sharded by account_id in production).
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/starcloud/sc-platform/order"
+	"github.com/starcloud/sc-platform/pricing"
+)
+
+const accountIDHeader = "X-Sc-Account-Id"
+
+type orderStore struct {
+	mu     sync.RWMutex
+	orders map[int64]*order.Order
+	machine *order.Machine
+	seq    int64
+}
+
+func newOrderStore() *orderStore {
+	s := &orderStore{orders: make(map[int64]*order.Order), machine: order.NewMachine(time.Now)}
+	s.seed()
+	return s
+}
+
+func (s *orderStore) seed() {
+	// Seed one pending-payment order (matches console-bff seed for account 100123).
+	o := &order.Order{
+		OrderID: 9001, OrderNo: "SO202608110001", AccountID: 100123,
+		Type: order.TypeNew, State: order.StatePendingPayment,
+		ProductCode: "scecs", PayableAmount: pricing.MustParseAmount("2160"),
+		CreatedAt: time.Now().Add(-2 * time.Hour), UpdatedAt: time.Now(), Version: 1,
+	}
+	s.orders[9001] = o
+	s.seq = 9001
+}
+
+type createOrderRequest struct {
+	Type        string `json:"type"`         // NEW / RENEW / UPGRADE / DOWNGRADE / REFUND
+	ProductCode string `json:"productCode"`
+	SKUCode     string `json:"skuCode"`
+	RegionID    string `json:"regionId"`
+	Quantity    int64  `json:"quantity"`
+	Duration    int64  `json:"duration"`
+	AmountMinor int64  `json:"amountMinor"` // dev: client-supplied quote (prod: svc-catalog)
+}
+
+func (s *orderStore) handleCreate(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req createOrderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+	if req.ProductCode == "" {
+		writeErr(w, "Common.InvalidParameter", 400, "productCode is required")
+		return
+	}
+	if req.Quantity == 0 {
+		req.Quantity = 1
+	}
+	if req.Duration == 0 {
+		req.Duration = 1
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	orderID := s.seq
+	orderNo := fmt.Sprintf("SO%d%06d", time.Now().Year(), orderID)
+	ot := order.Type(req.Type)
+	if ot == "" {
+		ot = order.TypeNew
+	}
+	amount := pricing.MustParseAmount(strconv.FormatInt(req.AmountMinor, 10))
+	o, _, err := s.machine.Create(order.CreateRequest{
+		AccountID: acct, Type: ot, ProductCode: req.ProductCode,
+		ChargeType: pricing.ChargePrepaid,
+		SKUCode: req.SKUCode, RegionID: req.RegionID, Quantity: req.Quantity,
+		Duration: req.Duration, DurationUnit: pricing.DurationMonth,
+		Quote: pricing.Result{PayableAmount: amount},
+		ClientToken: fmt.Sprintf("ct-%d-%d", acct, orderID),
+	}, orderID, orderNo)
+	if err != nil {
+		writeErr(w, "Order.CreateFailed", 400, err.Error())
+		return
+	}
+	s.orders[orderID] = o
+	writeJSON(w, "OK", orderToMap(o))
+}
+
+func (s *orderStore) handleList(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]map[string]any, 0)
+	for _, o := range s.orders {
+		if o.AccountID == acct {
+			out = append(out, orderToMap(o))
+		}
+	}
+	writeJSON(w, "OK", out)
+}
+
+func (s *orderStore) handleDetail(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "invalid order id")
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	o, exists := s.orders[id]
+	if !exists || o.AccountID != acct {
+		writeErr(w, "Order.NotFound", 404, "订单不存在")
+		return
+	}
+	writeJSON(w, "OK", orderToMap(o))
+}
+
+func (s *orderStore) handlePay(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "invalid order id")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, exists := s.orders[id]
+	if !exists || o.AccountID != acct {
+		writeErr(w, "Order.NotFound", 404, "订单不存在")
+		return
+	}
+	if _, err := s.machine.Transition(o, order.StatePaid, o.Version); err != nil {
+		writeErr(w, "Order.StateTransitionFailed", 409, err.Error())
+		return
+	}
+	o.Version++
+	o.UpdatedAt = time.Now()
+	// Real deploy: emit order.created event → svc-orchestrator fulfills.
+	// Phase-1: the orchestrator's /fulfill endpoint is called by the frontend
+	// or a webhook; here we just transition to PAID.
+	writeJSON(w, "OK", orderToMap(o))
+}
+
+func (s *orderStore) handleCancel(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "invalid order id")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, exists := s.orders[id]
+	if !exists || o.AccountID != acct {
+		writeErr(w, "Order.NotFound", 404, "订单不存在")
+		return
+	}
+	if _, err := s.machine.Transition(o, order.StateCancelled, o.Version); err != nil {
+		writeErr(w, "Order.StateTransitionFailed", 409, err.Error())
+		return
+	}
+	o.Version++
+	o.UpdatedAt = time.Now()
+	writeJSON(w, "OK", orderToMap(o))
+}
+
+func orderToMap(o *order.Order) map[string]any {
+	return map[string]any{
+		"orderId": o.OrderID, "orderNo": o.OrderNo, "type": string(o.Type),
+		"state": string(o.State), "productCode": o.ProductCode,
+		"payableAmount": o.PayableAmount.String(), "createdAt": o.CreatedAt.Format(time.RFC3339),
+		"version": o.Version,
+	}
+}
+
+func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.Header.Get(accountIDHeader)
+	if raw == "" {
+		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		return 0, false
+	}
+	return id, true
+}
+
+func writeJSON(w http.ResponseWriter, code string, data any) {
+	rid := w.Header().Get("X-Sc-TraceId")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
+}
+
+func writeErr(w http.ResponseWriter, code string, status int, msg string) {
+	rid := w.Header().Get("X-Sc-TraceId")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
+}
+
+func requestIDMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Sc-TraceId")
+		if id == "" {
+			id = fmt.Sprintf("order-%d", time.Now().UnixNano())
+		}
+		w.Header().Set("X-Sc-TraceId", id)
+		h.ServeHTTP(w, r)
+	})
+}
+
+func recoverMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic", "rec", rec, "path", r.URL.Path)
+				writeErr(w, "Common.InternalError", 500, "internal error")
+			}
+		}()
+		h.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	addr := flag.String("http", ":9204", "HTTP listen address")
+	flag.Parse()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	store := newOrderStore()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })
+	mux.HandleFunc("POST /api/v1/orders", store.handleCreate)
+	mux.HandleFunc("GET /api/v1/orders", store.handleList)
+	mux.HandleFunc("GET /api/v1/orders/{id}", store.handleDetail)
+	mux.HandleFunc("POST /api/v1/orders/{id}/pay", store.handlePay)
+	mux.HandleFunc("POST /api/v1/orders/{id}/cancel", store.handleCancel)
+
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		slog.Info("svc-order listening", "addr", *addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("listen failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	slog.Info("shutdown signal received, draining")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("graceful shutdown failed", "err", err)
+	}
+}

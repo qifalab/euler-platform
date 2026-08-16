@@ -1,0 +1,25 @@
+{
+  "name": "@sc/wujie-bridge",
+  "version": "0.1.0",
+  "description": "Micro-frontend bridge: shared-props injection + bus events over Wujie (02§5.4/6.4).",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build && tsc",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "wujie": "*"
+  }
+}

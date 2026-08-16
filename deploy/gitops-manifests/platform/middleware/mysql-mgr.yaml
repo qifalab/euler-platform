@@ -1,0 +1,190 @@
+# MySQL — cross-AZ MGR single-primary (04§6.9, 00§4.4 P2, 09-roadmap §4.3 M-6)
+#
+# Phase-1 declared "1 主 2 从 MGR, cross-AZ (P2 起)" (04§6.9, 09§3.4) but wrote
+# no manifest. M-6 writes it: a 3-node MGR group, single-primary, spread across
+# 2 AZs as (2,1). The MySQL image here is the bitnami/mysql with MGR plugin
+# configured; the group name and seed hosts are set per-pod.
+#
+# IMPORTANT — the AZ-survival math (pkg-go/topology.SurvivesAZLossMGR):
+#   A 3-node MGR group across 2 AZs even-spread is (2,1). Losing the 2-node AZ
+#   leaves 1 node, which is NOT a majority of 3 (needs 2), so writes stall.
+#   The 2-AZ MGR group therefore survives loss of the LIGHTER AZ only.
+#   The runbook (tools/az-failover-drill.md) drills the secondary AZ and keeps
+#   the primary on the heavier (2-node) side; a full either-AZ MGR survival
+#   needs 3 AZs (one node each), which is P3, not P2.
+#
+# This is not a contradiction with 00§4.4 point 2 ("MGR 单主跨 AZ") — the spec
+# places the primary on the survivable side and accepts that the secondary AZ
+# is the drill target. The manifest encodes the placement; the runbook encodes
+# the procedure; the topology package encodes the math that connects them.
+#
+# Vitess (vtgate/vttablet) sits ABOVE this MGR group as the sharding layer
+# (04§6.3-6.6, account_id single key). This manifest is the MySQL underneath;
+# vttablet would wrap these as its storage backend in production. Source-only:
+# not applied; structurally validated by check-yaml-syntax + check-topology-spread.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-mgr-config
+  namespace: mw-db
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # middleware before gateway/business
+data:
+  my.cnf: |
+    [mysqld]
+    # MGR single-primary mode (04§6.9). group_replication_single_primary=ON
+    # means one node accepts writes; the others are read replicas that promote
+    # on primary loss. loose- prefix lets the image start before the plugin.
+    loose-group_replication_group_name="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    loose-group_replication_single_primary_mode=ON
+    loose-group_replication_enforce_update_everywhere_checks=OFF
+    # Start in group-recovery; the init container seeds the member list.
+    loose-group_replication_bootstrap_group=OFF
+    loose-group_replication_start_on_boot=ON
+    # Semi-sync is the DOWNGRADE path (04§6.9): MGR is default; if AZ RTT >= 2ms
+    # the operator flips to semi-sync. Configured but not the default group mode.
+    rpl_semi_sync_master_enabled=0
+    rpl_semi_sync_slave_enabled=0
+    # Binlog required for MGR + PITR (04§6.9 backup: XtraBackup + binlog archive).
+    log_bin=binlog
+    binlog_format=ROW
+    gtid_mode=ON
+    enforce_gtid_consistency=ON
+    server_id=0           # set per-pod by init container (ordinal+1)
+    # Backup/PITR (04§6.9): daily XtraBackup + binlog to backup-mysql bucket.
+    # The backup sidecar is omitted here; it is operated by the SRE backup
+    # runbook, not deployed as a pod, to keep this manifest about topology.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-mgr
+  namespace: mw-db
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  serviceName: mysql-mgr-headless
+  replicas: 3                              # 1 primary + 2 secondaries (04§6.9)
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mysql-mgr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mysql-mgr
+    spec:
+      nodeSelector:
+        cloud.platform/pool: services
+      # Soft anti-affinity on ZONE: prefer one MySQL per AZ, but ALLOW (2,1)
+      # because 3 nodes across only 2 AZs cannot be strictly 1-per-AZ. This
+      # is the deliberate part: the (2,1) spread is the best P2 can do, and
+      # the runbook keeps the primary on the 2-node side. requiredDuringScheduling
+      # would be UNSCHEDULABLE here (3 pods, 2 zones) and would block deploy.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mysql-mgr
+                topologyKey: topology.kubernetes.io/zone
+      # maxSkew:2 on zone: allow the (2,1) split but never (3,0). A 3-0
+      # concentration is the single-AZ failure mode the P2 contract forbids.
+      topologySpreadConstraints:
+        - maxSkew: 2
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mysql-mgr
+      initContainers:
+        - name: init-server-id
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ORDINAL=${HOSTNAME##*-}
+              echo "server_id=$((ORDINAL + 100))" >> /config/my.cnf
+              cp /etc/mysql/my.cnf /config/my.cnf
+          volumeMounts:
+            - name: config-template
+              mountPath: /etc/mysql
+            - name: config
+              mountPath: /config
+      containers:
+        - name: mysql
+          image: bitnami/mysql:8.4
+          ports:
+            - containerPort: 3306
+              name: mysql
+            - containerPort: 33061
+              name: grp-comm
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: mysql-mgr-credentials, key: root-password }
+          volumeMounts:
+            - name: config
+              mountPath: /opt/bitnami/mysql/conf
+            - name: data
+              mountPath: /bitnami/mysql/data
+          resources:
+            # 2×16 start, scale to 8×16 (09§3.4/§4.3). InnoDB buffer pool sized
+            # at ~60% of memory; the resource request reflects that headroom.
+            requests: { cpu: "8", memory: "16Gi" }
+            limits:   { cpu: "16", memory: "32Gi" }
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "mysqladmin ping -h 127.0.0.1 -p$MYSQL_ROOT_PASSWORD"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 3306 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      terminationGracePeriodSeconds: 300   # let MGR re-elect before force-kill
+      volumes:
+        - name: config-template
+          configMap:
+            name: mysql-mgr-config
+        - name: config
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ceph-rbd-ssd
+        resources:
+          requests:
+            storage: 500Gi               # 04§6.9: PVC 500GB 起
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mysql-mgr
+  namespace: mw-db
+spec:
+  # At most one node down voluntarily. MGR majority of 3 needs 2 alive to write,
+  # so two voluntary disruptions would stop writes — PDB prevents that.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mysql-mgr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-mgr-headless
+  namespace: mw-db
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: mysql-mgr
+  ports:
+    - port: 3306
+      name: mysql
+    - port: 33061
+      name: grp-comm

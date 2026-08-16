@@ -3,14 +3,11 @@
 // console-bff is the control-plane aggregation layer (03-backend-services.md
 // §4, console-bff node in the 03§3 architecture diagram). It faces the web
 // console frontend and fans out to the internal services (svc-billing,
-// svc-orchestrator, svc-order, ...) behind it, aggregating their responses
-// into the shapes the console needs.
-//
-// In phase 1 the internal services are separate processes and the fan-out
-// targets are not yet wired, so each handler here returns stub-but-shaped
-// responses — the same JSON envelope and field shapes the real aggregation
-// will produce once the services are reachable. The store is in-memory
-// (storage Redis in the target architecture, 03§4).
+// svc-orchestrator, svc-order) behind it, aggregating their responses into the
+// shapes the console needs. The fan-out is live (see store.go); downstream base
+// URLs come from SC_SVC_* env vars (dev defaults: orchestrator :9203, billing
+// :9206, order :9204). In the target architecture the BFF also caches
+// aggregated views in Redis (03§4); phase-1 is uncached fan-out.
 //
 // This is a stdlib-HTTP service (no Kratos/gRPC codegen — repo convention).
 // Account identity is injected by the APISIX gateway via the X-Sc-Account-Id
@@ -62,6 +59,16 @@ func main() {
 	mux.HandleFunc("GET /console/overview", store.handleOverview)
 	mux.HandleFunc("GET /console/resources", store.handleResources)
 	mux.HandleFunc("GET /console/bills", store.handleBills)
+
+	// Phase-2 billing-form endpoints (M-4.4): resource packs, invoices, cost
+	// analysis — all fan out to svc-billing, which holds the real ledger.
+	mux.HandleFunc("GET /console/reservepacks", store.handleReservePacks)
+	mux.HandleFunc("POST /console/reservepacks", store.handleReservePackPurchase)
+	mux.HandleFunc("GET /console/invoices", store.handleInvoices)
+	mux.HandleFunc("POST /console/invoices", store.handleInvoiceDraft)
+	mux.HandleFunc("POST /console/invoices/issue", store.handleInvoiceIssue)
+	mux.HandleFunc("POST /console/invoices/void", store.handleInvoiceVoid)
+	mux.HandleFunc("GET /console/cost-analysis", store.handleCostAnalysis)
 
 	srv := &http.Server{
 		Addr:              *httpAddr,

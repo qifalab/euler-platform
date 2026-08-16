@@ -1090,19 +1090,19 @@ flowchart LR
 
 与《09-roadmap.md》里程碑对齐:
 
-**阶段一(M0~M3,可售 MVP)**
+**阶段一(T0~T0+9 月,T0+6 月内测、T0+9 月 GA;可售 MVP)**
 1. svc-iam(账号+AK+最简鉴权)、svc-org(项目从简)——地基先行;
 2. svc-catalog(2~3 个产品的三件套注册)、svc-order(新购/按量)、svc-payment(余额+模拟渠道);
-3. svc-orchestrator + svc-workflow + rc-compute/rc-storage/rc-network/rc-database(计算实例 + 块存储 + 网络 + 托管数据库,见《01-product-catalog.md》MVP 骨架与《09-roadmap.md》一期产品集);SCECI(弹性容器实例)后置二期;
+3. svc-orchestrator + svc-workflow + rc-compute/rc-storage/rc-network/rc-database(计算实例 + 块存储 + 网络 + 托管数据库,见《01-product-catalog.md》MVP 骨架与《09-roadmap.md》一期产品集);SCECI(弹性容器实例)后置二期(裁决 C1+S1);
 4. svc-billing(按量小时出账)+ svc-metering;svc-notify(站内信+邮件);
 5. APISIX + OpenAPI 签名 + svc-audit 简版。
    ——里程碑:用户可注册→买一台实例→按小时出账→欠费锁定→释放,全链路跑通。
 
-**阶段二(M3~M6)**
-- svc-quota、续费/升降配/退订、包年包月全生命周期;svc-ticket;svc-monitor 产品化(租户 agent + VM 租户集群 + alert-engine/alert-center 对客告警链路,见《05-data-observability.md》§8.5);SDK v1 与文档中心联动;对账体系全量上线。
+**阶段二(T0+9~T0+18 月)**
+- svc-quota、续费/升降配/退订、包年包月全生命周期;svc-ticket;svc-monitor 产品化(租户 agent + VM 租户集群 + alert-engine/alert-center 对客告警链路,见《05-data-observability.md》§8.5);SDK v1 与文档中心联动;对账体系全量上线;资源包与成本分析;SCECI(弹性容器实例)接入。
 
-**阶段三(M6+)**
-- ROS 模板编排对外、STS/角色、资源包与成本分析、SCECI(弹性容器实例)接入、多地域部署评估(P3 两地三中心,见《00-overview.md》§4.2)。
+**阶段三(T0+18 月起)**
+- ROS 模板编排对外、STS/角色、多地域部署评估(P3 两地三中心,见《00-overview.md》§4.2)。
 
 **每个新云产品接入的标准路径**(固化流程,防止架构腐化):
 `svc-catalog 注册三件套 → 实现 rc-* 控制器 → 定义计量项与配额 → svc-api-meta 登记 OpenAPI → 文档/SDK 自动产出 → 上架售卖`。

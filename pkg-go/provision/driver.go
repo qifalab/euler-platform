@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -73,6 +74,12 @@ const (
 // finalizer, deletion races the last usage report and the customer is either
 // over- or under-billed for their final minutes.
 const Finalizer = "products.cloud.platform/cleanup"
+
+// ReclaimNoticeWindow is the minimum advance notice before a preemptible
+// (spot) resource may be reclaimed (09-roadmap §4.2: "提前5分钟通知"). The
+// reclaim path blocks until this window has elapsed since the notice was
+// delivered — the platform cannot reclaim what it has not warned about.
+const ReclaimNoticeWindow = 5 * time.Minute
 
 // Mandatory CR labels (06§4.2). All four are required on every product CR:
 // without them a resource cannot be attributed to a tenant, which breaks
@@ -206,6 +213,8 @@ var (
 	ErrDriverNotReady  = errors.New("provision: driver not implemented")
 	ErrInvalidSpec     = errors.New("provision: invalid spec")
 	ErrUnknownDriver   = errors.New("provision: unknown driver type")
+	ErrNotPreemptible  = errors.New("provision: resource is not preemptible")
+	ErrNoticeNotDelivered = errors.New("provision: reclaim notice not yet delivered")
 )
 
 // Driver is the fulfilment backend abstraction (06§6.2).
@@ -226,6 +235,35 @@ type Driver interface {
 	Query(resourceID string) (Status, error)
 	// CollectUsage returns metering readings since the last collection.
 	CollectUsage(resourceID string) ([]UsagePoint, error)
+}
+
+// Preemptor is an optional Driver capability for backends that support the
+// 抢占式 (spot) reclaim path (09-roadmap §4.2, M-4.2). Not every product is
+// preemptible — only spot instances — so Preempt is a separate interface
+// rather than a Driver method, and callers type-assert.
+//
+// The reclaim is a two-step handshake, not a single call:
+//  1. NotifyReclaim delivers the 5-minute warning. The driver records the
+//     notice as delivered; the resource is NOT yet reclaimed.
+//  2. Reclaim performs the actual reclaim, but only after the notice window
+//     has elapsed. Reclaiming before the window is an error — the platform
+//     may not reclaim what it has not warned about.
+//
+// Both steps are idempotent: a redelivered notice is a no-op, and a repeated
+// reclaim against an already-reclaimed resource succeeds. This mirrors the
+// Delete contract so saga compensation stays safe.
+type Preemptor interface {
+	// NotifyReclaim delivers the 5-minute warning to the resource owner.
+	// Returns the instant the notice is considered delivered; a replay returns
+	// the original instant (idempotent).
+	NotifyReclaim(resourceID string, deliveredAt time.Time) (time.Time, error)
+	// Reclaim reclaims the resource after the notice window has elapsed.
+	// Returns ErrNoticeNotDelivered if no notice was sent, or if the window
+	// has not yet elapsed.
+	Reclaim(resourceID string, at time.Time) error
+	// ReclaimableAt returns the earliest instant the resource may be reclaimed
+	// (notice-delivered + 5m), or (_, false) if no notice has been delivered.
+	ReclaimableAt(resourceID string) (time.Time, bool)
 }
 
 // PhaseMapping translates a CR phase to the platform resource state
@@ -272,6 +310,7 @@ func ProposedState(phase Phase, currentState string) (string, bool) {
 // it alongside k8s and vm precisely so failure injection is available without
 // a cluster.
 type MockDriver struct {
+	mu        sync.RWMutex
 	resources map[string]*mockResource
 	now       func() time.Time
 	// FailApply, if set, makes Apply fail for matching resource ids —
@@ -286,10 +325,11 @@ type MockDriver struct {
 }
 
 type mockResource struct {
-	spec       Spec
-	status     Status
-	queryCount int
-	deleted    bool
+	spec              Spec
+	status            Status
+	queryCount        int
+	deleted           bool
+	noticeDeliveredAt time.Time // zero = no reclaim notice delivered
 }
 
 // NewMockDriver builds a MockDriver.
@@ -413,6 +453,57 @@ func (d *MockDriver) CollectUsage(resourceID string) ([]UsagePoint, error) {
 func (d *MockDriver) Exists(resourceID string) bool {
 	res, ok := d.resources[resourceID]
 	return ok && !res.deleted
+}
+
+// NotifyReclaim delivers the 5-minute warning to a spot resource. Idempotent:
+// a replay returns the original delivered instant rather than resetting the
+// clock — a customer must not lose notice time to a retried dispatch.
+func (d *MockDriver) NotifyReclaim(resourceID string, deliveredAt time.Time) (time.Time, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, ok := d.resources[resourceID]
+	if !ok || res.deleted {
+		return time.Time{}, ErrNotFound
+	}
+	if !res.noticeDeliveredAt.IsZero() {
+		return res.noticeDeliveredAt, nil // idempotent replay
+	}
+	res.noticeDeliveredAt = deliveredAt
+	return deliveredAt, nil
+}
+
+// ReclaimableAt returns the earliest reclaim instant (notice + 5m).
+func (d *MockDriver) ReclaimableAt(resourceID string) (time.Time, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	res, ok := d.resources[resourceID]
+	if !ok || res.deleted || res.noticeDeliveredAt.IsZero() {
+		return time.Time{}, false
+	}
+	return res.noticeDeliveredAt.Add(ReclaimNoticeWindow), true
+}
+
+// Reclaim performs the reclaim after the notice window has elapsed. Reclaiming
+// before the window, or without a prior notice, is an error — the platform
+// cannot reclaim what it has not warned about.
+func (d *MockDriver) Reclaim(resourceID string, at time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, ok := d.resources[resourceID]
+	if !ok || res.deleted {
+		return ErrNotFound
+	}
+	if res.noticeDeliveredAt.IsZero() {
+		return ErrNoticeNotDelivered
+	}
+	if at.Before(res.noticeDeliveredAt.Add(ReclaimNoticeWindow)) {
+		return ErrNoticeNotDelivered
+	}
+	res.status.Phase = PhaseDeleting
+	// The backing resource is reclaimed; Delete completes the finalizer work.
+	// Reclaim does NOT delete outright — the controller still runs the
+	// finalizer (final metering + cleanup) so the last usage is not lost.
+	return nil
 }
 
 // VMDriver is the phase-2 virtualization backend. The interface is frozen now

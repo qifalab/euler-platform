@@ -1,0 +1,272 @@
+# BackupPolicy CRD (06-kubernetes-productization.md §4.2)
+#
+# One cloud product = four artifacts (06§4.1):
+#   1. product definition (catalogue registration — svc-catalog, M-7.4)
+#   2. CRD              (this file — the desired-state model)
+#   3. Operator         (rc-backup — provision/operate engine, Go)
+#   4. metering point   (status.usage → cloud.metering.usage.raw)
+#
+# 云备份 SCBACKUP (M-7.4, 09-roadmap §4.3 M-7, P2): a scheduled-snapshot +
+# cross-AZ backup POLICY. The policy is REGIONAL (a backup policy is regional;
+# cross-AZ copy is a policy flag, not a placement constraint). POSTPAID by
+# stored capacity. Fulfilled by DriverK8s, bound in
+# provision.Registry.BindProduct("scbackup", DriverK8s).
+#
+# The policy is the INTENT layer; the actual snapshot creation and the
+# cross-AZ copy run inside the resource reconcile loop (06§4.1). Retention is
+# ENFORCED: every reconcile tick, the executor asks which snapshots are past
+# their retention window (pkg-go/backup.ExpiredSnapshots) and deletes them —
+# backup storage never grows unbounded.
+#
+# The four iron rules this schema enforces (same as sceci-instance-crd.yaml):
+#   * the CR is the only fact interface — no SSH, no reaching into internals
+#   * status is machine-readable: structured phase + conditions, never a log
+#   * the Operator is idempotent and re-entrant
+#   * no metering, no launch — status.usage is required, not optional
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backuppolicies.products.cloud.platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # CRDs before the Operator that uses them
+spec:
+  group: products.cloud.platform
+  scope: Namespaced
+  names:
+    kind: BackupPolicy
+    listKind: BackupPolicyList
+    plural: backuppolicies
+    singular: backuppolicy
+    shortNames: [scbackup]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Tenant
+          type: string
+          jsonPath: .metadata.labels['cloud\.platform/tenant']
+        - name: Target
+          type: string
+          jsonPath: .spec.params.targetResourceType
+        - name: Schedule
+          type: string
+          jsonPath: .spec.params.scheduleHours
+        - name: Retention
+          type: string
+          jsonPath: .spec.params.retentionDays
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [edition, params]
+              properties:
+                edition:
+                  type: string
+                  description: >
+                    Registered SKU edition (standard / crossaz). The crossaz
+                    tier sets params.crossAz on for the cross-AZ-copy intent.
+                  enum: [standard, general, crossaz]
+                params:
+                  type: object
+                  description: Backup policy parameters.
+                  required: [targetResourceType, scheduleHours, retentionDays]
+                  properties:
+                    targetResourceType:
+                      type: string
+                      description: >
+                        What the policy backs up (instance / dbinstance / disk).
+                        A policy with no target backs up nothing.
+                    scheduleHours:
+                      type: integer
+                      minimum: 1
+                      maximum: 720
+                      description: >
+                        Interval BETWEEN backups in hours, not a cron expression.
+                        A simpler contract covering the common "back up every N
+                        hours" case without a cron-parser dependency.
+                    retentionDays:
+                      type: integer
+                      minimum: 0
+                      maximum: 3650
+                      description: >
+                        How long snapshots are kept. 0 = retain forever (a config
+                        smell, not a crash). Positive retention is ENFORCED: a
+                        snapshot past its keep-by is deleted every reconcile tick.
+                    crossAz:
+                      type: boolean
+                      default: false
+                      description: >
+                        Cross-AZ-copy intent flag. When true the executor copies
+                        each snapshot to a second AZ (the copy is the executor's
+                        job; the policy carries the intent — model先行). The
+                        crossaz edition sets this on.
+                    vpcId:
+                      type: string
+                      description: SCVPC network boundary (decision R-02).
+                suspend:
+                  type: boolean
+                  default: false
+                  description: >
+                    Arrears freeze. The Operator stops taking new backups but
+                    NEVER deletes existing snapshots — a suspended policy must
+                    resume intact when the customer pays (01§5.4 D8). Existing
+                    snapshots remain queryable and expire on their own retention.
+                region:
+                  type: string
+                  pattern: '^(cn|ap|us|eu)-[a-z]+-[0-9]+$'
+                  description: REGIONAL product (M-6, 00§4.4) — no zone field.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: >
+                    Observed state. This is EVIDENCE, not authority: the
+                    platform's resource_instance.status is the source of truth
+                    (adjudication S21). svc-orchestrator maps this phase onto a
+                    proposed transition and validates it against its own state
+                    machine.
+                  enum: [Pending, Provisioning, Ready, Modifying, Suspended, Failed, Deleting]
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: >
+                    The spec generation this status reflects. A status whose
+                    observedGeneration lags metadata.generation describes the
+                    OLD spec.
+                conditions:
+                  type: array
+                  description: >
+                    Structured conditions. Consumers key on type/status/reason,
+                    never on message — parsing a human string to decide whether
+                    a customer is billed breaks on the first wording change.
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        enum: [Provisioned, BackupReady, RetentionEnforced, Degraded]
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+                usage:
+                  type: array
+                  description: >
+                    Metering readings, a FIRST-CLASS status field (06§4.1 rule
+                    4). A product that cannot report usage cannot be launched.
+                    These are published to cloud.metering.usage.raw. SCBACKUP is
+                    billed by stored backup capacity (gb_hour) and snapshot count.
+                  items:
+                    type: object
+                    required: [meteringItem, quantity, windowStart, windowSeconds]
+                    properties:
+                      meteringItem:
+                        type: string
+                        description: Must be registered in metering_catalog before launch.
+                        enum: [backup_storage_gb_hour, snapshot_count]
+                      quantity:
+                        type: string
+                        description: >
+                          Decimal STRING, never a float. Float accumulation
+                          across millions of hourly rows drifts, and a drifting
+                          quantity produces a bill nobody can reconcile.
+                        pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+                      windowStart: { type: string, format: date-time }
+                      windowSeconds: { type: integer, minimum: 1, maximum: 3600 }
+                lastBackupAt:
+                  type: string
+                  format: date-time
+                  description: >
+                    The instant of the most recent successful backup. The
+                    reconcile loop reads this to decide whether the next backup
+                    is due (pkg-go/backup.IsDue). A zero value means never backed
+                    up — the first reconcile runs immediately.
+                endpoints:
+                  type: array
+                  items: { type: string }
+                message:
+                  type: string
+                  description: Human-facing detail only; never parsed by consumers.
+---
+# Example CR, showing the mandatory labels and the finalizer.
+#
+# The object name is the platform resource id verbatim (06§4.2), so a cluster
+# operator and a support engineer reading a bill are looking at the same string.
+apiVersion: products.cloud.platform/v1
+kind: BackupPolicy
+metadata:
+  name: scbackup-cn-north-1-01-3f4a5b6c
+  namespace: plat-backup
+  labels:
+    # All four are mandatory. Without them a cluster object cannot be
+    # attributed to a tenant, which breaks isolation, billing and audit at once.
+    cloud.platform/tenant: "100123"
+    cloud.platform/project: "1"
+    cloud.platform/product: scbackup
+    cloud.platform/instance: scbackup-cn-north-1-01-3f4a5b6c
+  finalizers:
+    # The Operator pushes a FINAL metering reading before removing this. "CR
+    # truly gone" is the release-complete signal; without the finalizer, deletion
+    # races the last usage report and the customer is mis-billed for the tail.
+    - products.cloud.platform/cleanup
+spec:
+  edition: standard
+  region: cn-north-1
+  suspend: false
+  params:
+    targetResourceType: instance
+    scheduleHours: 24
+    retentionDays: 30
+    crossAz: false
+    vpcId: scvpc-cn-north-1-01-11223344
+status:
+  phase: Ready
+  observedGeneration: 1
+  conditions:
+    - type: BackupReady
+      status: "True"
+      reason: PolicyActive
+      message: backup policy active, snapshots taken on schedule
+      lastTransitionTime: "2026-08-16T03:04:09Z"
+    - type: RetentionEnforced
+      status: "True"
+      reason: ExpiredPruned
+      message: snapshots past retention window pruned
+      lastTransitionTime: "2026-08-16T03:04:09Z"
+    - type: Provisioned
+      status: "True"
+      reason: Ready
+      message: backup policy is active
+      lastTransitionTime: "2026-08-16T03:04:09Z"
+  # HOURLY metering: stored backup capacity in gb_hour, plus snapshot count.
+  usage:
+    - meteringItem: backup_storage_gb_hour
+      quantity: "50"
+      windowStart: "2026-08-16T03:05:00Z"
+      windowSeconds: 3600
+    - meteringItem: snapshot_count
+      quantity: "3"
+      windowStart: "2026-08-16T03:05:00Z"
+      windowSeconds: 3600
+  lastBackupAt: "2026-08-16T03:05:00Z"
+  endpoints: []

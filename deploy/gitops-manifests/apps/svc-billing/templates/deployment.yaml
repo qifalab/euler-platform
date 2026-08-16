@@ -35,6 +35,20 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: {{ .Chart.Name }}
+        # Zone-level spread (M-6, 00§4.4 P2): in prod/staging the env override
+        # sets .Values.topology.zoneSpread to true, adding a hard constraint
+        # that replicas also spread across AZs (maxSkew:1, DoNotSchedule). A
+        # stateless service concentrated in one AZ is the exact failure the P2
+        # contract forbids — losing that AZ should not take the service down.
+        # The policy is defined once in pkg-go/topology.FaultDomainSpread.
+        {{- if .Values.topology.zoneSpread }}
+        - maxSkew: {{ .Values.topology.maxSkew | default 1 }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.topology.whenUnsatisfiable | default "DoNotSchedule" }}
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Chart.Name }}
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
