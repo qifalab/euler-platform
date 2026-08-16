@@ -45,9 +45,9 @@ type Policy struct {
 // Statement is a single policy rule. Action and Resource accept either a JSON
 // string or an array of strings, which is why they use flexList.
 type Statement struct {
-	Effect    Effect                       `json:"Effect"`
-	Action    flexList                     `json:"Action"`
-	Resource  flexList                     `json:"Resource"`
+	Effect    Effect                         `json:"Effect"`
+	Action    flexList                       `json:"Action"`
+	Resource  flexList                       `json:"Resource"`
 	Condition map[string]map[string]flexList `json:"Condition,omitempty"`
 }
 
@@ -128,7 +128,7 @@ type Decision struct {
 // policies + custom policies attached directly, via groups, and via the
 // assumed role. Order does not matter — Deny always wins.
 func Evaluate(policies []Policy, req Request) Decision {
-	matchedAllow := -1
+	matchedAllowPolicy, matchedAllowStmt := -1, -1
 
 	for pi, p := range policies {
 		for si, st := range p.Statement {
@@ -138,7 +138,7 @@ func Evaluate(policies []Policy, req Request) Decision {
 			if !matchResource(st.Resource, req.Resource) {
 				continue
 			}
-			if !matchConditions(st.Condition, req.Context) {
+			if !matchConditions(st.Condition, req.Context, st.Effect) {
 				continue
 			}
 			if st.Effect == EffectDeny {
@@ -149,15 +149,15 @@ func Evaluate(policies []Policy, req Request) Decision {
 					MatchedStatement: si,
 				}
 			}
-			if matchedAllow < 0 {
-				matchedAllow = si
+			if matchedAllowStmt < 0 {
+				matchedAllowPolicy, matchedAllowStmt = pi, si
 			}
 		}
 	}
 
-	if matchedAllow >= 0 {
+	if matchedAllowStmt >= 0 {
 		// Rule 3: matching Allow, no Deny.
-		return Decision{Allow: true, DecisionNumber: decisionNumber(0, matchedAllow, true), MatchedStatement: matchedAllow}
+		return Decision{Allow: true, DecisionNumber: decisionNumber(matchedAllowPolicy, matchedAllowStmt, true), MatchedStatement: matchedAllowStmt}
 	}
 	// Rule 1: default Deny.
 	return Decision{Allow: false, DecisionNumber: "D-default-deny", MatchedStatement: -1}
@@ -203,12 +203,16 @@ func matchResource(patterns flexList, resource string) bool {
 // arnMatch compares two ARNs segment by segment (5 segments:
 // sc:{service}:{region}:{account_id}:{relative-resource}). The relative
 // resource may itself contain "/" and wildcards; it is matched as a whole.
+//
+// A pattern or target with fewer than 5 segments does NOT match. Falling back
+// to a whole-string wildcard compare here would let a truncated pattern such
+// as "sc:iam:*" glob across the account-id segment — a cross-account grant the
+// author never wrote.
 func arnMatch(pattern, target string) bool {
 	pParts := strings.SplitN(pattern, ":", 5)
 	tParts := strings.SplitN(target, ":", 5)
 	if len(pParts) != 5 || len(tParts) != 5 {
-		// Not a well-formed ARN pair; fall back to a plain wildcard compare.
-		return wildcardMatch(pattern, target)
+		return false
 	}
 	for i := 0; i < 5; i++ {
 		if !wildcardMatch(pParts[i], tParts[i]) {
@@ -223,9 +227,9 @@ func arnMatch(pattern, target string) bool {
 // does not blow the stack on adversarial patterns.
 func wildcardMatch(pattern, s string) bool {
 	var (
-		pi, si         int
-		starIdx        = -1
-		matchIdx       int
+		pi, si   int
+		starIdx  = -1
+		matchIdx int
 	)
 	for si < len(s) {
 		switch {
@@ -256,11 +260,22 @@ func wildcardMatch(pattern, s string) bool {
 //
 // Phase-1 operators (07§3.3): StringEquals, StringNotEquals, IpAddress,
 // NotIpAddress, DateGreaterThan, DateLessThan, Bool.
-func matchConditions(cond map[string]map[string]flexList, ctx map[string]string) bool {
+//
+// An operator this engine does not implement makes the condition UNDECIDABLE,
+// and the two effects must fail in opposite directions: an Allow with an
+// undecidable condition must not grant (fail closed), while a Deny with an
+// undecidable condition must still deny — treating it as "not matched" would
+// silently switch the Deny off, which is fail-open on the guard rail.
+func matchConditions(cond map[string]map[string]flexList, ctx map[string]string, effect Effect) bool {
 	if len(cond) == 0 {
 		return true
 	}
 	for op, kv := range cond {
+		if !knownConditionOp(op) {
+			// Undecidable: Deny statements match (deny wins on doubt);
+			// Allow statements do not (never grant on doubt).
+			return effect == EffectDeny
+		}
 		for key, wantVals := range kv {
 			gotVal, present := ctx[key]
 			if !evalCondition(op, gotVal, present, wantVals) {
@@ -269,6 +284,16 @@ func matchConditions(cond map[string]map[string]flexList, ctx map[string]string)
 		}
 	}
 	return true
+}
+
+// knownConditionOp reports whether the engine implements the operator.
+func knownConditionOp(op string) bool {
+	switch op {
+	case "StringEquals", "StringNotEquals", "IpAddress", "NotIpAddress",
+		"DateGreaterThan", "DateLessThan", "Bool":
+		return true
+	}
+	return false
 }
 
 func evalCondition(op, got string, present bool, want flexList) bool {
@@ -332,8 +357,8 @@ func evalCondition(op, got string, present bool, want flexList) bool {
 		return false
 
 	default:
-		// Unknown operator: fail closed. A policy using an operator this
-		// engine does not implement must never silently grant access.
+		// Unreachable via matchConditions (unknown operators are handled
+		// there); kept as a fail-closed backstop for direct callers.
 		return false
 	}
 }

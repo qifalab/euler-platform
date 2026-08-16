@@ -166,6 +166,11 @@ type Engine struct {
 	// OnStep is called after each step attempt, for persistence and tracing.
 	// The production engine writes step_instance rows here.
 	OnStep func(flowInstanceID int64, rec StepRecord)
+	// Sleep is called between retry attempts with the Backoff delay, so a
+	// failing downstream is not hammered in a tight loop. Injectable so tests
+	// (and callers embedding the engine in a scheduler) do not really sleep;
+	// nil defaults to time.Sleep.
+	Sleep func(time.Duration)
 }
 
 // NewEngine builds an Engine.
@@ -173,7 +178,16 @@ func NewEngine(now func() time.Time) *Engine {
 	if now == nil {
 		now = time.Now
 	}
-	return &Engine{Now: now}
+	return &Engine{Now: now, Sleep: time.Sleep}
+}
+
+// sleep waits the backoff delay before retry attempt `nextAttempt`.
+func (e *Engine) sleep(prevAttempt int) {
+	s := e.Sleep
+	if s == nil {
+		s = time.Sleep
+	}
+	s(Backoff(prevAttempt))
 }
 
 // Run executes the steps in order. On failure it compensates the completed
@@ -206,6 +220,9 @@ func (e *Engine) Run(flowInstanceID int64, ctx *Context, steps []Step) Result {
 
 		var lastErr error
 		for attempt := 1; attempt <= MaxStepAttempts; attempt++ {
+			if attempt > 1 {
+				e.sleep(attempt - 1) // exponential backoff between retries
+			}
 			ctx.Attempt = attempt
 			rec.Attempt = attempt
 			lastErr = step.Do(ctx)
@@ -262,6 +279,9 @@ func (e *Engine) compensate(
 
 		var lastErr error
 		for attempt := 1; attempt <= MaxCompensationAttempts; attempt++ {
+			if attempt > 1 {
+				e.sleep(attempt - 1) // exponential backoff between retries
+			}
 			ctx.Attempt = attempt
 			lastErr = step.Undo(ctx)
 			if lastErr == nil {
@@ -278,6 +298,9 @@ func (e *Engine) compensate(
 					ErrCompensation, step.Name, MaxCompensationAttempts, lastErr))
 			records[idx].Status = StepFailed
 			records[idx].Error = lastErr.Error()
+			// The failure must land in step_instance too: an unemitted failed
+			// compensation is invisible to the operator who has to fix it.
+			e.emit(flowInstanceID, records[idx])
 			continue
 		}
 		records[idx].Status = StepCompensated

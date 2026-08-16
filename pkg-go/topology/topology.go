@@ -180,15 +180,18 @@ type Placement struct {
 	Total int
 }
 
-// SurvivesAZLoss answers the P2 contract: does this placement tolerate the loss
-// of any single AZ (00§4.4 point 3)?
+// SurvivesAZLoss answers the P2 contract for a NON-quorum replica set: does
+// this placement keep at least one live replica after the loss of any single
+// AZ (00§4.4 point 3)?
 //
-// For a multi-replica stateful set (MySQL MGR, Kafka brokers, Redis shards),
-// surviving one AZ lost means *every* AZ has a strict minority at risk: removing
-// any one zone's replicas must still leave a quorum. For N zones and R replicas,
-// the safe bound is that no single zone holds >= R/2 when R is even (a majority
-// survives), or > floor(R/2) when odd. We compute it directly: for each zone,
-// the replicas remaining after its loss must still exceed the replicas lost.
+// Non-quorum semantics: stateless replicas, Kafka partitions with
+// unclean-leader disabled off the table, Redis read replicas — anything where
+// "service survives" means "≥1 replica remains", not "a majority remains".
+// Quorum systems (MySQL MGR and anything Raft/Paxos-shaped) need strictly more
+// than half the members alive and must use SurvivesAZLossMGR instead; the two
+// contracts are different and conflating them either over-rejects harmless
+// placements (a 2-of-2 spread is fine for a stateless pair) or under-protects
+// quorum ones.
 //
 // The one-replica case never survives (losing that AZ loses everything); a
 // placement concentrated entirely in one AZ never survives. Both are the
@@ -197,19 +200,18 @@ func (p Placement) SurvivesAZLoss() bool {
 	if p.Total < 2 || len(p.ByZone) == 0 {
 		return false
 	}
+	zonesWithReplicas := 0
 	for _, here := range p.ByZone {
-		remaining := p.Total - here
-		// remaining must strictly exceed here: a tie (e.g. 2-and-2 with total 4)
-		// does NOT survive, because losing one side leaves exactly half, and
-		// MGR's majority needs strictly-more-than-half. This is the off-by-one
-		// that matters: 3-across-2-zones as (2,1) survives (lose the 2 → 1
-		// remains, 1 > 0? no — 1 is not > 1). See SurvivesAZLossMGR for the
-		// MGR-specific majority rule; this generic form uses strict majority.
-		if remaining <= here {
+		if here > 0 {
+			zonesWithReplicas++
+		}
+		if p.Total-here < 1 {
+			// Losing this zone loses every replica.
 			return false
 		}
 	}
-	return true
+	// All replicas in one zone (possibly with empty zones listed) never survives.
+	return zonesWithReplicas >= 2
 }
 
 // SurvivesAZLossMGR answers the MySQL MGR single-primary contract specifically
@@ -218,15 +220,12 @@ func (p Placement) SurvivesAZLoss() bool {
 // one AZ must leave a majority of members reachable, i.e. the surviving
 // replicas must be > floor(total/2).
 //
-// The canonical P2 shape is 1 primary + 2 secondaries spread 1-per-zone across
-// 2 zones? No — across 2 zones the MGR group is 3 nodes placed as (2,1): losing
-// the 2-node zone leaves 1, which is not a majority of 3 (needs 2), so a
-// 2-zone, 3-node MGR group does NOT survive losing the heavier zone. The safe
-// MGR shape across 2 zones is (1,2) is the same hazard; the genuinely-safe
-// minimum is 3 nodes across 2 zones placed (1,2) only survives loss of the
-// 1-node zone. To survive EITHER zone, MGR needs >=3 nodes with no zone holding
-// a majority — which across 2 zones means each zone holds at most floor((n-1)/2),
-// i.e. the larger zone is at most a minority. This function encodes that.
+// NOTE — dual-AZ is mathematically insufficient for MGR: with only two zones,
+// one zone always holds at least half the members, so losing it can never
+// leave a strict majority; this function correctly returns false for every
+// two-zone placement. That is not a bug to relax — surviving either AZ's loss
+// with quorum intact requires a third fault domain (a witness/arbiter AZ or a
+// P3 remote region) holding at least one member.
 func (p Placement) SurvivesAZLossMGR() bool {
 	if p.Total < 3 || len(p.ByZone) == 0 {
 		return false
@@ -281,6 +280,10 @@ func (t Topology) Distribute(replicas int) (Placement, error) {
 // cannot satisfy survival must be rejected at order time, not discovered at
 // the moment an AZ actually fails (which is the worst time to learn a
 // placement is not fault-tolerant).
+//
+// With mgr=true the quorum rule applies, and on a dual-AZ topology this is
+// ALWAYS false regardless of replica count (see SurvivesAZLossMGR): MGR needs
+// a third arbitration point before its AZ-loss contract can be satisfied.
 func (t Topology) CanSatisfy(replicas int, mgr bool) bool {
 	p, err := t.Distribute(replicas)
 	if err != nil {
@@ -315,11 +318,11 @@ func FaultDomainSpread(selectorLabels map[string]string) map[string]any {
 // distribution, whether it survives a generic AZ loss, and the zones that are
 // the single point of failure (the at-risk zones a drill should target).
 type PlacementReport struct {
-	Replicas      int
-	Distribution  map[string]int
-	Survives      bool
-	SurvivesMGR   bool
-	AtRiskZones   []string // zones whose loss breaks the contract
+	Replicas     int
+	Distribution map[string]int
+	Survives     bool
+	SurvivesMGR  bool
+	AtRiskZones  []string // zones whose loss breaks the contract
 }
 
 // Report builds the human/machine-readable survival report for a placement.
@@ -332,7 +335,7 @@ func (p Placement) Report(mgr bool) PlacementReport {
 	threshold := p.Total / 2
 	for zone, here := range p.ByZone {
 		remaining := p.Total - here
-		broken := remaining <= here // generic contract
+		broken := remaining < 1 // generic (non-quorum) contract: ≥1 must remain
 		if mgr {
 			broken = remaining <= threshold
 		}

@@ -1,0 +1,24 @@
+# Kustomize entry for the APISIX gateway stack.
+#
+# The apisix-config and apisix-sc-plugins ConfigMaps are GENERATED from the
+# real source files (config/config.yaml, plugins/*.lua) so the mounted config
+# can never drift from the reviewed sources. Name-suffix hashing is disabled
+# because the Deployments reference the ConfigMaps by fixed name.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mw-gateway
+resources:
+  - apisix-deployment.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+configMapGenerator:
+  - name: apisix-config
+    files:
+      - config.yaml=config/config.yaml
+  - name: apisix-sc-plugins
+    files:
+      - sc-auth.lua=plugins/sc-auth.lua
+      - sc-authorize.lua=plugins/sc-authorize.lua
+      - sc-audit.lua=plugins/sc-audit.lua

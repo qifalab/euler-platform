@@ -12,13 +12,14 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAccountAuth();
 
-const email = ref("admin@starcloud.cn");
+const email = ref("");
 const password = ref("");
 const loading = ref(false);
 const error = ref<string | null>(null);
 
-// Dev hint: the seeded account in svc-iam (real argon2id in prod, 02§2.4).
-const DEV_SEED_HINT = "开发账号:admin@starcloud.cn / starcloud123";
+// Dev hint: never render real credentials — the seeded dev account lives in
+// the project docs (02§2.4 / 部署文档), not in the page source.
+const DEV_SEED_HINT = "开发环境测试账号请查阅项目部署文档";
 
 async function onSubmit() {
   error.value = null;

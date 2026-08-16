@@ -239,7 +239,9 @@ spec:
     cloud.platform/shard: "1"
   ports:
     - port: 6379
+      name: client
     - port: 16379
+      name: bus
 ---
 # Shard 2 — same shape, shard label "2".
 apiVersion: apps/v1
@@ -330,4 +332,6 @@ spec:
     cloud.platform/shard: "2"
   ports:
     - port: 6379
+      name: client
     - port: 16379
+      name: bus

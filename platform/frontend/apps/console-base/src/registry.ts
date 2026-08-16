@@ -104,9 +104,18 @@ export const useRegistry = defineStore("registry", {
       const seg = "/" + (path.split("/").filter(Boolean)[0] ?? "");
       return this.apps.find((a) => a.activeRules.includes(seg));
     },
+    /**
+     * Real productCode for the path (RAM action prefix, e.g. "scecs").
+     * Maps the matched activeRule to the productCode at the same index; the
+     * previous version returned the activeRule itself ("/scecs"), which broke
+     * `${productCode}:Read` permission strings.
+     */
     productCodeOf(path: string): string | undefined {
       const seg = "/" + (path.split("/").filter(Boolean)[0] ?? "");
-      return this.resolve(path)?.activeRules.find((r) => r === seg);
+      const app = this.resolve(path);
+      if (!app) return undefined;
+      const idx = app.activeRules.indexOf(seg);
+      return (idx >= 0 ? app.productCodes[idx] : undefined) ?? app.productCodes[0];
     },
   },
 });

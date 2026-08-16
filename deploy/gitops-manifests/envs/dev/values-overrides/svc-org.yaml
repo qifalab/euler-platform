@@ -1,0 +1,5 @@
+# dev overrides for svc-org (values merge on top of the chart defaults).
+image:
+  tag: latest
+  pullPolicy: Always   # mutable dev tag => always re-pull
+replicas: 1

@@ -63,7 +63,8 @@ func recoverMiddleware(next http.Handler) http.Handler {
 					"recover", rec,
 					"stack", string(debug.Stack()),
 				)
-				http.Error(w, `{"RequestId":"`+r.Context().Value(requestIDKey).(string)+`","Code":"Common.InternalError","Message":"internal error"}`, http.StatusInternalServerError)
+				rid, _ := r.Context().Value(requestIDKey).(string)
+				http.Error(w, `{"RequestId":"`+rid+`","Code":"Common.InternalError","Message":"internal error"}`, http.StatusInternalServerError)
 			}
 		}()
 		next.ServeHTTP(w, r)

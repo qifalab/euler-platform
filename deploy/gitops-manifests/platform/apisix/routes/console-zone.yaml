@@ -28,8 +28,11 @@ routes:
     uris:
       - /api/auth/*
     upstream:
-      service_name: auth-console-bff@@auth-console-bff
-      discovery_type: nacos
+      # Real cluster Service: the auth endpoints are served by svc-iam's
+      # web-auth server (services/svc-iam/cmd/web-auth, listens :9101),
+      # deployed by the ApplicationSet into namespace starcloud-svc-iam.
+      nodes:
+        "svc-iam.starcloud-svc-iam.svc:9101": 1
       type: roundrobin
       timeout: { connect: 2, send: 5, read: 5 }
     plugins:
@@ -42,7 +45,7 @@ routes:
         key_type: var
         key: remote_addr
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
         rejected_code: 429
         rejected_msg: '{"Code":"Common.Throttling","Message":"too many attempts"}'
@@ -56,7 +59,7 @@ routes:
             x-requested-with:
               type: string
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
   # Account / RAM / AK management
@@ -67,8 +70,9 @@ routes:
     uris:
       - /api/account/*
     upstream:
-      service_name: svc-iam@@svc-iam
-      discovery_type: nacos
+      # Real cluster Service (namespace from the ApplicationSet: starcloud-svc-iam).
+      nodes:
+        "svc-iam.starcloud-svc-iam.svc:9101": 1
       type: roundrobin
     plugins:
       limit-count:
@@ -77,20 +81,20 @@ routes:
         key_type: var
         key: http_x_sc_uid
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
         rejected_code: 429
       sc-auth:
         mode: jwt
         # Public key is injected from Nacos config; rotation by kid.
-        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
       sc-authorize:
-        check_access_endpoint: http://svc-iam.business.svc/internal/authz/check
+        check_access_endpoint: http://svc-iam.starcloud-svc-iam.svc:9101/internal/authz/check
         action_from_query: Action
         action_prefix: sciam
         region: cn-north-1
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
   # Trade: orders, billing, fee centre — aggregated by console-bff
@@ -101,8 +105,10 @@ routes:
     uris:
       - /api/trade/*
     upstream:
-      service_name: console-bff@@console-bff
-      discovery_type: nacos
+      # Real cluster Service (console-bff listens :9200; namespace from the
+      # ApplicationSet: starcloud-console-bff).
+      nodes:
+        "console-bff.starcloud-console-bff.svc:9200": 1
       type: roundrobin
     plugins:
       limit-count:
@@ -111,18 +117,18 @@ routes:
         key_type: var
         key: http_x_sc_uid
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
         rejected_code: 429
       sc-auth:
         mode: jwt
-        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
       sc-authorize:
         action_from_query: Action
         action_prefix: sctrade
         region: cn-north-1
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
   # Resource list / lifecycle — aggregated by console-bff
@@ -133,8 +139,10 @@ routes:
     uris:
       - /api/resource/*
     upstream:
-      service_name: console-bff@@console-bff
-      discovery_type: nacos
+      # Real cluster Service (console-bff listens :9200; namespace from the
+      # ApplicationSet: starcloud-console-bff).
+      nodes:
+        "console-bff.starcloud-console-bff.svc:9200": 1
       type: roundrobin
     plugins:
       limit-count:
@@ -143,18 +151,18 @@ routes:
         key_type: var
         key: http_x_sc_uid
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
         rejected_code: 429
       sc-auth:
         mode: jwt
-        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
       sc-authorize:
         action_from_query: Action
         action_prefix: scres
         region: cn-north-1
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
   # Per-product console backends: /api/{productCode}/**
@@ -166,8 +174,10 @@ routes:
     uris:
       - /api/scecs/*
     upstream:
-      service_name: svc-scecs@@svc-scecs
-      discovery_type: nacos
+      # No standalone svc-scecs exists yet; the console product plane is
+      # aggregated by console-bff (real fan-out to catalog/order/orchestrator).
+      nodes:
+        "console-bff.starcloud-console-bff.svc:9200": 1
       type: roundrobin
     plugins:
       limit-count:
@@ -176,12 +186,12 @@ routes:
         key_type: var
         key: http_x_sc_uid
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
         rejected_code: 429
       sc-auth:
         mode: jwt
-        jwt_public_key: "${SC_JWT_PUBLIC_KEY}"
+        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
       sc-authorize:
         action_from_query: Action
         action_prefix: scecs
@@ -190,7 +200,7 @@ routes:
         # rather than relying solely on the service-layer owner check (07§3.4).
         resource_arn_template: "sc:ecs:$region:$account_id:instance/$arg_InstanceId"
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
 global_rules:
   - id: console-global

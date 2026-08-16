@@ -269,6 +269,7 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req quoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")

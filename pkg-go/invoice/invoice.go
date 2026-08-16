@@ -25,6 +25,7 @@ package invoice
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -61,11 +62,11 @@ type Invoice struct {
 	TaxNo      string // 纳税人识别号
 	// Amount is the total (sum of items), always non-negative. A 红冲 invoice
 	// carries the negative of the original as its amount.
-	Amount    pricing.Amount
-	Items     []LineItem
-	Status    Status
-	IssuedAt  time.Time
-	VoidedAt  time.Time
+	Amount   pricing.Amount
+	Items    []LineItem
+	Status   Status
+	IssuedAt time.Time
+	VoidedAt time.Time
 	// VoidedByID links to the 红冲 invoice that reversed this one; empty on a
 	// live or un-voided invoice.
 	VoidedByID string
@@ -76,9 +77,10 @@ type Invoice struct {
 
 // Errors.
 var (
-	ErrInvoiceNotFound   = errors.New("invoice: invoice not found")
-	ErrInvoiceNotDraft   = errors.New("invoice: only a DRAFT invoice may be issued")
-	ErrInvoiceTerminal   = errors.New("invoice: invoice is in a terminal state")
+	ErrInvoiceNotFound    = errors.New("invoice: invoice not found")
+	ErrInvoiceNotDraft    = errors.New("invoice: only a DRAFT invoice may be issued")
+	ErrInvoiceExists      = errors.New("invoice: invoice id already used by a non-draft invoice")
+	ErrInvoiceTerminal    = errors.New("invoice: invoice is in a terminal state")
 	ErrInvoiceAlreadyVoid = errors.New("invoice: invoice already voided")
 	ErrVoidAmountMismatch = errors.New("invoice: 红冲 amount must equal the original")
 	ErrEmptyTitle         = errors.New("invoice: title (发票抬头) required")
@@ -107,7 +109,9 @@ func NewBook(now func() time.Time, nextSeq func() string) *Book {
 }
 
 // Draft creates a DRAFT invoice from a bill period's settled charges. The
-// amount is summed from items; draft may be amended before Issue.
+// amount is summed from items; draft may be amended before Issue — but an id
+// already held by an ISSUED or VOIDED invoice may not be reused: overwriting
+// it would silently pull an immutable tax document back to an editable draft.
 func (b *Book) Draft(invoiceID string, accountID int64, billPeriod, title, taxNo string, items []LineItem) (Invoice, error) {
 	if title == "" {
 		return Invoice{}, ErrEmptyTitle
@@ -115,8 +119,12 @@ func (b *Book) Draft(invoiceID string, accountID int64, billPeriod, title, taxNo
 	if len(items) == 0 {
 		return Invoice{}, ErrEmptyItems
 	}
+	// Deep-copy the items so a caller mutating its slice after Draft cannot
+	// change what the ledger holds.
+	own := make([]LineItem, len(items))
+	copy(own, items)
 	var total pricing.Amount
-	for _, it := range items {
+	for _, it := range own {
 		total = total.Add(it.Amount)
 	}
 	inv := Invoice{
@@ -126,11 +134,14 @@ func (b *Book) Draft(invoiceID string, accountID int64, billPeriod, title, taxNo
 		Title:      title,
 		TaxNo:      taxNo,
 		Amount:     total,
-		Items:      items,
+		Items:      own,
 		Status:     StatusDraft,
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if existing, ok := b.invoices[invoiceID]; ok && existing.Status != StatusDraft {
+		return Invoice{}, fmt.Errorf("%w: %s is %s", ErrInvoiceExists, invoiceID, existing.Status)
+	}
 	b.invoices[invoiceID] = inv
 	return inv, nil
 }
@@ -217,6 +228,8 @@ func (b *Book) Get(invoiceID string) (Invoice, bool) {
 }
 
 // ListByAccount returns all invoices for an account, oldest issue first.
+// Drafts (not yet issued) sort after every issued invoice; ties break on
+// invoice id so the order is deterministic.
 func (b *Book) ListByAccount(accountID int64) []Invoice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -226,5 +239,20 @@ func (b *Book) ListByAccount(accountID int64) []Invoice {
 			out = append(out, inv)
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ti, tj := out[i].IssuedAt, out[j].IssuedAt
+		switch {
+		case ti.IsZero() && tj.IsZero():
+			return out[i].InvoiceID < out[j].InvoiceID
+		case ti.IsZero():
+			return false
+		case tj.IsZero():
+			return true
+		case ti.Equal(tj):
+			return out[i].InvoiceID < out[j].InvoiceID
+		default:
+			return ti.Before(tj)
+		}
+	})
 	return out
 }

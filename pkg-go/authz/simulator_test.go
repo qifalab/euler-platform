@@ -110,20 +110,32 @@ func TestSimulateWildcardActionMatchesAny(t *testing.T) {
 }
 
 func TestSimulateWildcardResourcePrefix(t *testing.T) {
-	// ecs:* as a resource — the engine's ARN matcher splits on ':', so a bare
-	// "ecs:*" is not a 5-segment ARN and falls back to wildcardMatch, where
-	// "ecs:*" matches "ecs:instance/i-123" by prefix. This confirms the
-	// simulator's resource matching is the engine's, not a re-implementation.
+	// ecs:* as a resource is NOT a 5-segment ARN. The engine deliberately does
+	// not fall back to a whole-string prefix match for short patterns: a
+	// truncated pattern would glob across the account-id segment and grant
+	// cross-account access. Short patterns therefore match nothing.
 	p := simPolicy(t, "EcsScoped", `{
       "Version":"1","Statement":[{"Effect":"Allow","Action":"scecs:*","Resource":"ecs:*"}]
     }`)
 	v := Simulate([]NamedPolicy{p}, "frank", "scecs:StartInstance", "ecs:instance/i-123")
-	if !v.Allowed {
-		t.Fatalf("resource ecs:* should prefix-match ecs:instance/i-123: %+v", v)
+	if v.Allowed {
+		t.Fatalf("truncated resource pattern ecs:* must not match anything: %+v", v)
 	}
 	v2 := Simulate([]NamedPolicy{p}, "frank", "scecs:StartInstance", "oss:bucket/x")
 	if v2.Allowed {
 		t.Fatal("resource ecs:* must not match oss:bucket/x")
+	}
+	// A full 5-segment pattern still wildcards within its own account.
+	p2 := simPolicy(t, "ArnScoped", `{
+      "Version":"1","Statement":[{"Effect":"Allow","Action":"scecs:*","Resource":"sc:ecs:*:100:instance/*"}]
+    }`)
+	v3 := Simulate([]NamedPolicy{p2}, "frank", "scecs:StartInstance", "sc:ecs:cn-north-1:100:instance/i-123")
+	if !v3.Allowed {
+		t.Fatalf("full ARN pattern should match same-account resource: %+v", v3)
+	}
+	v4 := Simulate([]NamedPolicy{p2}, "frank", "scecs:StartInstance", "sc:ecs:cn-north-1:200:instance/i-123")
+	if v4.Allowed {
+		t.Fatal("full ARN pattern must not match another account's resource")
 	}
 }
 

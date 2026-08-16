@@ -17,6 +17,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -133,8 +134,26 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	// TRUST BOUNDARY: this is an internal endpoint reached only via APISIX
+	// forward-auth; the network layer must not expose it publicly. The
+	// identity headers it returns (X-Sc-Account-Id, ...) are injected by the
+	// gateway upstream and trusted by backend services solely because the
+	// gateway strips any client-supplied copies. Optionally, setting
+	// SC_INTERNAL_TOKEN requires the gateway to present the shared secret in
+	// X-Sc-Internal-Token (dev default: disabled).
+	if want := os.Getenv("SC_INTERNAL_TOKEN"); want != "" {
+		got := r.Header.Get("X-Sc-Internal-Token")
+		if subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
+			slog.Warn("internal token mismatch on /internal/openapi/verify", "remote", r.RemoteAddr)
+			writeErr(w, "IAM.AccessDenied", "access denied")
+			return
+		}
+	}
+	// Cap the body (defense-in-depth; the gateway already limits bodies).
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req verifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Info("verify request decode failed", "err", err)
 		writeErr(w, "Common.InvalidParameter", "malformed verify request")
 		return
 	}
@@ -156,10 +175,12 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}, time.Now())
 
 	if err != nil {
-		// Map the sentinel to the 403 error code (03§9.3 / 07§4.1). The
-		// response deliberately carries no detail about which check failed
-		// beyond the code, to avoid handing an attacker an oracle.
-		writeErr(w, "IAM."+err.Error(), err.Error())
+		// The response is deliberately uniform — it does not distinguish
+		// SignatureDoesNotMatch / InvalidAccessKeyId / AccountUnusable /
+		// replay, to avoid handing an attacker an oracle. The precise reason
+		// goes to the log only.
+		slog.Info("verify rejected", "reason", err.Error(), "path", req.Path, "region", req.Region, "service", req.Service)
+		writeErr(w, "IAM.AccessDenied", "access denied")
 		return
 	}
 
@@ -230,18 +251,31 @@ func (m *memAKStore) Update(r accesskey.Record) error {
 }
 
 // memNonceStore stands in for Redis SET NX with TTL. Production uses Redis
-// Cluster; entries expire after verify.NonceTTL (16 min).
+// Cluster; entries expire after verify.NonceTTL (16 min). Expired entries are
+// lazily evicted (a full sweep at most once per minute) so the map does not
+// grow without bound.
 type memNonceStore struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
+	mu        sync.Mutex
+	seen      map[string]time.Time
+	lastSweep time.Time
 }
 
-func newMemNonceStore() *memNonceStore { return &memNonceStore{seen: make(map[string]time.Time)} }
+func newMemNonceStore() *memNonceStore {
+	return &memNonceStore{seen: make(map[string]time.Time), lastSweep: time.Now()}
+}
 
 func (m *memNonceStore) SetNX(key string, ttl time.Duration) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
+	if now.Sub(m.lastSweep) > time.Minute {
+		for k, exp := range m.seen {
+			if now.After(exp) {
+				delete(m.seen, k)
+			}
+		}
+		m.lastSweep = now
+	}
 	if exp, ok := m.seen[key]; ok && now.Before(exp) {
 		return false, nil
 	}

@@ -10,7 +10,10 @@ import (
 var testNow = time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 
 func newEngine() *Engine {
-	return NewEngine(func() time.Time { return testNow })
+	e := NewEngine(func() time.Time { return testNow })
+	// Tests must not really sleep; record the requested backoff delays instead.
+	e.Sleep = func(time.Duration) {}
+	return e
 }
 
 // tracker records the order in which actions ran, which is what the

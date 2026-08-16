@@ -1,0 +1,17 @@
+# PodDisruptionBudget (M-6, 00§4.4 P2): with >1 replica, at least one pod
+# must survive voluntary disruption (drain/upgrade). Not rendered for a
+# single replica — minAvailable 1 there would block every node drain.
+{{- if and .Values.pdb.enabled (gt (int .Values.replicas) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+{{- end }}

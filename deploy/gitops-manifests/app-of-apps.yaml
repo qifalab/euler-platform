@@ -19,7 +19,15 @@ spec:
   source:
     repoURL: https://gitlab.internal/starcloud/platform-manifests.git
     targetRevision: main
-    path: deploy/gitops-manifests/apps
+    # Points at the directory that holds applicationset.yaml. The include
+    # filter restricts the sync to Argo CD ApplicationSet resources only —
+    # the sibling Helm chart dirs (apps/), env overrides (envs/) and raw
+    # platform manifests (platform/) are NOT synced as plain manifests here;
+    # they are consumed by the ApplicationSet-generated Applications.
+    path: deploy/gitops-manifests
+    directory:
+      recurse: false
+      include: 'applicationset.yaml'
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

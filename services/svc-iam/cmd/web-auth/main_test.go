@@ -226,3 +226,126 @@ func TestCreatePolicyRejectsMalformedDocument(t *testing.T) {
 		t.Fatalf("malformed policy: code %d, want 400", code)
 	}
 }
+
+// --- security-fix regression tests ---
+
+// TestChangePasswordInvalidatesOldTokensAndSessions covers the tokenVersion
+// bump + session revocation on password change, and the atomic read-modify-write.
+func TestChangePasswordInvalidatesOldTokensAndSessions(t *testing.T) {
+	seedAccount(200001, "pwtest@starcloud.cn", "改密用户", "oldpass12345")
+	mu.RLock()
+	a := byID[200001]
+	mu.RUnlock()
+	oldToken := issueAccessToken(a, time.Now())
+
+	// Plant a refresh session for the account; it must be revoked.
+	mu.Lock()
+	sessions["pwtest-refresh"] = &session{account: a, refreshToken: "pwtest-refresh", refreshExp: time.Now().Add(time.Hour)}
+	mu.Unlock()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /api/account/password", handleChangePassword)
+	mux.HandleFunc("GET /api/account/profile", handleAccountProfile)
+	h := requestIDMiddleware(mux)
+
+	raw, _ := json.Marshal(map[string]string{"oldPassword": "oldpass12345", "newPassword": "newpass12345"})
+	req := httptest.NewRequest("PUT", "/api/account/password", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("change password: code %d body %s", rr.Code, rr.Body.String())
+	}
+
+	// Old token must now be rejected (TokenVersion mismatch).
+	req2 := httptest.NewRequest("GET", "/api/account/profile", nil)
+	req2.Header.Set("Authorization", "Bearer "+oldToken)
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req2)
+	if rr2.Code != 401 {
+		t.Errorf("old token after password change: code %d, want 401", rr2.Code)
+	}
+
+	mu.RLock()
+	_, sessAlive := sessions["pwtest-refresh"]
+	cur := byID[200001]
+	mu.RUnlock()
+	if sessAlive {
+		t.Error("refresh session survived password change")
+	}
+	if !verifyPassword(cur.PasswordHash, "newpass12345") {
+		t.Error("new password not installed")
+	}
+
+	// A token minted from the fresh account state works.
+	newToken := issueAccessToken(cur, time.Now())
+	req3 := httptest.NewRequest("GET", "/api/account/profile", nil)
+	req3.Header.Set("Authorization", "Bearer "+newToken)
+	rr3 := httptest.NewRecorder()
+	h.ServeHTTP(rr3, req3)
+	if rr3.Code != 200 {
+		t.Errorf("new token: code %d, want 200", rr3.Code)
+	}
+}
+
+// TestRefreshRejectsDisabledAccount covers the live-status recheck on refresh.
+func TestRefreshRejectsDisabledAccount(t *testing.T) {
+	seedAccount(200002, "frozen@starcloud.cn", "冻结用户", "somepass1234")
+	mu.Lock()
+	a := byID[200002]
+	sessions["frozen-refresh"] = &session{account: a, refreshToken: "frozen-refresh", refreshExp: time.Now().Add(time.Hour)}
+	a.Status = 2 // freeze after the session was issued
+	accounts[a.AccountName] = a
+	byID[a.AccountID] = a
+	mu.Unlock()
+
+	req := httptest.NewRequest("POST", "/api/auth/refresh", nil)
+	req.AddCookie(&http.Cookie{Name: "sc_refresh", Value: "frozen-refresh"})
+	rr := httptest.NewRecorder()
+	requestIDMiddleware(http.HandlerFunc(handleRefresh)).ServeHTTP(rr, req)
+	if rr.Code != 401 {
+		t.Errorf("refresh for frozen account: code %d, want 401", rr.Code)
+	}
+	mu.RLock()
+	_, alive := sessions["frozen-refresh"]
+	mu.RUnlock()
+	if alive {
+		t.Error("session for frozen account not revoked on refresh")
+	}
+}
+
+// TestRotateUsesEnabledCount covers the rotate limit switching to countEnabled:
+// 2 AKs with one disabled must still allow rotation of the enabled one.
+func TestRotateUsesEnabledCount(t *testing.T) {
+	seedAccount(200003, "rotate@starcloud.cn", "轮换用户", "somepass1234")
+	mu.Lock()
+	a := byID[200003]
+	_, _, k1 := issueAccessKey()
+	_, _, k2 := issueAccessKey()
+	k2.Status = 2 // disabled
+	accessKeys[200003] = []accessKey{k1, k2}
+	mu.Unlock()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/ak/{akId}/rotate", handleRotateAccessKey)
+	req := httptest.NewRequest("POST", "/api/ak/"+k1.AKID+"/rotate", nil)
+	req.Header.Set("Authorization", "Bearer "+issueAccessToken(a, time.Now()))
+	rr := httptest.NewRecorder()
+	requestIDMiddleware(mux).ServeHTTP(rr, req)
+	if rr.Code != 201 {
+		t.Fatalf("rotate with 1 enabled + 1 disabled AK: code %d body %s, want 201", rr.Code, rr.Body.String())
+	}
+}
+
+// TestOversizedBodyRejected covers the MaxBytesReader cap on JSON handlers.
+func TestOversizedBodyRejected(t *testing.T) {
+	big := bytes.Repeat([]byte("a"), maxBodyBytes+1024)
+	body, _ := json.Marshal(map[string]string{"name": "Big", "document": string(big)})
+	req := httptest.NewRequest("POST", "/api/ram/policies", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+authToken(t))
+	rr := httptest.NewRecorder()
+	newTestAuthMux(t).ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body: code %d, want 413", rr.Code)
+	}
+}

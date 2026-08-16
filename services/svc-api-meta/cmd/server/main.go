@@ -98,7 +98,7 @@ func main() {
 // service must apply: request-id injection (→ trace_id), structured access
 // logging, recover (03§2.3.4).
 func withMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(h)))
+	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(internalTokenMiddleware(h))))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

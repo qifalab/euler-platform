@@ -10,13 +10,23 @@ import * as VueRouter from "vue-router";
 import * as Pinia from "pinia";
 import * as ElementPlus from "element-plus";
 import { useAuthStore } from "./stores/auth";
+import { useRegionStore } from "./stores/region";
 
-/** Shared deps the base injects into every sub-app (02§6.5). */
+/**
+ * Shared deps the base injects into every sub-app (02§6.5).
+ * token/regionId are exposed as getters (getToken/getRegion) so sub-apps read
+ * the LIVE store value per request — a plain `token` prop would be a snapshot
+ * frozen at setupApp time and go stale after silent refresh.
+ */
 function createSharedProps() {
   const auth = useAuthStore();
+  const region = useRegionStore();
   return {
-    token: auth.accessToken,
-    regionId: "cn-north-1",
+    /** Live token getter — always reflects the latest silent-refresh result. */
+    getToken: () => auth.accessToken || undefined,
+    /** Live region getter (see region store; changes also emit region:changed). */
+    getRegion: () => region.regionId,
+    regionId: region.regionId,
     theme: "light" as const,
     shared: {
       vue: Vue,

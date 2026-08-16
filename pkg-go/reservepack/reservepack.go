@@ -143,11 +143,11 @@ func (t EntryType) Valid() bool {
 
 // Entry is one immutable pack journal row.
 type Entry struct {
-	EntryID   int64
-	PackID    string
-	Type      EntryType
-	Amount    pricing.Amount
-	Balance   pricing.Amount // remaining after this entry
+	EntryID int64
+	PackID  string
+	Type    EntryType
+	Amount  pricing.Amount
+	Balance pricing.Amount // remaining after this entry
 	// BizKey links the entry to its cause (the charge id, the order id).
 	BizKey string
 	// IdempotencyKey makes application exactly-once. A repeated consume with
@@ -158,13 +158,14 @@ type Entry struct {
 
 // Errors.
 var (
-	ErrPackNotFound      = errors.New("reservepack: pack not found")
-	ErrPackExhausted     = errors.New("reservepack: pack exhausted")
-	ErrPackExpired       = errors.New("reservepack: pack expired")
-	ErrPackTerminal      = errors.New("reservepack: pack is in a terminal state")
-	ErrInsufficientQuota = errors.New("reservepack: insufficient quota")
-	ErrInvalidEntryType  = errors.New("reservepack: unknown entry type")
+	ErrPackNotFound       = errors.New("reservepack: pack not found")
+	ErrPackExists         = errors.New("reservepack: pack already exists")
+	ErrPackExhausted      = errors.New("reservepack: pack exhausted")
+	ErrPackExpired        = errors.New("reservepack: pack expired")
+	ErrPackTerminal       = errors.New("reservepack: pack is in a terminal state")
+	ErrInsufficientQuota  = errors.New("reservepack: insufficient quota")
+	ErrInvalidEntryType   = errors.New("reservepack: unknown entry type")
 	ErrMissingIdempotency = errors.New("reservepack: idempotency key required")
-	ErrDuplicateEntry    = errors.New("reservepack: entry already applied (idempotent no-op)")
-	ErrRefundExceedsFace = errors.New("reservepack: refund would exceed face value")
+	ErrDuplicateEntry     = errors.New("reservepack: entry already applied (idempotent no-op)")
+	ErrRefundExceedsFace  = errors.New("reservepack: refund would exceed face value")
 )

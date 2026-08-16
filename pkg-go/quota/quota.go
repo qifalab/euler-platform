@@ -157,6 +157,21 @@ func NewManager(store Store, now func() time.Time, newToken func() string) *Mana
 // SetTokenTTL overrides the reservation lifetime.
 func (m *Manager) SetTokenTTL(d time.Duration) { m.tokenTTL = d }
 
+// normalizeRegion maps the region to "*" for GLOBAL-scoped quotas, mirroring
+// CheckAndOccupy. Every path that reads or writes usage must apply the same
+// normalization, or a GLOBAL quota occupied under "*" is released under
+// "cn-north-1" and the two rows drift apart forever.
+func (m *Manager) normalizeRegion(quotaCode, region string) (string, error) {
+	def, err := m.store.GetDefinition(quotaCode)
+	if err != nil {
+		return "", err
+	}
+	if def.Scope == ScopeGlobal {
+		return "*", nil
+	}
+	return region, nil
+}
+
 // CheckAndOccupy reserves capacity and returns a token (phase 1).
 //
 // The check and the reservation happen under one optimistic-lock update, so
@@ -223,19 +238,33 @@ func (m *Manager) CheckAndOccupy(accountID int64, quotaCode, region string, amou
 }
 
 // CommitOccupy converts a reservation into committed usage (phase 2, success).
+//
+// The token is CLAIMED (deleted) before the usage row moves: commit races the
+// expiry sweeper, and if both read the token and then both update usage, the
+// same reservation is counted twice — the sweeper returns it to the pool while
+// the commit converts it to Used, overselling by the token amount. Deleting
+// first makes exactly one of the two racers own the token; if the usage update
+// then fails, the token is restored so the reservation is not lost.
 func (m *Manager) CommitOccupy(tokenID string) error {
 	tok, err := m.store.GetToken(tokenID)
 	if err != nil {
 		return err
 	}
-	// An expired token has already been swept: its capacity went back to the
-	// pool, so committing it now would double-count.
+	// An expired token has already been swept (or is about to be): its capacity
+	// went back to the pool, so committing it now would double-count.
 	if tok.Expired(m.now()) {
 		return fmt.Errorf("%w: %s expired at %v", ErrTokenExpired, tokenID, tok.ExpiresAt)
 	}
 
+	// Claim the token. If the sweeper (or a concurrent commit) got here first,
+	// the delete fails and this commit must not touch usage.
+	if err := m.store.DeleteToken(tokenID); err != nil {
+		return err
+	}
+
 	u, err := m.store.GetUsage(tok.AccountID, tok.QuotaCode, tok.Region)
 	if err != nil {
+		_ = m.store.PutToken(tok) // restore the claim; the reservation still stands
 		return err
 	}
 	updated := u
@@ -245,9 +274,10 @@ func (m *Manager) CommitOccupy(tokenID string) error {
 		updated.Occupying = 0
 	}
 	if err := m.store.UpdateUsage(updated, u.Version); err != nil {
+		_ = m.store.PutToken(tok)
 		return err
 	}
-	return m.store.DeleteToken(tokenID)
+	return nil
 }
 
 // ReleaseOccupy returns a reservation to the pool (phase 2, failure).
@@ -284,6 +314,10 @@ func (m *Manager) ReleaseCommitted(accountID int64, quotaCode, region string, am
 	if amount <= 0 {
 		return fmt.Errorf("%w: %d", ErrInvalidAmount, amount)
 	}
+	region, err := m.normalizeRegion(quotaCode, region)
+	if err != nil {
+		return err
+	}
 	u, err := m.store.GetUsage(accountID, quotaCode, region)
 	if err != nil {
 		return err
@@ -310,8 +344,16 @@ func (m *Manager) SweepExpired() (int, error) {
 	}
 	swept := 0
 	for _, tok := range expired {
+		// Claim the token FIRST: sweep races CommitOccupy, and updating usage
+		// before owning the token lets a commit convert the same reservation to
+		// Used after the sweeper already returned it — plus a failed delete
+		// would leave the token behind to be swept (and decremented) again.
+		if err := m.store.DeleteToken(tok.TokenID); err != nil {
+			continue // someone else claimed it (commit or a concurrent sweep)
+		}
 		u, err := m.store.GetUsage(tok.AccountID, tok.QuotaCode, tok.Region)
 		if err != nil {
+			_ = m.store.PutToken(tok) // give it back; next sweep retries
 			continue
 		}
 		updated := u
@@ -320,9 +362,7 @@ func (m *Manager) SweepExpired() (int, error) {
 			updated.Occupying = 0
 		}
 		if err := m.store.UpdateUsage(updated, u.Version); err != nil {
-			continue
-		}
-		if err := m.store.DeleteToken(tok.TokenID); err != nil {
+			_ = m.store.PutToken(tok)
 			continue
 		}
 		swept++
@@ -373,9 +413,9 @@ func ShouldWarn(u Usage) bool {
 // counter, and when a counter disagrees with the thing it counts, the thing is
 // right.
 type ReconcileResult struct {
-	AccountID   int64
-	QuotaCode   string
-	Region      string
+	AccountID    int64
+	QuotaCode    string
+	Region       string
 	RecordedUsed int
 	ActualCount  int
 	Drift        int
@@ -387,6 +427,10 @@ func (r ReconcileResult) Drifted() bool { return r.Drift != 0 }
 // Reconcile checks the counter against the real resource count and returns
 // the correction needed.
 func (m *Manager) Reconcile(accountID int64, quotaCode, region string, actualCount int) (ReconcileResult, error) {
+	region, err := m.normalizeRegion(quotaCode, region)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
 	u, err := m.store.GetUsage(accountID, quotaCode, region)
 	if err != nil {
 		return ReconcileResult{}, err
@@ -403,6 +447,10 @@ func (m *Manager) Reconcile(accountID int64, quotaCode, region string, actualCou
 
 // Correct forces the counter to match the resource ledger.
 func (m *Manager) Correct(accountID int64, quotaCode, region string, actualCount int) error {
+	region, err := m.normalizeRegion(quotaCode, region)
+	if err != nil {
+		return err
+	}
 	u, err := m.store.GetUsage(accountID, quotaCode, region)
 	if err != nil {
 		return err

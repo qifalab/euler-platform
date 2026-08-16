@@ -14,7 +14,7 @@
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { sdk } from "../sdk";
 
 interface ResourceDetail {
   resourceId: string;
@@ -31,7 +31,6 @@ interface ResourceDetail {
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
-const sdk = createSDK({ baseURL: "" });
 
 const inst = ref<ResourceDetail | null>(null);
 const loading = ref(true);

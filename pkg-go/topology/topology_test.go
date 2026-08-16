@@ -10,8 +10,8 @@ import (
 
 func TestRegionScopeValid(t *testing.T) {
 	cases := []struct {
-		s    RegionScope
-		want bool
+		s     RegionScope
+		want  bool
 		zonal bool
 	}{
 		{ScopeRegional, true, false},
@@ -43,12 +43,12 @@ func TestParseAZName(t *testing.T) {
 
 func TestParseAZNameRejectsBad(t *testing.T) {
 	cases := []string{
-		"",                // empty
-		"cn-north-1",      // no zone letter (this is a region name)
-		"cnnorth1-a",      // region not hyphen-style
-		"cn-north-1-ab",   // two-letter zone
-		"cn-north-1-1",    // digit zone (collides with region index)
-		"cn-north-1-",     // empty letter
+		"",              // empty
+		"cn-north-1",    // no zone letter (this is a region name)
+		"cnnorth1-a",    // region not hyphen-style
+		"cn-north-1-ab", // two-letter zone
+		"cn-north-1-1",  // digit zone (collides with region index)
+		"cn-north-1-",   // empty letter
 	}
 	for _, c := range cases {
 		if _, err := ParseAZName(c); err == nil {
@@ -89,18 +89,25 @@ func TestNewTopologyRejectsBadRegion(t *testing.T) {
 func TestSurvivesAZLoss(t *testing.T) {
 	topo, _ := NewTopology("cn-north-1", []string{"a", "b"})
 
-	// The generic SurvivesAZLoss rule: remaining must STRICTLY exceed lost.
-	// Even spread across 2 zones means the larger zone holds ceil(n/2); for the
-	// larger zone's loss, remaining = floor(n/2), which is never > ceil(n/2).
-	// So EVEN-SPREAD across 2 zones NEVER survives generic AZ loss — that is
-	// exactly why MySQL MGR uses its own majority rule and why 2-zone topologies
-	// need deliberate replica counts (see TestSurvivesAZLossMGR).
-	for n := 1; n <= 6; n++ {
+	// The generic (non-quorum) SurvivesAZLoss rule: losing any single zone
+	// must leave >= 1 replica. Even spread across 2 zones satisfies this for
+	// every n >= 2 (each zone keeps at least floor(n/2) >= 1 elsewhere);
+	// n = 1 never survives. Quorum systems use SurvivesAZLossMGR instead.
+	for n := 2; n <= 6; n++ {
 		p, _ := topo.Distribute(n)
-		got := p.SurvivesAZLoss()
-		if got {
-			t.Errorf("even-spread %d replicas across 2 zones survived generic AZ loss — it should not (the larger zone always holds >= half)", n)
+		if !p.SurvivesAZLoss() {
+			t.Errorf("even-spread %d replicas across 2 zones should survive non-quorum AZ loss (>=1 replica remains)", n)
 		}
+	}
+	// Single replica: losing its zone loses everything.
+	p1, _ := topo.Distribute(1)
+	if p1.SurvivesAZLoss() {
+		t.Error("1 replica can never survive AZ loss")
+	}
+	// All replicas concentrated in one zone never survives.
+	concentrated := Placement{ByZone: map[string]int{"cn-north-1-a": 3, "cn-north-1-b": 0}, Total: 3}
+	if concentrated.SurvivesAZLoss() {
+		t.Error("a placement concentrated in one zone must not survive that zone's loss")
 	}
 }
 
@@ -166,9 +173,20 @@ func TestCanSatisfy(t *testing.T) {
 	dual, _ := NewTopology("cn-north-1", []string{"a", "b"})
 	triple, _ := NewTopology("cn-north-1", []string{"a", "b", "c"})
 
-	// Across 2 zones, generic survival is never satisfiable (proven above).
-	if dual.CanSatisfy(3, false) {
-		t.Fatal("dual-AZ generic survival of 3 replicas should not be satisfiable")
+	// Across 2 zones, non-quorum survival is satisfiable from 2 replicas up.
+	if !dual.CanSatisfy(3, false) {
+		t.Fatal("dual-AZ non-quorum survival of 3 replicas should be satisfiable")
+	}
+	if dual.CanSatisfy(1, false) {
+		t.Fatal("a single replica can never satisfy AZ-loss survival")
+	}
+	// MGR across 2 zones is mathematically impossible for ANY replica count:
+	// one zone always holds >= half the members, so quorum cannot survive its
+	// loss — a third arbitration point is required (see SurvivesAZLossMGR doc).
+	for n := 1; n <= 7; n++ {
+		if dual.CanSatisfy(n, true) {
+			t.Fatalf("dual-AZ MGR survival must be unsatisfiable, but %d replicas passed", n)
+		}
 	}
 	// Across 3 zones, 3 replicas generic survives.
 	if !triple.CanSatisfy(3, false) {
@@ -237,19 +255,26 @@ func TestFaultDomainSpread(t *testing.T) {
 }
 
 func TestPlacementReportAtRisk(t *testing.T) {
-	// 3 across 2 zones even-spread = (2,1), generic contract:
-	//   lose the 1-zone → 2 remain > 1 → that zone is NOT at risk
-	//   lose the 2-zone → 1 remain <= 2 → that zone IS at risk
+	// 3 across 2 zones even-spread = (2,1), non-quorum contract:
+	// losing either zone still leaves >= 1 replica → survives, no zone at risk.
 	topo, _ := NewTopology("cn-north-1", []string{"a", "b"})
 	p, _ := topo.Distribute(3) // (2,1)
 	rep := p.Report(false)
-	if rep.Survives {
-		t.Fatal("3-across-2 even spread should not survive generic AZ loss")
+	if !rep.Survives {
+		t.Fatal("3-across-2 even spread should survive non-quorum AZ loss")
 	}
-	// the at-risk zone is the one with 2 (losing it breaks the contract)
+	if len(rep.AtRiskZones) != 0 {
+		t.Fatalf("AtRiskZones = %v, want none", rep.AtRiskZones)
+	}
+	// A placement holding everything in one zone flags that zone as at risk.
+	solo := Placement{ByZone: map[string]int{"cn-north-1-a": 3, "cn-north-1-b": 0}, Total: 3}
+	repSolo := solo.Report(false)
+	if repSolo.Survives {
+		t.Fatal("all-in-one-zone must not survive")
+	}
 	want := []string{"cn-north-1-a"}
-	if !reflect.DeepEqual(rep.AtRiskZones, want) {
-		t.Fatalf("AtRiskZones = %v, want %v", rep.AtRiskZones, want)
+	if !reflect.DeepEqual(repSolo.AtRiskZones, want) {
+		t.Fatalf("AtRiskZones = %v, want %v", repSolo.AtRiskZones, want)
 	}
 }
 

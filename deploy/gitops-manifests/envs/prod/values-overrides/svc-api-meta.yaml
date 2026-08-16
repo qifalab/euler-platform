@@ -1,0 +1,8 @@
+# prod overrides for svc-api-meta (values merge on top of the chart defaults).
+image:
+  tag: v0.1.0   # immutable release tag stamped by CI
+replicas: 3
+# M-6 dual-AZ topology (00§4.4 P2): replicas hard-spread across AZs so
+# losing one AZ does not take the service down.
+topology:
+  zoneSpread: true

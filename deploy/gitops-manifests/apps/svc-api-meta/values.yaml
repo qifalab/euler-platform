@@ -3,7 +3,9 @@
 
 image:
   repository: harbor.internal/cloudplatform/svc-api-meta
-  tag: latest
+  # Immutable version tag (never `latest`): CI stamps the released tag via the
+  # env values-overrides; v0.1.0 is the placeholder for the first cut.
+  tag: v0.1.0
   pullPolicy: IfNotPresent
 
 replicas: 1
@@ -15,14 +17,21 @@ service:
   port: 8080
   targetPort: 8080
 
-# Runtime env shared by all phase-1 services (04§3.4, 08§6.2).
+# The service binary takes its listen address from the -http flag
+# (services/svc-api-meta/cmd/*/main.go). The chart injects it so containerPort,
+# Service port, probes and the actual listen port always agree.
+args:
+  - "-http=:8080"
+
+# Runtime env shared by all phase-1 services (04§3.4, 08§6.2), projected via
+# the <release>-config ConfigMap and mounted with envFrom.
 env:
   NACOS_NAMESPACE: "public"
   SERVICE_GROUP: "cloudplatform"
 
-# Probe endpoints (all-Go services expose /healthz /readyz).
+# Probe endpoints (all-Go services expose /healthz and /readyz).
 probe:
-  readinessPath: /healthz
+  readinessPath: /readyz
   livenessPath: /healthz
 
 resources:
@@ -32,3 +41,16 @@ resources:
   limits:
     cpu: "1"
     memory: "1Gi"
+
+# Cross-AZ topology (M-6, 00§4.4 P2). Default off (P1 single-AZ dev); prod
+# and staging overrides turn zoneSpread on so replicas hard-spread across AZs.
+topology:
+  zoneSpread: false                  # set true in prod/staging values-overrides
+  maxSkew: 1                         # the smallest skew a P2 service tolerates
+  whenUnsatisfiable: DoNotSchedule   # hard, not ScheduleAnyway (P2 is a promise)
+
+# PodDisruptionBudget: rendered only when replicas > 1 (a single-replica dev
+# deployment with minAvailable 1 would block every node drain).
+pdb:
+  enabled: true
+  minAvailable: 1

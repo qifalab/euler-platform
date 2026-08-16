@@ -122,6 +122,10 @@ func (s *actionStore) listByProduct(product string) []Action {
 
 // accountIDFromRequest extracts the gateway-injected account id, or returns ""
 // if the header is missing.
+//
+// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+// authentication; this service relies on network isolation (and optionally
+// internalTokenMiddleware / SC_INTERNAL_TOKEN) rather than re-authenticating.
 func accountIDFromRequest(r *http.Request) string {
 	return r.Header.Get(accountIDHeader)
 }

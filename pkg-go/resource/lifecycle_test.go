@@ -135,9 +135,9 @@ func TestDuplicateCallbackIsIdempotent(t *testing.T) {
 
 func TestIntermediateStateTimeouts(t *testing.T) {
 	cases := []struct {
-		state   State
-		within  time.Duration
-		beyond  time.Duration
+		state  State
+		within time.Duration
+		beyond time.Duration
 	}{
 		{StateCreating, 14 * time.Minute, 16 * time.Minute},
 		{StateUpgrading, 29 * time.Minute, 31 * time.Minute},
@@ -417,12 +417,15 @@ func TestBillingStopEvents(t *testing.T) {
 }
 
 func TestTerminalStates(t *testing.T) {
-	for _, s := range []State{StateReleased, StateCreateFailed} {
+	for _, s := range []State{StateReleased} {
 		if !s.Terminal() {
 			t.Errorf("%s should be terminal", s)
 		}
 	}
-	for _, s := range []State{StateRunning, StateLocked, StateExpired, StateReleasing} {
+	// CREATE_FAILED is NOT terminal: the transition table allows
+	// CREATE_FAILED → RELEASING for rollback cleanup, and Terminal() must
+	// agree with the table rather than contradict it.
+	for _, s := range []State{StateRunning, StateLocked, StateExpired, StateReleasing, StateCreateFailed} {
 		if s.Terminal() {
 			t.Errorf("%s should not be terminal", s)
 		}

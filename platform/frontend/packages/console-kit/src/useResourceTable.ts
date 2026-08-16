@@ -15,8 +15,8 @@ export interface Column<T = Record<string, unknown>> {
 }
 
 export interface ResourceTableOptions<T> {
-  /** Fetcher — returns the page of rows. */
-  api: (params: Record<string, unknown>) => Promise<{ items: T[]; total?: number }>;
+  /** Fetcher — returns the page of rows. `signal` aborts superseded requests. */
+  api: (params: Record<string, unknown>, signal?: AbortSignal) => Promise<{ items: T[]; total?: number }>;
   columns: Column<T>[];
   filters?: Record<string, unknown>;
   /** Polling interval, ms. 0 = off. */
@@ -27,6 +27,7 @@ export interface ResourceTableOptions<T> {
 export function useResourceTable<T = Record<string, unknown>>(opts: ResourceTableOptions<T>) {
   const rows = ref<T[]>([]) as unknown as Ref<T[]>;
   const loading = ref(false);
+  /** Last fetch failure — list pages MUST render this instead of "暂无资源". */
   const error = ref<unknown>(null);
   const total = ref(0);
   const page = ref(1);
@@ -34,8 +35,16 @@ export function useResourceTable<T = Record<string, unknown>>(opts: ResourceTabl
   const selectedKeys = ref<Array<string | number>>([]);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  // Stale-response guard: each fetch bumps the seq and aborts the previous
+  // in-flight request, so a slow old response can never overwrite fresh rows.
+  let fetchSeq = 0;
+  let abortCtrl: AbortController | null = null;
 
   async function fetchPage() {
+    const seq = ++fetchSeq;
+    abortCtrl?.abort();
+    abortCtrl = new AbortController();
+    const signal = abortCtrl.signal;
     loading.value = true;
     error.value = null;
     try {
@@ -44,13 +53,15 @@ export function useResourceTable<T = Record<string, unknown>>(opts: ResourceTabl
         page: page.value,
         pageSize: pageSize.value,
       };
-      const result = await opts.api(params);
+      const result = await opts.api(params, signal);
+      if (seq !== fetchSeq) return; // superseded — drop the stale response
       rows.value = result.items;
       total.value = result.total ?? result.items.length;
     } catch (e) {
+      if (seq !== fetchSeq || signal.aborted) return; // aborted/stale — ignore
       error.value = e;
     } finally {
-      loading.value = false;
+      if (seq === fetchSeq) loading.value = false;
     }
   }
 
@@ -79,7 +90,10 @@ export function useResourceTable<T = Record<string, unknown>>(opts: ResourceTabl
     startPolling();
   });
 
-  onUnmounted(stopPolling);
+  onUnmounted(() => {
+    stopPolling();
+    abortCtrl?.abort();
+  });
 
   watch(() => opts.filters, () => {
     page.value = 1;

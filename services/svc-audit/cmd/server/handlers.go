@@ -58,6 +58,7 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body appendRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid JSON body: "+err.Error())

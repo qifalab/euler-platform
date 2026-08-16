@@ -50,7 +50,35 @@ REQUIRED_RE = re.compile(r"\brequired\s+\w+\s+\w+\s*=\s*\d+")
 
 
 def find_proto_files() -> list[str]:
-    return sorted(glob.glob(PROTO_GLOB, recursive=True))
+    # Normalise to posix separators so baseline keys are identical no matter
+    # whether the script runs on Windows or Linux CI.
+    return sorted(p.replace(os.sep, "/") for p in glob.glob(PROTO_GLOB, recursive=True))
+
+
+def extract_blocks(src: str, keyword: str) -> list[tuple[str, str, str]]:
+    """Extract (name, body, preceding_comment) for every top-level `keyword Name {...}`.
+
+    Brace-paired, not regex-lazy: a lazy `.*?\\n\\}` regex merges a one-line
+    message like `message Ack {}` with the following message (it has no
+    newline-brace of its own), silently dropping messages from the baseline.
+    """
+    out = []
+    for m in re.finditer(
+        r"(?P<comment>(?:[ \t]*//[^\n]*\n)*)[ \t]*" + keyword + r"\s+(?P<name>\w+)\s*\{",
+        src,
+    ):
+        depth = 1
+        i = m.end()
+        while i < len(src) and depth > 0:
+            c = src[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            i += 1
+        body = src[m.end() : i - 1]
+        out.append((m.group("name"), body, m.group("comment")))
+    return out
 
 
 def parse_proto(path: str) -> dict:
@@ -72,10 +100,7 @@ def parse_proto(path: str) -> dict:
 
     # Services and their rpcs. Track a `// Deprecated:` comment that immediately
     # precedes an rpc line as the deprecation trail (03§9.4).
-    for sm in re.finditer(
-        r"service\s+(\w+)\s*\{(?P<body>.*?)\n\}", src, re.DOTALL
-    ):
-        svc_body = sm.group("body")
+    for _svc_name, svc_body, _svc_comment in extract_blocks(src, "service"):
         for rm in re.finditer(
             r"(?P<comment>(?:[ \t]*//[^\n]*\n)*)[ \t]*rpc\s+(?P<rpc>\w+)\s*\(",
             svc_body,
@@ -83,15 +108,10 @@ def parse_proto(path: str) -> dict:
             deprecated = "// Deprecated:" in rm.group("comment")
             info["services"][rm.group("rpc")] = deprecated
 
-    # Messages and fields. A field line is `type name = number;`.
-    for mm in re.finditer(
-        r"(?P<comment>(?:[ \t]*//[^\n]*\n)*)[ \t]*message\s+(?P<msg>\w+)\s*\{(?P<body>.*?)\n\}",
-        src,
-        re.DOTALL,
-    ):
-        msg = mm.group("msg")
-        comment = mm.group("comment")
-        body = mm.group("body")
+    # Messages and fields. A field line is `type name = number;`. Blocks are
+    # extracted by brace pairing (see extract_blocks) so adjacent messages are
+    # never merged.
+    for msg, body, comment in extract_blocks(src, "message"):
         fields: dict[str, str] = {}
         for fm in re.finditer(
             r"^\s*(?:repeated\s+|optional\s+)?(?P<type>[\w\.]+)\s+\w+\s*=\s*(?P<num>\d+)",
@@ -135,11 +155,7 @@ def check_field_reuse_raw(infos_and_src: list[tuple[dict, str]]) -> list[str]:
     """Scan raw source: a field number used twice with different types is a break."""
     errs = []
     for info, src in infos_and_src:
-        for mm in re.finditer(
-            r"message\s+(?P<msg>\w+)\s*\{(?P<body>.*?)\n\}", src, re.DOTALL
-        ):
-            msg = mm.group("msg")
-            body = mm.group("body")
+        for msg, body, _comment in extract_blocks(src, "message"):
             by_num: dict[str, set[str]] = defaultdict(set)
             for fm in re.finditer(
                 r"^\s*(?:repeated\s+|optional\s+)?(?P<type>[\w\.]+)\s+\w+\s*=\s*(?P<num>\d+)",
@@ -159,8 +175,16 @@ def check_field_reuse_raw(infos_and_src: list[tuple[dict, str]]) -> list[str]:
 def diff_baseline(prev: dict, curr: dict) -> list[str]:
     """Detect field-number removal/retype against the baseline."""
     errs = []
-    for path, prev_msgs in prev.get("messages_by_path", {}).items():
-        curr_msgs = curr.get("messages_by_path", {}).get(path, {})
+    # Normalise baseline keys too — an older baseline may have been written on
+    # Windows with backslash keys; without this every file diffs as "removed".
+    prev_by_path = {
+        p.replace("\\", "/"): v for p, v in prev.get("messages_by_path", {}).items()
+    }
+    curr_by_path = {
+        p.replace("\\", "/"): v for p, v in curr.get("messages_by_path", {}).items()
+    }
+    for path, prev_msgs in prev_by_path.items():
+        curr_msgs = curr_by_path.get(path, {})
         for msg, prev_meta in prev_msgs.items():
             prev_fields = prev_meta.get("fields", {}) if isinstance(prev_meta, dict) else {}
             curr_fields = curr_msgs.get(msg, {}).get("fields", {})
@@ -182,13 +206,15 @@ def diff_baseline(prev: dict, curr: dict) -> list[str]:
 def build_summary(infos: list[dict]) -> dict:
     msgs_by_path: dict[str, dict] = {}
     for info in infos:
-        msgs_by_path[info["path"]] = {
+        # posix path keys (find_proto_files already normalises; belt-and-braces).
+        msgs_by_path[info["path"].replace("\\", "/")] = {
             m: {"fields": meta["fields"]} for m, meta in info["messages"].items()
         }
     return {"messages_by_path": msgs_by_path}
 
 
 def main() -> int:
+    write_baseline = "--write-baseline" in sys.argv[1:]
     files = find_proto_files()
     if not files:
         print("no proto files found")
@@ -205,15 +231,29 @@ def main() -> int:
 
     # Baseline diff (field-number removal / retype).
     summary = build_summary(infos)
-    if os.path.exists(BASELINE):
+    if write_baseline:
+        # Explicit, reviewed regeneration only (e.g. after an approved breaking
+        # change with a version bump). Never automatic.
+        if not errors:
+            with open(BASELINE, "w", encoding="utf-8") as fh:
+                json.dump(summary, fh, indent=2, sort_keys=True)
+            print("baseline rewritten: %s" % BASELINE)
+        else:
+            print("refusing to write baseline: source-level errors present")
+    elif os.path.exists(BASELINE):
         with open(BASELINE, encoding="utf-8") as fh:
             prev = json.load(fh)
         errors += diff_baseline(prev, summary)
     else:
-        # First run: write the baseline so the next run can diff.
-        with open(BASELINE, "w", encoding="utf-8") as fh:
-            json.dump(summary, fh, indent=2, sort_keys=True)
-        print("wrote baseline %s (first run)" % BASELINE)
+        # A missing baseline must FAIL, not silently self-heal: auto-creating
+        # it would let a deleted-baseline commit smuggle any breaking change
+        # through as "first run". Regenerate deliberately with --write-baseline.
+        print(
+            "ERROR: baseline %s missing. Run "
+            "`python tools/check-proto-breaking.py --write-baseline` on a "
+            "known-good tree and commit the result." % BASELINE
+        )
+        return 1
 
     rpc_count = sum(len(i["services"]) for i in infos)
     msg_count = sum(len(i["messages"]) for i in infos)

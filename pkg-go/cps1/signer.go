@@ -96,16 +96,16 @@ const HeaderNonce = NonceHeader
 
 // Errors returned by Verify.
 var (
-	ErrMissingAuthorization    = errors.New("cps1: missing Authorization header")
-	ErrBadAuthorizationFormat  = errors.New("cps1: malformed Authorization header")
-	ErrUnsupportedAlgorithm    = errors.New("cps1: unsupported algorithm")
-	ErrMissingDate              = errors.New("cps1: missing x-cps-date header")
-	ErrMissingContentSHA        = errors.New("cps1: missing x-cps-content-sha256 header")
-	ErrMissingHost              = errors.New("cps1: missing host header")
-	ErrClockSkew                = errors.New("cps1: request time outside ±15min window")
-	ErrSignatureDoesNotMatch    = errors.New("cps1: signature does not match")
-	ErrScopeFormat              = errors.New("cps1: invalid credential scope")
-	ErrSignedHeadersMismatch    = errors.New("cps1: signed headers do not match canonical headers")
+	ErrMissingAuthorization   = errors.New("cps1: missing Authorization header")
+	ErrBadAuthorizationFormat = errors.New("cps1: malformed Authorization header")
+	ErrUnsupportedAlgorithm   = errors.New("cps1: unsupported algorithm")
+	ErrMissingDate            = errors.New("cps1: missing x-cps-date header")
+	ErrMissingContentSHA      = errors.New("cps1: missing x-cps-content-sha256 header")
+	ErrMissingHost            = errors.New("cps1: missing host header")
+	ErrClockSkew              = errors.New("cps1: request time outside ±15min window")
+	ErrSignatureDoesNotMatch  = errors.New("cps1: signature does not match")
+	ErrScopeFormat            = errors.New("cps1: invalid credential scope")
+	ErrSignedHeadersMismatch  = errors.New("cps1: signed headers do not match canonical headers")
 )
 
 // Credentials is the key material used to sign or verify a request.
@@ -466,7 +466,15 @@ func Verify(req Request, creds Credentials, region, service string, now time.Tim
 	if req.Headers == nil {
 		return ErrMissingAuthorization
 	}
-	auth := strings.TrimSpace(req.Headers["Authorization"])
+	// Case-insensitive lookup, matching how the verify endpoint reads headers:
+	// proxies and gateways forward "authorization" in arbitrary casing.
+	auth := ""
+	for k, v := range req.Headers {
+		if strings.EqualFold(k, "Authorization") {
+			auth = strings.TrimSpace(v)
+			break
+		}
+	}
 	if auth == "" {
 		return ErrMissingAuthorization
 	}
@@ -621,10 +629,10 @@ func sameSet(a, b []string) bool {
 
 // parsedAuth holds the three fields of an Authorization header value.
 type parsedAuth struct {
-	credential   string
+	credential    string
 	signedHeaders string
-	signature    string
-	scope        string // scope portion of credential (everything after AK/)
+	signature     string
+	scope         string // scope portion of credential (everything after AK/)
 }
 
 // parseAuthorization splits the Authorization header body into its three fields

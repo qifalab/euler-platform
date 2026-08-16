@@ -39,6 +39,12 @@ deployment:
       - "http://apisix-etcd-2.apisix-etcd-headless.mw-gateway.svc:2379"
     prefix: /apisix
     timeout: 30
+    # etcd runs with auth enabled (ALLOW_NONE_AUTHENTICATION=no in
+    # apisix-deployment.yaml); credentials come from the apisix-etcd-credentials
+    # Secret, injected as the APISIX_ETCD_PASSWORD env var. ${{VAR}} is the
+    # APISIX config.yaml environment-variable reference syntax.
+    user: root
+    password: ${{APISIX_ETCD_PASSWORD}}
 
 # Nacos service discovery.
 #
@@ -63,9 +69,11 @@ discovery:
       connect: 2000
       send: 2000
       read: 5000
-    # Credentials come from a K8s Secret, never inline (04§4.2).
+    # Credentials come from a K8s Secret, never inline (04§4.2). ${{VAR}} is
+    # the APISIX config.yaml env-reference syntax (plain ${VAR} is NOT
+    # interpolated by APISIX).
     username: apisix_ro
-    password: ${NACOS_APISIX_PASSWORD}
+    password: ${{NACOS_APISIX_PASSWORD}}
 
 nginx_config:
   worker_processes: auto

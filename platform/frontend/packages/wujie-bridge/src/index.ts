@@ -13,10 +13,14 @@
 
 /** Shared props the base injects into every sub-app (02§3.4 createSharedProps). */
 export interface SharedProps {
-  /** Short-lived access token (memory-only in base; sub-apps read per-request). */
+  /** @deprecated snapshot token — prefer getToken(), which never goes stale. */
   token?: string;
+  /** Live token getter injected by the base (reads the auth store per call). */
+  getToken?: () => string | undefined;
   /** Current region id, e.g. cn-north-1 (00 附录A). */
   regionId?: string;
+  /** Live region getter injected by the base (reads the region store per call). */
+  getRegion?: () => string | undefined;
   /** Theme token set on :root by the base. */
   theme?: "light" | "dark";
   /** Shared dependency instances (Vue/Pinia/Element Plus) — externals, not MF. */
@@ -100,3 +104,41 @@ class Bridge {
 }
 
 export const bridge = new Bridge();
+
+// --- SDK auth wiring for sub-apps (02§5.4) ----------------------------------
+// Cache the freshest token pushed by the base over the bus, so getToken()
+// works even for props snapshots injected before the last silent refresh.
+let refreshedToken: string | undefined;
+bridge.on("auth:token-refreshed", (payload) => {
+  const p = payload as { token?: string; accessToken?: string } | undefined;
+  refreshedToken = p?.token ?? p?.accessToken;
+});
+bridge.on("auth:logout", () => {
+  refreshedToken = undefined;
+});
+
+/**
+ * Standard `createSDK` auth options for a sub-app: a live getToken that
+ * prefers the base's injected getter, then the bus-refreshed token, then the
+ * legacy snapshot prop; and an onUnauthorized that re-reads the base's live
+ * token (the base owns silent refresh — sub-apps never refresh themselves).
+ */
+export function subAppAuthOptions(): {
+  getToken: () => string | undefined;
+  onUnauthorized: () => Promise<string | undefined>;
+} {
+  const getToken = () => {
+    const props = readSharedProps();
+    return props.getToken?.() ?? refreshedToken ?? props.token;
+  };
+  return {
+    getToken,
+    onUnauthorized: async () => getToken(),
+  };
+}
+
+/** Latest region id: live getter → bus event payload handled by callers → snapshot. */
+export function currentRegionId(): string | undefined {
+  const props = readSharedProps();
+  return props.getRegion?.() ?? props.regionId;
+}

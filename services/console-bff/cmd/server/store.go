@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -38,8 +39,13 @@ import (
 	"github.com/starcloud/sc-platform/errors"
 )
 
-// accountIDHeader is injected by the APISIX gateway on every request.
+// accountIDHeader is injected by the APISIX gateway on every request. The BFF
+// TRUSTS this header (network isolation behind the gateway); services can
+// additionally enable a shared-secret check via SC_INTERNAL_TOKEN.
 const accountIDHeader = "X-Sc-Account-Id"
+
+// maxBodyBytes caps JSON request bodies accepted by the BFF's mutation handlers.
+const maxBodyBytes = 1 << 20 // 1 MiB
 
 // consoleStore is a fan-out client: it holds nothing of its own except the
 // downstream base URLs and a shared HTTP client. In the target architecture
@@ -231,7 +237,9 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 	for _, e := range []error{balErr, resErr, ordErr} {
 		if e != nil {
-			writeError(w, e.(*errorsx.Error))
+			// comma-ok narrowing: getJSON should only return *errorsx.Error, but a
+			// bad assertion must degrade to a wrapped internal error, not a panic.
+			writeError(w, e2ptr(e))
 			return
 		}
 	}
@@ -340,7 +348,7 @@ func (s *consoleStore) handleBills(w http.ResponseWriter, r *http.Request) {
 		go func(idx int, period string) {
 			defer wg.Done()
 			var row billRow
-			u := s.billingURL + "/internal/bills?period=" + period
+			u := s.billingURL + "/internal/bills?period=" + url.QueryEscape(period)
 			if err := s.getJSON(ctx, u, acct, &row); err != nil {
 				errs[idx] = err
 				return
@@ -468,6 +476,7 @@ func (s *consoleStore) handleReservePackPurchase(w http.ResponseWriter, r *http.
 		return
 	}
 	var req reservePackPurchaseReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -514,6 +523,7 @@ func (s *consoleStore) handleInvoiceDraft(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req invoiceDraftReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -536,6 +546,7 @@ func (s *consoleStore) handleInvoiceIssue(w http.ResponseWriter, r *http.Request
 	var req struct {
 		InvoiceID string `json:"invoiceId"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -559,6 +570,7 @@ func (s *consoleStore) handleInvoiceVoid(w http.ResponseWriter, r *http.Request)
 		OriginalID string `json:"originalId"`
 		ReversalID string `json:"reversalId"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -584,7 +596,7 @@ func (s *consoleStore) handleCostAnalysis(w http.ResponseWriter, r *http.Request
 		period = time.Now().UTC().Format("2006-01")
 	}
 	var raw map[string]any
-	u := s.billingURL + "/internal/cost-analysis?period=" + period
+	u := s.billingURL + "/internal/cost-analysis?period=" + url.QueryEscape(period)
 	if err := s.getJSON(r.Context(), u, acct, &raw); err != nil {
 		writeError(w, e2ptr(err))
 		return

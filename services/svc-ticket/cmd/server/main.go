@@ -167,6 +167,7 @@ func (a *app) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "Ticket.MissingAccount", "account_id header required")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body createReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "Ticket.InvalidBody", "invalid JSON body")
@@ -244,6 +245,7 @@ func (a *app) handleReply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Ticket.InvalidID", "ticket id required")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body replyReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "Ticket.InvalidBody", "invalid JSON body")
@@ -321,6 +323,7 @@ func (a *app) handleAPICreate(w http.ResponseWriter, r *http.Request) {
 		writeEnvelopedErr(w, r, http.StatusForbidden, "Ticket.MissingAccount", "account_id header required")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body apiCreateReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidBody", "invalid JSON body")

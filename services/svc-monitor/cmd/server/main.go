@@ -37,6 +37,43 @@ import (
 
 const accountIDHeader = "X-Sc-Account-Id"
 
+// maxBodyBytes caps JSON request bodies.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// Comparison operator values follow proto-hub
+// proto/starcloud/monitor/v1/monitor.proto ComparisonOperator (lines 46-52):
+// 1 = GREATER_THAN (>), 2 = GREATER_THAN_OR_EQUAL (≥),
+// 3 = LESS_THAN (<),    4 = LESS_THAN_OR_EQUAL (≤).
+const (
+	cmpGreaterThan        = 1
+	cmpGreaterThanOrEqual = 2
+	cmpLessThan           = 3
+	cmpLessThanOrEqual    = 4
+)
+
+// comparisonSymbol renders a proto ComparisonOperator value; empty string for
+// unknown/unspecified values.
+func comparisonSymbol(op int) string {
+	switch op {
+	case cmpGreaterThan:
+		return ">"
+	case cmpGreaterThanOrEqual:
+		return ">="
+	case cmpLessThan:
+		return "<"
+	case cmpLessThanOrEqual:
+		return "<="
+	default:
+		return ""
+	}
+}
+
+// validComparisonOperator reports whether op is a defined (non-UNSPECIFIED)
+// proto ComparisonOperator.
+func validComparisonOperator(op int) bool {
+	return op >= cmpGreaterThan && op <= cmpLessThanOrEqual
+}
+
 // AlertRule mirrors alert_rule (sql/V1__support_db_monitor_schema.sql).
 type AlertRule struct {
 	RuleID                 int64             `json:"ruleId"`
@@ -45,7 +82,7 @@ type AlertRule struct {
 	ResourceType           string            `json:"resourceType"`
 	Metric                 string            `json:"metric"`
 	Threshold              string            `json:"threshold"` // DECIMAL as string
-	ComparisonOperator     int               `json:"comparisonOperator"` // 1≥ 2> 3≤ 4< 5==
+	ComparisonOperator     int               `json:"comparisonOperator"` // proto ComparisonOperator: 1> 2≥ 3< 4≤ (monitor.proto:46-52)
 	Period                 int               `json:"period"`             // seconds
 	EvalPeriods            int               `json:"evalPeriods"`
 	NotificationChannels   []string          `json:"notificationChannels"`
@@ -63,9 +100,10 @@ type ruleStore struct {
 
 func newRuleStore() *ruleStore {
 	s := &ruleStore{rules: make(map[int64]*AlertRule)}
-	s.seed(100123, "scecs", "instance", "cpu_utilization", "80.0000", 1, 60, 1, []string{"IN_APP", "EMAIL"})
-	s.seed(100123, "scecs", "instance", "memory_utilization", "90.0000", 1, 60, 1, []string{"IN_APP"})
-	s.seed(100123, "scoss", "bucket", "request_count", "1000.0000", 2, 300, 2, []string{"SMS"})
+	// Seeds use proto operator semantics: "cpu ≥ 80" → 2 (GTE), "req > 1000" → 1 (GT).
+	s.seed(100123, "scecs", "instance", "cpu_utilization", "80.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP", "EMAIL"})
+	s.seed(100123, "scecs", "instance", "memory_utilization", "90.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP"})
+	s.seed(100123, "scoss", "bucket", "request_count", "1000.0000", cmpGreaterThan, 300, 2, []string{"SMS"})
 	return s
 }
 
@@ -95,6 +133,9 @@ func (s *ruleStore) list(acct int64) []*AlertRule {
 // --- HTTP helpers (envelope, 03§9.3) ---
 
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+	// authentication; this service relies on network isolation (and optionally
+	// internalTokenMiddleware) rather than re-authenticating.
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
 		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
@@ -148,6 +189,7 @@ func (s *ruleStore) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createRuleRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
 		return
@@ -163,7 +205,12 @@ func (s *ruleStore) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		req.EvalPeriods = 1
 	}
 	if req.ComparisonOperator == 0 {
-		req.ComparisonOperator = 1
+		// Default "≥ threshold" per proto: GREATER_THAN_OR_EQUAL = 2.
+		req.ComparisonOperator = cmpGreaterThanOrEqual
+	}
+	if !validComparisonOperator(req.ComparisonOperator) {
+		writeErr(w, "Common.InvalidParameter", 400, "comparisonOperator must be 1(>) 2(>=) 3(<) 4(<=)")
+		return
 	}
 	if len(req.NotificationChannels) == 0 {
 		req.NotificationChannels = []string{"IN_APP"}
@@ -264,6 +311,24 @@ func requestIDMiddleware(h http.Handler) http.Handler {
 	})
 }
 
+// internalTokenMiddleware optionally enforces an internal shared secret: when
+// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Sc-Account-Id trust). Unset (dev default) = no check.
+func internalTokenMiddleware(h http.Handler) http.Handler {
+	token := os.Getenv("SC_INTERNAL_TOKEN")
+	if token == "" {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sc-Internal-Token") != token {
+			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func recoverMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -291,7 +356,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/monitor/metrics", store.handleQueryMetrics)
 	mux.HandleFunc("GET /api/v1/monitor/templates", store.handleTemplates)
 
-	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("svc-monitor listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -8,18 +8,17 @@ import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
 import { ResourceTable, useResourceTable } from "@sc/console-kit";
 import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
+import { sdk } from "../sdk";
 import "@sc/tokens/style.css";
 
 type Row = Record<string, unknown>;
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
 
 // Real fetcher: console-bff /console/resources, filtered to scecs. The BFF
 // returns the shared Resource shape (store.go); map to list columns.
-const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTable<Row>({
-  api: async () => {
-    const res = await sdk.get<Row[]>("/console/resources");
+const { rows, loading, error, columns, page, pageSize, total, setPage, refresh } = useResourceTable<Row>({
+  api: async (_params, signal) => {
+    const res = await sdk.get<Row[]>("/console/resources", { signal });
     const items = (res.data ?? [])
       .filter((r) => r.ProductCode === "scecs")
       .map((r) => ({
@@ -59,11 +58,22 @@ const tableColumns = computed(() =>
         <ElButton type="primary" @click="router.push('/buy')">创建实例</ElButton>
       </template>
     </PageHeader>
-    <ResourceTable :rows="rows" :columns="tableColumns" :loading="loading" :total="total" :page="page" :page-size="pageSize" @update:page="setPage" />
-    <EmptyGuide v-if="!loading && rows.length === 0" title="暂无云服务器" description="创建您的第一台云服务器。" action-label="创建实例" action-href="#/buy" />
+    <div v-if="error" class="ecs-error">
+      <p class="ecs-error-msg">列表加载失败:{{ (error as Error)?.message ?? String(error) }}</p>
+      <ElButton size="small" @click="refresh">重试</ElButton>
+    </div>
+    <template v-else>
+      <ResourceTable :rows="rows" :columns="tableColumns" :loading="loading" :total="total" :page="page" :page-size="pageSize" @update:page="setPage" />
+      <EmptyGuide v-if="!loading && rows.length === 0" title="暂无云服务器" description="创建您的第一台云服务器。" action-label="创建实例" action-href="#/buy" />
+    </template>
   </section>
 </template>
 
 <style scoped>
 .ecs-app { padding: 16px 24px; }
+.ecs-error {
+  padding: 32px; text-align: center;
+  border: 1px solid var(--sc-border); border-radius: var(--sc-radius-lg);
+}
+.ecs-error-msg { color: var(--sc-color-danger); font-size: 13px; margin: 0 0 12px; }
 </style>

@@ -30,6 +30,7 @@ package pricing
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"sort"
 	"strings"
 	"time"
@@ -106,10 +107,13 @@ func ParseAmount(s string) (Amount, error) {
 		}
 	}
 
-	total := units*scaleFactor + frac
-	if total < 0 {
+	// Check the bound BEFORE multiplying: units*scaleFactor may wrap around to
+	// a positive value, which the post-hoc `total < 0` test cannot catch.
+	const maxInt64 = 1<<63 - 1
+	if units > (maxInt64-frac)/scaleFactor {
 		return 0, fmt.Errorf("pricing: amount %q overflows", s)
 	}
+	total := units*scaleFactor + frac
 	if neg {
 		total = -total
 	}
@@ -162,7 +166,13 @@ func (a Amount) IsZero() bool { return a == 0 }
 func (a Amount) IsNegative() bool { return a < 0 }
 
 // Mul multiplies by an integer quantity. Exact — no rounding needed.
-func (a Amount) Mul(qty int64) Amount { return Amount(int64(a) * qty) }
+//
+// Overflow panics rather than wrapping: a silently-wrapped amount is a
+// corrupted bill, and (like MustParseAmount) a panic at the corruption site is
+// the only response that cannot be mistaken for a valid price.
+func (a Amount) Mul(qty int64) Amount {
+	return Amount(checkedMulDiv(int64(a), qty, 1, false))
+}
 
 // MulRate multiplies by a rate expressed in basis points (1/10000), rounding
 // half-up at the last carried decimal place.
@@ -171,16 +181,15 @@ func (a Amount) Mul(qty int64) Amount { return Amount(int64(a) * qty) }
 // customers and finance teams expect on an invoice line, and consistency with
 // the printed bill matters more here than statistical neutrality.
 //
+// The intermediate product is carried at 128-bit precision (math/bits.Mul64),
+// so a large amount times a large rate cannot silently wrap; a RESULT that
+// exceeds int64 panics, mirroring Mul.
+//
 // Use MulDiv instead when the rate is a ratio of two integers (for example
 // "11 of 12 months"): converting such a ratio to basis points first truncates
 // it, and the lost precision is systematic rather than random.
 func (a Amount) MulRate(basisPoints int64) Amount {
-	product := int64(a) * basisPoints
-	// Round half away from zero.
-	if product >= 0 {
-		return Amount((product + 5000) / 10000)
-	}
-	return Amount((product - 5000) / 10000)
+	return Amount(checkedMulDiv(int64(a), basisPoints, 10000, true))
 }
 
 // MulDiv returns a × num / den, rounding half away from zero, without an
@@ -193,19 +202,62 @@ func (a Amount) MulRate(basisPoints int64) Amount {
 // falls the same way — against whoever is receiving the money — so it is a
 // systematic bias, not noise, and it accumulates across every refund.
 //
+// The intermediate product a×num is carried at 128-bit precision so it cannot
+// silently wrap; a result that does not fit int64 panics, mirroring Mul.
+//
 // den must be non-zero; a zero denominator returns zero rather than panicking,
 // since the caller's degenerate input should not take down a billing run.
 func (a Amount) MulDiv(num, den int64) Amount {
 	if den == 0 {
 		return 0
 	}
-	product := int64(a) * num
-	half := den / 2
-	if (product < 0) != (den < 0) {
-		// Result is negative: round away from zero.
-		return Amount((product - half) / den)
+	return Amount(checkedMulDiv(int64(a), num, den, true))
+}
+
+// checkedMulDiv computes a×b/den with a 128-bit intermediate product,
+// optionally rounding half away from zero, and panics if the true result does
+// not fit in int64. den must be positive except for the sign handling below.
+func checkedMulDiv(a, b, den int64, round bool) int64 {
+	neg := (a < 0) != (b < 0)
+	ua, ub := absU64(a), absU64(b)
+	hi, lo := bits.Mul64(ua, ub)
+
+	uden := absU64(den)
+	if den < 0 {
+		neg = !neg
 	}
-	return Amount((product + half) / den)
+	if round {
+		// Add half the denominator before dividing → round half away from zero.
+		half := uden / 2
+		lo2 := lo + half
+		if lo2 < lo {
+			hi++
+		}
+		lo = lo2
+	}
+	if hi >= uden {
+		// The quotient would need more than 64 bits.
+		panic(fmt.Sprintf("pricing: amount overflow in %d×%d/%d", a, b, den))
+	}
+	q, _ := bits.Div64(hi, lo, uden)
+	if neg {
+		if q > 1<<63 {
+			panic(fmt.Sprintf("pricing: amount overflow in %d×%d/%d", a, b, den))
+		}
+		return -int64(q-1) - 1 // safe negation covering -2^63
+	}
+	if q > 1<<63-1 {
+		panic(fmt.Sprintf("pricing: amount overflow in %d×%d/%d", a, b, den))
+	}
+	return int64(q)
+}
+
+// absU64 returns |v| as uint64, correct for math.MinInt64.
+func absU64(v int64) uint64 {
+	if v < 0 {
+		return uint64(-(v + 1)) + 1
+	}
+	return uint64(v)
 }
 
 // Min returns the smaller of two amounts.

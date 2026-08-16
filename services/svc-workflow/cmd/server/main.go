@@ -127,6 +127,7 @@ func (a *app) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Workflow.MissingAccount", "missing or invalid X-Sc-Account-Id header", http.StatusForbidden)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req startRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", "malformed request body", http.StatusBadRequest)

@@ -1,4 +1,5 @@
 # dev overrides for svc-metering (values merge on top of the chart defaults).
 image:
   tag: latest
+  pullPolicy: Always   # mutable dev tag => always re-pull
 replicas: 1

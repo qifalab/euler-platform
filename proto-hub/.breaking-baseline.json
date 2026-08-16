@@ -1,6 +1,9 @@
 {
   "messages_by_path": {
-    "proto-hub/proto/starcloud\\alert\\v1\\alert.proto": {
+    "proto-hub/proto/starcloud/alert/v1/alert.proto": {
+      "Ack": {
+        "fields": {}
+      },
       "AlertEvent": {
         "fields": {
           "1": "string",
@@ -50,7 +53,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\apimeta\\v1\\apimeta.proto": {
+    "proto-hub/proto/starcloud/apimeta/v1/apimeta.proto": {
       "Action": {
         "fields": {
           "1": "string",
@@ -107,7 +110,10 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\audit\\v1\\audit.proto": {
+    "proto-hub/proto/starcloud/audit/v1/audit.proto": {
+      "Ack": {
+        "fields": {}
+      },
       "AuditEvent": {
         "fields": {
           "1": "string",
@@ -122,7 +128,7 @@
           "4": "string",
           "5": "string",
           "6": "string",
-          "7": "IdentitySnapshot",
+          "7": "starcloud.event.v1.IdentitySnapshot",
           "8": "string",
           "9": "string"
         }
@@ -139,15 +145,6 @@
           "1": "AuditEvent",
           "2": "string",
           "3": "bool"
-        }
-      },
-      "IdentitySnapshot": {
-        "fields": {
-          "1": "string",
-          "2": "int64",
-          "3": "string",
-          "4": "string",
-          "5": "bool"
         }
       },
       "PutEventRequest": {
@@ -173,7 +170,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\billing\\v1\\billing.proto": {
+    "proto-hub/proto/starcloud/billing/v1/billing.proto": {
       "AccountBalance": {
         "fields": {
           "1": "int64",
@@ -182,6 +179,9 @@
           "4": "string",
           "5": "int64"
         }
+      },
+      "Ack": {
+        "fields": {}
       },
       "AdjustBalanceRequest": {
         "fields": {
@@ -285,7 +285,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\catalog\\v1\\catalog.proto": {
+    "proto-hub/proto/starcloud/catalog/v1/catalog.proto": {
       "CalculatePriceRequest": {
         "fields": {
           "1": "int64",
@@ -379,7 +379,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\event\\v1\\event.proto": {
+    "proto-hub/proto/starcloud/event/v1/event.proto": {
       "AuditAction": {
         "fields": {
           "1": "string",
@@ -526,7 +526,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\iam\\v1\\iam.proto": {
+    "proto-hub/proto/starcloud/iam/v1/iam.proto": {
       "AccessDecision": {
         "fields": {
           "1": "bool",
@@ -557,14 +557,7 @@
         }
       },
       "Ack": {
-        "fields": {
-          "1": "int64",
-          "2": "string",
-          "3": "string",
-          "4": "bool",
-          "5": "bool",
-          "6": "bool"
-        }
+        "fields": {}
       },
       "AttachPolicyRequest": {
         "fields": {
@@ -585,6 +578,16 @@
           "1": "int64",
           "2": "string",
           "3": "int64"
+        }
+      },
+      "CreateUserRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "bool",
+          "5": "bool",
+          "6": "bool"
         }
       },
       "DeleteAccessKeyRequest": {
@@ -696,7 +699,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\metering\\v1\\metering.proto": {
+    "proto-hub/proto/starcloud/metering/v1/metering.proto": {
       "DescribeMeteringDataRequest": {
         "fields": {
           "1": "int64",
@@ -709,7 +712,7 @@
       },
       "DescribeMeteringDataResponse": {
         "fields": {
-          "1": "UsageRecord",
+          "1": "starcloud.event.v1.UsageRecord",
           "2": "HourlyUsage"
         }
       },
@@ -733,26 +736,12 @@
           "1": "int32",
           "2": "int32"
         }
-      },
-      "UsageRecord": {
-        "fields": {
-          "1": "string",
-          "10": "int64",
-          "11": "string",
-          "12": "string",
-          "13": "string",
-          "2": "int64",
-          "3": "string",
-          "4": "string",
-          "5": "string",
-          "6": "string",
-          "7": "string",
-          "8": "int64",
-          "9": "int32"
-        }
       }
     },
-    "proto-hub/proto/starcloud\\monitor\\v1\\monitor.proto": {
+    "proto-hub/proto/starcloud/monitor/v1/monitor.proto": {
+      "Ack": {
+        "fields": {}
+      },
       "DeleteMetricRuleRequest": {
         "fields": {
           "1": "int64",
@@ -846,7 +835,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\notify\\v1\\notify.proto": {
+    "proto-hub/proto/starcloud/notify/v1/notify.proto": {
       "ChannelDelivery": {
         "fields": {
           "1": "string",
@@ -911,25 +900,9 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\orchestrator\\v1\\orchestrator.proto": {
+    "proto-hub/proto/starcloud/orchestrator/v1/orchestrator.proto": {
       "Ack": {
-        "fields": {
-          "1": "string",
-          "10": "int64",
-          "11": "int64",
-          "12": "int64",
-          "13": "int64",
-          "14": "int64",
-          "15": "int32",
-          "2": "int64",
-          "3": "int64",
-          "4": "string",
-          "5": "string",
-          "6": "string",
-          "7": "string",
-          "8": "ResourceStatus",
-          "9": "string"
-        }
+        "fields": {}
       },
       "DescribeResourceStatusRequest": {
         "fields": {
@@ -967,9 +940,31 @@
           "2": "int64",
           "3": "ResourceOperation"
         }
+      },
+      "ResourceInstance": {
+        "fields": {
+          "1": "string",
+          "10": "int64",
+          "11": "int64",
+          "12": "int64",
+          "13": "int64",
+          "14": "int64",
+          "15": "int32",
+          "2": "int64",
+          "3": "int64",
+          "4": "string",
+          "5": "string",
+          "6": "string",
+          "7": "string",
+          "8": "ResourceStatus",
+          "9": "string"
+        }
       }
     },
-    "proto-hub/proto/starcloud\\order\\v1\\order.proto": {
+    "proto-hub/proto/starcloud/order/v1/order.proto": {
+      "Ack": {
+        "fields": {}
+      },
       "CreateOrderRequest": {
         "fields": {
           "1": "int64",
@@ -1056,7 +1051,10 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\org\\v1\\org.proto": {
+    "proto-hub/proto/starcloud/org/v1/org.proto": {
+      "Ack": {
+        "fields": {}
+      },
       "CreateProjectRequest": {
         "fields": {
           "1": "int64",
@@ -1121,7 +1119,10 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\payment\\v1\\payment.proto": {
+    "proto-hub/proto/starcloud/payment/v1/payment.proto": {
+      "Ack": {
+        "fields": {}
+      },
       "ChannelCallbackRequest": {
         "fields": {
           "1": "string",
@@ -1165,16 +1166,9 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\quota\\v1\\quota.proto": {
+    "proto-hub/proto/starcloud/quota/v1/quota.proto": {
       "Ack": {
-        "fields": {
-          "1": "string",
-          "2": "int64",
-          "3": "string",
-          "4": "string",
-          "5": "int32",
-          "6": "int64"
-        }
+        "fields": {}
       },
       "ApplyQuotaIncreaseRequest": {
         "fields": {
@@ -1215,8 +1209,15 @@
           "1": "QuotaUsage"
         }
       },
-      "QuotaService": {
-        "fields": {}
+      "OccupyToken": {
+        "fields": {
+          "1": "string",
+          "2": "int64",
+          "3": "string",
+          "4": "string",
+          "5": "int32",
+          "6": "int64"
+        }
       },
       "QuotaUsage": {
         "fields": {
@@ -1237,7 +1238,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\ticket\\v1\\ticket.proto": {
+    "proto-hub/proto/starcloud/ticket/v1/ticket.proto": {
       "CreateTicketRequest": {
         "fields": {
           "1": "int64",
@@ -1292,18 +1293,9 @@
         }
       }
     },
-    "proto-hub/proto/starcloud\\workflow\\v1\\workflow.proto": {
+    "proto-hub/proto/starcloud/workflow/v1/workflow.proto": {
       "Ack": {
-        "fields": {
-          "1": "int64",
-          "2": "string",
-          "3": "string",
-          "4": "bytes",
-          "5": "FlowStatus",
-          "6": "int64",
-          "7": "int64",
-          "8": "int64"
-        }
+        "fields": {}
       },
       "CompensateFlowRequest": {
         "fields": {
@@ -1327,6 +1319,18 @@
         "fields": {
           "1": "int64",
           "2": "FlowStatus"
+        }
+      },
+      "FlowInstance": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "string",
+          "4": "bytes",
+          "5": "FlowStatus",
+          "6": "int64",
+          "7": "int64",
+          "8": "int64"
         }
       },
       "StartFlowRequest": {

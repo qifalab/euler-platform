@@ -88,6 +88,10 @@ type Charge struct {
 	PayAmount pricing.Amount
 	// SnapshotID is the price snapshot this charge was computed against.
 	SnapshotID string
+	// Shortfall is the portion of PretaxAmount no pool could cover — the
+	// arrears amount carried on the charge itself so the reconcile equation
+	// (deductions + shortfall = pretax) closes even for an unpaid line.
+	Shortfall pricing.Amount
 	// CoveredRatio is carried forward from the aggregate so a bill line built
 	// on incomplete data is visible on the bill itself, not only in the
 	// pipeline's own logs.
@@ -108,10 +112,12 @@ func (c Charge) TotalDeducted() pricing.Amount {
 }
 
 // Reconciles reports whether the charge's components add up: every unit of
-// pretax cost must be accounted for by some deduction. This is the per-row
-// invariant behind 09 A2 (无未解释差异).
+// pretax cost must be accounted for by some deduction OR by the recorded
+// arrears shortfall. This is the per-row invariant behind 09 A2 (无未解释差异):
+// an unpaid line is EXPLAINED (the account is in arrears), not unexplained,
+// so it must not keep a bill unreconciled forever.
 func (c Charge) Reconciles() bool {
-	return c.TotalDeducted() == c.PretaxAmount
+	return c.TotalDeducted().Add(c.Shortfall) == c.PretaxAmount
 }
 
 // Pool is a deductible balance available to settle charges.
@@ -140,8 +146,8 @@ func (p Pool) applicable(productCode string) bool {
 
 // Errors.
 var (
-	ErrNoUnitPrice   = errors.New("billing: no unit price for metering item")
-	ErrFrozenPeriod  = errors.New("billing: billing period is frozen")
+	ErrNoUnitPrice    = errors.New("billing: no unit price for metering item")
+	ErrFrozenPeriod   = errors.New("billing: billing period is frozen")
 	ErrNegativeCharge = errors.New("billing: computed charge is negative")
 )
 
@@ -208,20 +214,25 @@ func (e *Engine) Settle(
 		}
 	}
 
+	// BillPeriod is derived in UTC, matching metering.FreezeBoundary/Frozen:
+	// deriving it from the local zone would put an hour near month boundary
+	// into one month's bill while the freeze check treats it as another's.
+	hourUTC := usage.HourStart.UTC()
 	charge := Charge{
 		ChargeID:     ChargeID(usage.AggID),
 		AccountID:    usage.AccountID,
 		ResourceID:   usage.ResourceID,
 		ProductCode:  productCode,
 		MeteringItem: usage.MeteringItem,
-		BillPeriod:   usage.HourStart.Format("2006-01"),
-		BillingCycle: usage.HourStart,
+		BillPeriod:   hourUTC.Format("2006-01"),
+		BillingCycle: hourUTC,
 		Quantity:     usage.TotalQuantity,
 		UnitPrice:    unitPrice,
 		PretaxAmount: pretax,
 		Deductions:   deductions,
 		PayAmount:    cashPaid,
 		SnapshotID:   snapshotID,
+		Shortfall:    shortfall,
 		CoveredRatio: usage.CoveredRatio,
 		SettledAt:    e.Now(),
 	}

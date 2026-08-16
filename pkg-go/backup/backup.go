@@ -42,11 +42,11 @@ import (
 // AZ when true (the actual copy is the executor's job; the policy carries the
 // intent, model先行).
 type BackupPolicy struct {
-	PolicyID         string
+	PolicyID           string
 	TargetResourceType string // e.g. "instance", "dbinstance" — what the policy backs up
-	ScheduleHours    int
-	RetentionDays    int
-	CrossAZ          bool
+	ScheduleHours      int
+	RetentionDays      int
+	CrossAZ            bool
 }
 
 // Snapshot is one backup taken under a policy.
@@ -65,9 +65,9 @@ type Snapshot struct {
 
 // Errors.
 var (
-	ErrScheduleRequired = errors.New("backup: ScheduleHours must be positive")
+	ErrScheduleRequired  = errors.New("backup: ScheduleHours must be positive")
 	ErrRetentionNegative = errors.New("backup: RetentionDays must not be negative")
-	ErrTargetRequired   = errors.New("backup: TargetResourceType required")
+	ErrTargetRequired    = errors.New("backup: TargetResourceType required")
 )
 
 // Validate checks the policy before it can back anything up.
@@ -117,6 +117,11 @@ func IsDue(p BackupPolicy, lastBackup time.Time, now time.Time) bool {
 // ExpiredSnapshots returns the snapshots whose TakenAt is older than the
 // retention window, i.e. past their keep-by date.
 //
+// Deprecated: the bare retentionDays parameter invites passing a number that
+// disagrees with the policy the snapshots were taken under. Use
+// BackupPolicy.ExpiredSnapshots, which reads the retention from the policy
+// itself. This function remains as the shared implementation.
+//
 // retentionDays == 0 means "retain forever" — nothing is expired. A policy
 // with no retention is a configuration smell (storage grows unbounded) but is
 // not a crash; the executor surfaces it elsewhere. With a positive retention,
@@ -138,6 +143,14 @@ func ExpiredSnapshots(snapshots []Snapshot, retentionDays int, now time.Time) []
 		}
 	}
 	return expired
+}
+
+// ExpiredSnapshots returns the snapshots past the POLICY's retention window.
+// The retention comes from the policy itself — the single source of truth —
+// so an executor cannot accidentally expire snapshots against a different
+// number than the customer configured.
+func (p BackupPolicy) ExpiredSnapshots(snapshots []Snapshot, now time.Time) []Snapshot {
+	return ExpiredSnapshots(snapshots, p.RetentionDays, now)
 }
 
 // String renders a policy for diagnostics/logging (never parsed by consumers).

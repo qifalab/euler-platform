@@ -46,6 +46,15 @@ import (
 
 const accountIDHeader = "X-Sc-Account-Id"
 
+// maxBodyBytes caps request bodies before JSON decoding (defense against
+// oversized payloads).
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// internalToken is the optional shared secret for service-to-service calls.
+// When SC_INTERNAL_TOKEN is set, every request must carry a matching
+// X-Sc-Internal-Token header. Unset (dev default) disables the check.
+var internalToken = os.Getenv("SC_INTERNAL_TOKEN")
+
 // seededResourceID matches the demo + console-bff seed for account 100123.
 const seededResourceID = "scecs-cn-north-1-01-a1b2c3d4"
 
@@ -181,6 +190,7 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req ingestRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
 		return
@@ -191,13 +201,25 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	qty, err := metering.ParseQuantity(req.Value)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "value: "+err.Error())
+		slog.Warn("ingest value rejected", "resource", req.ResourceID, "err", err)
+		writeErr(w, "Common.InvalidParameter", 400, "invalid value")
 		return
 	}
 	// Window = current minute, aligned. The collector writes one reading per
 	// minute window per (resource, item); the deterministic RecordID makes a
 	// retransmit collapse rather than double-charge.
 	ws := s.now().UTC().Truncate(time.Minute)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// The account that owns the resource must match the caller. For a new
+	// resource (first ingest), adopt the caller's account.
+	if owner, exists := s.accounts[req.ResourceID]; exists && owner != acct {
+		writeErr(w, "Metering.ResourceNotOwned", 403, "resource belongs to another account")
+		return
+	}
+	// s.regions / s.types are shared maps; they must only be read while
+	// holding s.mu, so the record is built inside the lock.
 	rec := metering.UsageRecord{
 		RecordID:      metering.RecordID(req.ResourceID, req.Metric, ws),
 		AccountID:     acct,
@@ -211,15 +233,6 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 		CollectTS:      s.now(),
 		CollectorID:    "http-ingest",
 		BatchID:        metering.BatchRealtime,
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// The account that owns the resource must match the caller. For a new
-	// resource (first ingest), adopt the caller's account.
-	if owner, exists := s.accounts[req.ResourceID]; exists && owner != acct {
-		writeErr(w, "Metering.ResourceNotOwned", 403, "resource belongs to another account")
-		return
 	}
 	if req.ProductCode != "" {
 		s.products[req.ResourceID] = req.ProductCode
@@ -457,7 +470,18 @@ func inPeriod(h time.Time, period string, newest time.Time) bool {
 	}
 }
 
+// accountIDFrom extracts the caller's account id.
+//
+// TRUST BOUNDARY: X-Sc-Account-Id is trusted only because these routes are
+// reachable exclusively via the APISIX gateway, which strips any
+// client-supplied copy and injects the authenticated account. Deployments that
+// cannot guarantee that network isolation should set SC_INTERNAL_TOKEN so
+// callers must also present the shared X-Sc-Internal-Token secret.
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	if internalToken != "" && r.Header.Get("X-Sc-Internal-Token") != internalToken {
+		writeErr(w, "Common.Forbidden", 403, "invalid internal token")
+		return 0, false
+	}
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
 		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")

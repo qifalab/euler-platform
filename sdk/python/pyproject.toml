@@ -16,3 +16,6 @@ Documentation = "https://docs.starcloud.cn"
 
 [tool.setuptools.packages.find]
 include = ["cloudsdk*"]
+
+[tool.setuptools.package-data]
+cloudsdk = ["py.typed"]

@@ -31,6 +31,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -125,6 +126,7 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req explorerRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB body cap
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.ErrInvalidParameter)
 		return
@@ -217,7 +219,7 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	target := explorerTarget(req.ProductCode)
 	if target != "" {
 		out.Executed = true
-		out.Upstream = executeSigned(target, method, req.Path, query, signed.Headers, []byte(req.Body))
+		out.Upstream = executeSigned(r.Context(), target, method, req.Path, query, signed.Headers, []byte(req.Body))
 	}
 
 	writeJSON(w, http.StatusOK, out)
@@ -245,24 +247,30 @@ func explorerTarget(productCode string) string {
 	return strings.TrimSpace(os.Getenv("SC_EXPLORER_TARGET"))
 }
 
+// explorerHTTPClient is the upstream client for live Explorer calls: a bounded
+// timeout so a hung upstream cannot pin an Explorer request indefinitely
+// (never http.DefaultClient, which has no timeout).
+var explorerHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 // executeSigned performs the signed HTTP request against a configured target and
 // captures the response for display. A transport error becomes a structured
 // upstreamResult.Error rather than a 503 — the signature already succeeded, and
 // an unreachable upstream is exactly the kind of thing the Explorer exists to
-// surface without masking.
-func executeSigned(target, method, path string, query url.Values, headers map[string]string, body []byte) *upstreamResult {
+// surface without masking. The caller's request context bounds the call so a
+// disconnected client cancels the upstream fetch.
+func executeSigned(ctx context.Context, target, method, path string, query url.Values, headers map[string]string, body []byte) *upstreamResult {
 	u := strings.TrimRight(target, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	req, err := http.NewRequest(method, u, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, method, u, strings.NewReader(string(body)))
 	if err != nil {
 		return &upstreamResult{Error: "build request: " + err.Error()}
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := explorerHTTPClient.Do(req)
 	if err != nil {
 		return &upstreamResult{Error: "upstream unreachable: " + err.Error()}
 	}

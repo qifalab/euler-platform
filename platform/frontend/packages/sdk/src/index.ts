@@ -71,16 +71,24 @@ export function createSDK(options: SdkOptions = {}) {
 
   async function request<T>(
     path: string,
-    init: RequestInit & { retries?: number; _skipToken?: boolean } = {},
+    init: RequestInit & { retries?: number; _skipToken?: boolean; idempotencyKey?: string } = {},
   ): Promise<ScResponse<T>> {
-    const { retries = 1, _skipToken = false, ...fetchInit } = init;
+    const { retries = 1, _skipToken = false, idempotencyKey, ...fetchInit } = init;
     const url = baseURL + path;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    // Chain a caller-supplied signal into the internal timeout controller so
+    // both cancellation sources work (e.g. useResourceTable stale-abort).
+    const external = fetchInit.signal;
+    if (external) {
+      if (external.aborted) controller.abort();
+      else external.addEventListener("abort", () => controller.abort(), { once: true });
+    }
 
     const headers = new Headers(fetchInit.headers);
     headers.set("X-Requested-With", "XMLHttpRequest"); // CSRF double-submit (02§5.1)
+    if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
     if (!_skipToken) {
       const token = getToken();
       if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -99,9 +107,17 @@ export function createSDK(options: SdkOptions = {}) {
 
     const requestId = res.headers.get("X-Request-Id") ?? undefined;
 
-    // 401 → single-flight refresh → replay once. The replay carries the fresh
-    // token directly in headers and skips getToken() (which still returns the
-    // stale one — token storage is the caller's job, not the SDK's).
+    // Auto-replay is only safe for idempotent requests: GET/HEAD/OPTIONS/PUT/
+    // DELETE, or any method carrying an explicit idempotencyKey. A plain POST
+    // may have been processed server-side, so it is never replayed blindly.
+    const method = (fetchInit.method ?? "GET").toUpperCase();
+    const replaySafe =
+      ["GET", "HEAD", "OPTIONS", "PUT", "DELETE"].includes(method) || Boolean(idempotencyKey);
+
+    // 401 → single-flight refresh → replay once. A 401 is rejected before the
+    // handler runs, so the replay is safe even for POST. The replay carries the
+    // fresh token directly in headers and skips getToken() (which still returns
+    // the stale one — token storage is the caller's job, not the SDK's).
     if (res.status === 401 && retries > 0) {
       const fresh = await refreshToken();
       if (fresh) {
@@ -110,9 +126,13 @@ export function createSDK(options: SdkOptions = {}) {
       }
     }
 
-    // 429 → exponential backoff retry once (02§7.5).
-    if (res.status === 429 && retries > 0) {
-      await new Promise((r) => setTimeout(r, 500));
+    // 429 → backoff retry once (02§7.5), honoring Retry-After when present.
+    // Only idempotent/keyed requests are retried (see replaySafe above).
+    if (res.status === 429 && retries > 0 && replaySafe) {
+      const retryAfter = res.headers.get("Retry-After");
+      const parsed = retryAfter ? Number(retryAfter) : NaN;
+      const delayMs = Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed * 1000, 30_000) : 500;
+      await new Promise((r) => setTimeout(r, delayMs));
       return request<T>(path, { ...init, retries: 0 });
     }
 
@@ -126,28 +146,41 @@ export function createSDK(options: SdkOptions = {}) {
 
     // Unwrap the platform envelope { RequestId, Code, Message, Data } (03§9.3).
     // Callers receive Data directly; non-envelope bodies pass through unchanged.
-    const body = payload as { Code?: string; Data?: unknown };
+    // HTTP 200 with Code != "OK" is a BUSINESS error — surface it as ScError
+    // instead of silently handing callers an error envelope as data.
+    const body = payload as { Code?: string; Message?: string; RequestId?: string; Data?: unknown };
+    if (body && typeof body === "object" && typeof body.Code === "string" && body.Code !== "OK") {
+      const err = toError(
+        { code: body.Code, message: body.Message ?? "business error", requestId: body.RequestId },
+        res.status,
+        requestId,
+      );
+      options.onError?.(err);
+      throw err;
+    }
     const data = body && typeof body === "object" && "Data" in body ? body.Data : payload;
     return { data: data as T, requestId };
   }
 
+  type CallInit = RequestInit & { idempotencyKey?: string };
+
   return {
-    get: <T>(path: string, init?: RequestInit) => request<T>(path, { ...init, method: "GET" }),
-    post: <T>(path: string, body?: unknown, init?: RequestInit) =>
+    get: <T>(path: string, init?: CallInit) => request<T>(path, { ...init, method: "GET" }),
+    post: <T>(path: string, body?: unknown, init?: CallInit) =>
       request<T>(path, {
         ...init,
         method: "POST",
         headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
-    put: <T>(path: string, body?: unknown, init?: RequestInit) =>
+    put: <T>(path: string, body?: unknown, init?: CallInit) =>
       request<T>(path, {
         ...init,
         method: "PUT",
         headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
-    del: <T>(path: string, init?: RequestInit) => request<T>(path, { ...init, method: "DELETE" }),
+    del: <T>(path: string, init?: CallInit) => request<T>(path, { ...init, method: "DELETE" }),
   };
 }
 
