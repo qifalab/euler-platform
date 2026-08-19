@@ -41,6 +41,12 @@ export default defineConfig({
         target: "http://localhost:9201",
         changeOrigin: true,
       },
+      // Catalogue metadata (regions/images/placement) → svc-catalog — the
+      // RegionSelector and wizard pickers read live region inventory.
+      "/api/v1/catalog": {
+        target: "http://localhost:9207",
+        changeOrigin: true,
+      },
     },
   },
 });

@@ -1,0 +1,9 @@
+# Helm chart for svc-marketplace — phase-3 marketplace service (M-10) (08-devops §4.3).
+# Syncs with ArgoCD sync-wave 10 (business services apply after middleware/gateway).
+
+apiVersion: v2
+name: svc-marketplace
+description: svc-marketplace marketplace service deployment chart (09§5.2 M-10)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

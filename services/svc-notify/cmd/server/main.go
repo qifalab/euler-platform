@@ -41,7 +41,7 @@ import (
 )
 
 func main() {
-	httpAddr := flag.String("http", ":8080", "HTTP listen address")
+	httpAddr := flag.String("http", ":9211", "HTTP listen address")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -61,7 +61,7 @@ func main() {
 		disp.Register(s)
 	}
 
-	app := &app{disp: disp, store: store}
+	app := &app{disp: disp, store: store, announcements: seedAnnouncements()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
@@ -69,6 +69,9 @@ func main() {
 	mux.HandleFunc("/metrics", metrics)
 	mux.HandleFunc("/internal/notifications", app.handleNotifications)
 	mux.HandleFunc("/internal/notifications/verify", app.handleVerify)
+	// Public site content — anonymous (the marketing site SSRs it before any
+	// login); see handleAnnouncements for why this lives in svc-notify.
+	mux.HandleFunc("/api/v1/announcements", app.handleAnnouncements)
 
 	srv := &http.Server{
 		Addr:              *httpAddr,
@@ -102,6 +105,84 @@ func main() {
 type app struct {
 	disp  *notify.Dispatcher
 	store *memStore
+	// announcements is the public site-content board (news / programs / videos)
+	// served by GET /api/v1/announcements. It rides on svc-notify because a
+	// broadcast announcement IS a notification — same audience-wide publish
+	// semantics, same persistence-before-display rule; a dedicated CMS service
+	// can take over the table later without changing the route contract.
+	announcements []announcement
+}
+
+// announcement is one card on the marketing site's homepage. Type selects the
+// slot the card lands in; Tab groups program cards under their tab. Field
+// names mirror what the site renders (category/badge/title/desc/image).
+type announcement struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`        // news | program | video
+	Tab         string `json:"tab,omitempty"`         // program only: tab grouping key
+	Category    string `json:"category,omitempty"`     // news only: corner tag
+	Badge       string `json:"badge,omitempty"`        // program only: corner badge
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Image       string `json:"image,omitempty"`
+	Link        string `json:"link,omitempty"`
+	Duration    string `json:"duration,omitempty"`     // video only
+	PublishedAt time.Time `json:"publishedAt"`
+}
+
+// handleAnnouncements implements GET /api/v1/announcements — the public site
+// content board, filterable by ?type=news|program|video (and ?tab= for
+// programs). Anonymous by design: the marketing site is browsed pre-login, so
+// there is no X-Sc-Account-Id to require; the payload carries no tenant data.
+func (a *app) handleAnnouncements(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, r, http.StatusMethodNotAllowed, "Common.InvalidAction", "method not allowed")
+		return
+	}
+	typ := r.URL.Query().Get("type")
+	tab := r.URL.Query().Get("tab")
+	out := make([]announcement, 0, len(a.announcements))
+	for _, an := range a.announcements {
+		if typ != "" && an.Type != typ {
+			continue
+		}
+		if tab != "" && an.Tab != tab {
+			continue
+		}
+		out = append(out, an)
+	}
+	writeJSON(w, r, http.StatusOK, "OK", "", map[string]interface{}{"items": out})
+}
+
+// seedAnnouncements mirrors the site's homepage content into the announcement
+// board (t_announcement in production, edited by the marketing back-office).
+// The seed preserves the shipped copy so the page renders identically while
+// its data source moves server-side.
+func seedAnnouncements() []announcement {
+	now := time.Now().UTC()
+	day := func(d int) time.Time { return now.AddDate(0, 0, -d) }
+	return []announcement{
+		// Homepage 最新动态 carousel.
+		{ID: "ann-001", Type: "news", Category: "产品动态", Title: "欧拉 AI 威胁防御正式发布", Description: "帮助企业以 AI 驱动的安全分析,更快识别和应对威胁。", Image: "/images/update-1.jpg", PublishedAt: day(2)},
+		{ID: "ann-002", Type: "news", Category: "AI 基础设施", Title: "新一代 AI 基础设施:面向 Agent 时代的扩展", Description: "支持更大规模模型推理与 Agent 编排的算力架构升级。", Image: "/images/update-2.jpg", PublishedAt: day(6)},
+		{ID: "ann-003", Type: "news", Category: "数据云", Title: "Agentic 数据云的新能力", Description: "驱动「行动系统」——从数据洞察到自动化决策的全链路。", Image: "/images/update-3.jpg", PublishedAt: day(9)},
+		{ID: "ann-004", Type: "news", Category: "产品动态", Title: "Gemini Enterprise:一个平台搞定 Agent 开发", Description: "统一的 Agent 开发、编排与治理平台,加速企业 AI 落地。", Image: "/images/update-4.jpg", PublishedAt: day(13)},
+		// Homepage 栏目 tab cards.
+		{ID: "ann-101", Type: "program", Tab: "开发者", Badge: "产品动态", Title: "Gemini 3.6 Flash 模型上线", Description: "更快的推理速度,更低的调用成本,适合高频 Agent 场景。", PublishedAt: day(1)},
+		{ID: "ann-102", Type: "program", Tab: "开发者", Badge: "指南", Title: "用 Agent Platform 构建多 Agent 系统", Description: "10 分钟内构建一个可工作的 AI 应用——从零到部署。", PublishedAt: day(3)},
+		{ID: "ann-103", Type: "program", Tab: "开发者", Badge: "指南", Title: "远程 MCP Server 实战", Description: "用全托管远程 MCP Server 快速接入企业工具链。", PublishedAt: day(5)},
+		{ID: "ann-111", Type: "program", Tab: "企业领袖", Badge: "报告", Title: "2026 AI ROI 报告:从 Token 到回报", Description: "量化企业 AI 投资回报,找到最优的 Agent 落地路径。", PublishedAt: day(2)},
+		{ID: "ann-112", Type: "program", Tab: "企业领袖", Badge: "活动", Title: "Build with Gemini 城市巡展", Description: "在你所在的城市获得 Gemini 实操经验,立即报名。", PublishedAt: day(4)},
+		{ID: "ann-113", Type: "program", Tab: "企业领袖", Badge: "指南", Title: "企业级 Agentic 工作指南", Description: "用 Gemini Enterprise 重塑企业工作流的实践手册。", PublishedAt: day(7)},
+		{ID: "ann-121", Type: "program", Tab: "特别计划", Badge: "新用户", Title: "¥300 免费额度 + 20+ 免费层产品", Description: "注册即享免费试用额度,覆盖计算、存储、数据库等核心产品。", PublishedAt: day(1)},
+		{ID: "ann-122", Type: "program", Tab: "特别计划", Badge: "AI 构建者", Title: "GEAR 计划:每月 35 额度学 Agent", Description: "加入 Gemini Enterprise Agent Ready,学习构建企业级 Agent。", PublishedAt: day(8)},
+		{ID: "ann-123", Type: "program", Tab: "特别计划", Badge: "创业公司", Title: "最高 ¥350 万云资源补贴", Description: "早期融资初创企业可通过欧拉创业计划获取云资源补贴。", PublishedAt: day(10)},
+		// Homepage AI highlight video cards.
+		{ID: "ann-201", Type: "video", Title: "10 分钟用 Agent Platform 构建应用", Duration: "4 分钟", Image: "/images/highlight-1.jpg", PublishedAt: day(3)},
+		{ID: "ann-202", Type: "video", Title: "多 Agent 系统架构设计", Duration: "12 分钟", Image: "/images/highlight-2.jpg", PublishedAt: day(5)},
+		{ID: "ann-203", Type: "video", Title: "AI 图片编辑指南", Duration: "4 分钟", Image: "/images/highlight-3.jpg", PublishedAt: day(7)},
+		{ID: "ann-204", Type: "video", Title: "模型安全与 Agent 防护", Duration: "8 分钟", Image: "/images/highlight-4.jpg", PublishedAt: day(11)},
+	}
 }
 
 // withMiddleware wraps the mux with the cross-cutting middleware chain every

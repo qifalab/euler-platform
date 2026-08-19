@@ -41,7 +41,7 @@
     </section>
 
     <!-- 3. Latest updates carousel -->
-    <section class="updates">
+    <section v-if="updates.length" class="updates">
       <div class="container">
         <h2 class="section-title">最新动态</h2>
         <div class="update-carousel">
@@ -60,7 +60,7 @@
     </section>
 
     <!-- 4. Tabbed programs section -->
-    <section class="programs">
+    <section v-if="tabs.length" class="programs">
       <div class="container">
         <div class="tabs">
           <button
@@ -84,7 +84,7 @@
     </section>
 
     <!-- 5. Product categories (Google Cloud style) -->
-    <section id="products" class="products-section">
+    <section id="products" v-if="categories.length" class="products-section">
       <div class="container">
         <h2 class="section-title">专为开发者和 AI 设计的云平台</h2>
         <p class="section-sub">免费试用 20+ 产品,新客户注册即享 ¥300 免费额度。</p>
@@ -105,7 +105,7 @@
     </section>
 
     <!-- 6. Dark highlight section -->
-    <section class="highlight">
+    <section v-if="highlightVideos.length" class="highlight">
       <div class="container">
         <div class="highlight-head">
           <h2>用 AI 构建和扩展您的应用</h2>
@@ -174,17 +174,93 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
-import { updates, tabs, tabContent, categories } from "~/app/site-data";
+/**
+ * Homepage — all sections are backend-driven (no client-side content data):
+ *  - GET /api/v1/announcements (svc-notify) → 最新动态 news, 栏目 tab cards,
+ *    AI highlight videos — one board, filtered by `type`.
+ *  - GET /api/v1/catalog/products + /categories (svc-catalog) → 产品分类 grid.
+ * Sections whose source is unavailable simply don't render (honest degradation).
+ */
+import { ref, computed } from "vue";
+
+interface Announcement {
+  id: string;
+  type: "news" | "program" | "video";
+  tab?: string;
+  category?: string;
+  badge?: string;
+  title: string;
+  description?: string;
+  image?: string;
+  link?: string;
+  duration?: string;
+  publishedAt: string;
+}
+interface CatalogProduct {
+  productCode: string;
+  productName: string;
+  category: string;
+  status: number;
+}
+interface CatalogCategory {
+  code: string;
+  name: string;
+  description: string;
+  link: string;
+}
+interface Envelope<T> {
+  Code?: string;
+  Message?: string;
+  Data?: T;
+}
+
+const { data: annData } = await useFetch<Envelope<{ items: Announcement[] }>>("/api/v1/announcements");
+const { data: prodData } = await useFetch<Envelope<CatalogProduct[]>>("/api/v1/catalog/products");
+const { data: catData } = await useFetch<Envelope<CatalogCategory[]>>("/api/v1/catalog/categories");
+
+const announcements = computed<Announcement[]>(() => annData.value?.Data?.items ?? []);
+const onSale = computed<CatalogProduct[]>(() =>
+  (prodData.value?.Data ?? []).filter((p) => p.status === 2),
+);
+
+const updates = computed(() =>
+  announcements.value
+    .filter((a) => a.type === "news")
+    .map((a) => ({ title: a.title, desc: a.description ?? "", image: a.image ?? "", category: a.category ?? "" })),
+);
+
+const tabs = computed(() => {
+  const seen: string[] = [];
+  for (const a of announcements.value) {
+    if (a.type === "program" && a.tab && !seen.includes(a.tab)) seen.push(a.tab);
+  }
+  return seen;
+});
+const tabContent = computed(() =>
+  tabs.value.map((t) =>
+    announcements.value
+      .filter((a) => a.type === "program" && a.tab === t)
+      .map((a) => ({ badge: a.badge ?? "", title: a.title, desc: a.description ?? "" })),
+  ),
+);
+
+const highlightVideos = computed(() =>
+  announcements.value
+    .filter((a) => a.type === "video")
+    .map((a) => ({ title: a.title, duration: a.duration ?? "", image: a.image ?? "" })),
+);
+
+const categories = computed(() =>
+  (catData.value?.Data ?? [])
+    .map((c) => ({
+      title: c.name,
+      items: onSale.value.filter((p) => p.category === c.code).map((p) => p.productName),
+      link: c.link,
+    }))
+    .filter((c) => c.items.length > 0),
+);
 
 const activeTab = ref(0);
-
-const highlightVideos = [
-  { title: "10 分钟用 Agent Platform 构建应用", duration: "4 分钟", image: "/images/highlight-1.jpg" },
-  { title: "多 Agent 系统架构设计", duration: "12 分钟", image: "/images/highlight-2.jpg" },
-  { title: "AI 图片编辑指南", duration: "4 分钟", image: "/images/highlight-3.jpg" },
-  { title: "模型安全与 Agent 防护", duration: "8 分钟", image: "/images/highlight-4.jpg" },
-];
 </script>
 
 <style>

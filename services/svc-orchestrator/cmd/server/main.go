@@ -18,6 +18,7 @@
 //	GET  /api/v1/orchestrator/resources         — list the account's resources
 //	GET  /api/v1/orchestrator/resources/{id}    — resource detail + lifecycle
 //	POST /api/v1/orchestrator/resources/{id}/release — release a resource
+//	POST /api/v1/orchestrator/resources/{id}/actions — user lifecycle actions (stop/start/restart/upgrade)
 //
 // stdlib-HTTP service (repo convention). Envelope {RequestId,Code,Data} (03§9.3).
 package main
@@ -87,6 +88,16 @@ func (s *lifecycleStore) seed() {
 		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
 	}
 	s.resources[inst.ResourceID] = inst
+
+	// Seed one VPC (scvpc) so network-dependent wizards (scredis / sckafka
+	// VPC dropdowns) list a real, placeable network from day one in dev.
+	vpc := &resource.Instance{
+		ResourceID: "scvpc-cn-north-1-01-vpc0a1b2c", AccountID: 100123,
+		ProductCode: "scvpc", Region: "cn-north-1", ChargeType: resource.ChargePostpaid,
+		State: resource.StateRunning, SpecCode: "scvpc.standard",
+		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
+	}
+	s.resources[vpc.ResourceID] = vpc
 }
 
 // --- fulfilment saga (03§4.3.3) ---
@@ -308,6 +319,84 @@ func (s *lifecycleStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "OK", map[string]any{"resourceId": resID, "state": string(inst.State)})
 }
 
+// actionRequest is the body of POST /api/v1/orchestrator/resources/{id}/actions.
+type actionRequest struct {
+	Action   string `json:"action"`             // stop | start | restart | upgrade
+	SpecCode string `json:"specCode,omitempty"` // upgrade only: target SKU
+}
+
+// handleResourceAction applies a user-initiated lifecycle action through the
+// SAME state machine the saga uses (pkg-go/resource transition table) — there
+// is no second, looser path for console buttons. stop/start/restart map onto
+// the RUNNING↔STOPPED edges; upgrade rides the UPGRADING intermediate state
+// (RUNNING → UPGRADING → RUNNING) and rewrites SpecCode. The MockDriver is
+// fire-and-forget for power actions in phase-2 (the ledger is the authority);
+// production fans out to rc-compute the same way Apply/Delete do.
+func (s *lifecycleStore) handleResourceAction(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req actionRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resID := r.PathValue("id")
+	inst, exists := s.resources[resID]
+	if !exists || inst.AccountID != acct {
+		writeErr(w, "Resource.NotFound", 404, "资源不存在")
+		return
+	}
+
+	m := resource.NewMachine(time.Now)
+	transition := func(to resource.State, reason string) bool {
+		if _, err := m.Transition(inst, to, inst.Version, reason); err != nil {
+			slog.Error("resource action transition failed", "resourceId", resID, "to", to, "err", err)
+			writeErr(w, "Resource.StateTransitionFailed", 409,
+				fmt.Sprintf("资源状态 %s 不允许 %s", inst.State, req.Action))
+			return false
+		}
+		return true
+	}
+
+	switch req.Action {
+	case "stop":
+		if !transition(resource.StateStopped, "user stop") {
+			return
+		}
+	case "start":
+		if !transition(resource.StateRunning, "user start") {
+			return
+		}
+	case "restart":
+		// Two legal edges in sequence; the state machine guards each.
+		if !transition(resource.StateStopped, "user restart: stop") || !transition(resource.StateRunning, "user restart: start") {
+			return
+		}
+	case "upgrade":
+		if req.SpecCode == "" {
+			writeErr(w, "Common.InvalidParameter", 400, "upgrade requires specCode")
+			return
+		}
+		if !transition(resource.StateUpgrading, "user upgrade") || !transition(resource.StateRunning, "upgrade applied") {
+			return
+		}
+		inst.SpecCode = req.SpecCode
+	default:
+		writeErr(w, "Common.InvalidParameter", 400, "action must be stop/start/restart/upgrade")
+		return
+	}
+
+	writeJSON(w, "OK", map[string]any{
+		"resourceId": resID, "state": string(inst.State), "specCode": inst.SpecCode,
+	})
+}
+
 // --- helpers ---
 
 func instanceToMap(i *resource.Instance) map[string]any {
@@ -403,6 +492,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orchestrator/resources", store.handleListResources)
 	mux.HandleFunc("GET /api/v1/orchestrator/resources/{id}", store.handleResourceDetail)
 	mux.HandleFunc("POST /api/v1/orchestrator/resources/{id}/release", store.handleRelease)
+	mux.HandleFunc("POST /api/v1/orchestrator/resources/{id}/actions", store.handleResourceAction)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

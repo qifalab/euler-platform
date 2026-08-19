@@ -225,6 +225,102 @@ one-line implementation traceability pointer back to 09 §4.0 (without
 disturbing their forward-looking spec). This closes the gap where the code was
 shipped but the spec still read M-4–M-7 as future plan.
 
+## Phase-3 progress (09-roadmap §5, milestones M-8 → M-9 → M-10 → M-11)
+
+Phase 3 is 规模化与可信度 (T0+18~T0+30): multi-region, stability engineering
+(SLO/chaos), ecosystem (marketplace/Terraform), and compliance (等保三级).
+The first milestone, M-8 (第二地域点亮, 09§5.2), turns the reserved region
+field into an implemented P3 contract.
+
+### M-8 — second region lights up (multi-region model)
+
+- **`pkg-go/multiregion`** — the cross-region layer above `pkg-go/topology`
+  (which stays the AZ-level P2 layer). It encodes 00§4.1/§4.5 and 09§5.2 M-8:
+  - `Region{Name, Role, DistanceKm, ZoneLetters}` with PRIMARY (in-city
+    dual-active) vs STANDBY (remote >300km, read-only/DR) roles;
+    `Role.Writable()` encodes the P3 boundary "不承诺异地多活写" — only
+    PRIMARY writes.
+  - `Classify(service)` — the global-vs-regional classification: IAM and
+    billing are GLOBAL singletons (09§5.2 M-8 "IAM/计费全局单例"), everything
+    else REGIONAL; unknown service names are rejected, not defaulted.
+  - `ClassifyState` — account = SHARED (the only global domain, 00§4.1),
+    ledger/object-storage = REPLICATED, Kafka topics = REBUILT (00§4.5 "不做
+    跨城镜像, 异地按 cloud.* 规范重建 topic").
+  - `Plan.Validate` — exactly one PRIMARY, standby >300km, non-negative RPOs.
+  - `ReplicationChannel.MeetsRPO` + `MeetsRTO` (MaxRTO = 30min) + the
+    canonical `FailoverSteps` (管控面冷转热 + DNS 切换).
+  - Region names delegate to `identifier.IsValidRegion` (single source, not
+    forked — the M-6 lesson carried up one layer).
+- **`pkg-go/event`** — `SysReplicationStatus` (`cloud.sys.replication.status`)
+  topic for cross-region replication-lag observability; the comment records
+  that Kafka topics themselves are rebuilt per region, not mirrored.
+- **Multi-region IaC** — `deploy/gitops-manifests/envs/` restructured to the
+  08§4.2 shape `envs/<region>/<env>/values-overrides/` (primary cn-north-1
+  carries dev/staging/prod; standby cn-east-1 carries prod only). The
+  ApplicationSet gains a region dimension (matrix charts × region × env), and
+  `platform/middleware/minio-replication.yaml` adds the async object-storage
+  replication channel. `tools/check-topology-spread.py` reads the new path.
+- **DDL V3** — `services/svc-orchestrator/sql/V3__resource_db_region_topology.sql`:
+  `region_replication_status` (cross-region replication watermark, the RPO
+  observability source) + `v_resource_by_region` /
+  `v_resource_region_failover_impact` (region-level failover impact for the
+  M-11 drill). Shard key unchanged (account_id single key; region stays a
+  metadata dimension).
+
+### M-9 — stability platform (SLO + chaos + release gates)
+
+- **`pkg-go/slo`** — error budget = 1 − SLO; multi-window burn-rate alerting
+  (1h at ≥14.4× pages, 3d at ≥1× tickets); budget policy (<50% remaining slows
+  releases, exhausted freezes them); the SLA gate requires two consecutive
+  quarters of SLO compliance (08§10). The platform SLO seed carries the 08§10.2
+  targets (gateway 99.95%, metering 99.99%, billing-on-time 99.5%, ...).
+- **`pkg-go/chaos`** — the six mandatory drill subjects (08§9.5), the prod
+  discipline (named blast radius + abort ≤10min), and the >50%
+  expected-vs-actual deviation that opens a remediation item.
+- **`tools/chaos-drill-runbook.md`** — the quarterly drill carrier: the six
+  subjects, staging-first, the prod abort path, and the archive/adjudication
+  rules, all aligned with `pkg-go/chaos`.
+- **`pkg-go/release`** — the 变更三板斧 as code: canary 5→20→50→100 with an
+  analysis gate (success ≥0.995, p99 ≤1.5s), expand-contract observation ≥7
+  days, and git-revert-first rollback (08§6).
+
+### M-10 — ecosystem (marketplace + Terraform)
+
+- **`pkg-go/settlement`** — the marketplace revenue split; partner + platform
+  shares always sum back to the gross EXACTLY (no unexplained difference).
+- **`services/svc-marketplace`** — the marketplace closed loop (上架审核 →
+  分账/结算) over real HTTP: publish → PENDING_APPROVAL, approve → APPROVED,
+  settle → an immutable split (idempotent per order). `proto-hub` gained
+  `marketplace/v1`; DDL + Helm chart + env overrides ship with it.
+- **`sdk/terraform`** — the Terraform Provider skeleton (source-only): four core
+  products (SCECS/SCOSS/SCVPC/SCRDS) sharing one `crudCall` helper that signs
+  via `pkg-go/scsdk`/`cps1` — no parallel signer.
+- **开发者社区 (M-10.3)** — `devops-explorer` gains a `/community` view: docs
+  entry points (Go/Python SDK, Terraform, VERSIONING), signed-call examples for
+  all three, and the community entry (GitHub repo); real signing stays in
+  `pkg-go/cps1`, the view only mirrors SDK entry points.
+
+### M-11 — phase-3 GA artifacts
+
+- **`tools/cross-region-failover-drill.md`** — the two-region DR drill (异地冷
+  转热 + DNS 切换, RPO≤5min/RTO≤30min), layered above the AZ-level
+  `az-failover-drill.md`.
+- **`tools/dengbao-level3-checklist.md`** — the 等保三级 checklist (07§6.1) +
+  the audit-retention 口径 (180d hot + MinIO cold; 365d/18-month paid tier).
+
+### Deferred phase-2 items landed in phase 3
+
+- **云监控高级告警 (alert-center)** — `pkg-go/alertcenter` (dedup/group/inhibit/
+  silence + 10/min tenant rate limit) + `services/alert-center` (:9213).
+- **异常用量检测** — `pkg-go/anomaly` (z-score over a rolling baseline, flat
+  baseline handled without ±Inf) + `svc-metering /api/v1/metering/anomaly-scan`.
+- **STS 临时凭证** — `pkg-go/sts` (expiring AK/SK/token; positive TTL enforced)
+  + `svc-iam /api/sts/assume-role`.
+
+**Phase-3 architecture-doc writeback** — `docs/architecture/09-roadmap.md` gains
+§5.0 "三期实装状态回写" (milestone table M-8→M-11 + C1–C5 gate verification +
+deferred-item closure), mirroring the §4.0 phase-2 writeback.
+
 ## Repository layout
 
 ```
@@ -238,7 +334,7 @@ proto-hub/                IDL single source of truth (buf lint + breaking)
   VERSIONING.md            Additive-only / deprecation policy (M-5.3)
   .breaking-baseline.json  Field-number baseline for the breaking-change gate
 
-pkg-go/                   Shared domain libraries (26 packages, 353 tests)
+pkg-go/                   Shared domain libraries (33 packages, 505 top-level tests)
   — identity & access —
   cps1/                   CPS1-HMAC-SHA256 signer/verifier (07§4.1)
   scsdk/                  Go client SDK: signs via cps1, errors via errorsx (M-5.2)
@@ -246,10 +342,12 @@ pkg-go/                   Shared domain libraries (26 packages, 353 tests)
   accesskey/              AK/SK lifecycle: max 2, rotation grace (07§2.2)
   authz/                  RAM policy engine, Deny-first + policy simulator (07§3, M-7.6)
   verify/                 Gateway forward-auth chain (07§4.1)
+  sts/                    Temporary credentials (AssumeRole → AK/SK/token, expiring) — phase 3
   — commerce —
   pricing/                Fixed-point money + pricing engine (01§7, §12.3)
   order/                  Unified order model + state machine (03§4.2.2)
   ledger/                 Cash balance + append-only journal (S29, 03§8.5)
+  settlement/             Marketplace revenue split (partner+platform≡gross) — M-10
   — resources —
   resource/               Resource lifecycle + arrears/expiry (03§5.2, 01 D8)
   workflow/               Saga engine with compensation (03§4.3.3, §8.4)
@@ -263,14 +361,21 @@ pkg-go/                   Shared domain libraries (26 packages, 353 tests)
   invoice/                Invoice + 红冲 reversal — phase 2 M-4.3 (B6)
   autoscaling/            Scaling policy engine (deny-first, cooldown) — M-7.3
   backup/                 Backup schedule + retention — M-7.4
+  anomaly/                Usage anomaly detection (z-score over rolling baseline) — phase 3
   — support —
   notify/                 Delivery evidence for trust-critical classes (03§4.4.2)
   audit/                  Tamper-evident hash chain (07§6)
+  alertcenter/            Alert convergence (dedup/group/inhibit/silence) + tenant rate limit — phase 3
   — platform —
   identifier/             Global identifier conventions (00 附录A)
   topology/               Region/AZ model + cross-AZ spread + failover math (M-6)
+  multiregion/            Cross-region model + global/regional classification (M-8)
   event/                  Kafka envelope + topic constants (04§5.4)
   errors/                 Unified OpenAPI error model (03§9.3)
+  — stability (phase 3) —
+  slo/                    Error budget, burn-rate alerting, budget policy (M-9)
+  chaos/                  Drill plans, mandatory subjects, >50% deviation remediation (M-9)
+  release/                Canary gates, expand-contract window, rollback preference (M-9)
 
 services/                 每个一期服务均有 cmd/server 可运行 HTTP 服务
   _tmpl-go/               Go Kratos archetype (OTel/Nacos/health/idempotent)
@@ -290,6 +395,8 @@ services/                 每个一期服务均有 cmd/server 可运行 HTTP 服
   svc-ticket/             工单系统 (03§4.4.4)
   svc-api-meta/           OpenAPI 元数据/文档/SDK 中心 + Explorer 调试端点 (03§4.5.1, M-5.1)
   console-bff/            控制台聚合层 (03§3)
+  svc-marketplace/        云市场: 上架审核/分账结算, proto+DDL+chart (M-10, :9212)
+  alert-center/           告警收敛/对客通道: 4级收敛+10条/分钟限流 (D-1, :9213)
   rc-compute/             数据面控制器: ProvisionDriver + SCECS CRD
   rc-eci/                 SCECI 弹性容器实例 控制器 + CRD (M-7.1, DriverK8s)
   rc-lb/                  SCLB 负载均衡 控制器 + CRD (M-7.2, APISIX/LVS)
@@ -301,6 +408,8 @@ services/                 每个一期服务均有 cmd/server 可运行 HTTP 服
   (rc-storage/rc-network/rc-database 的 Helm chart 已就绪,控制器代码复用 rc-compute 模式)
 
 sdk/python/              cloudsdk — Python SDK: signs via cps1, golden-vector regression (M-5.2)
+
+sdk/terraform/           starcloud Terraform Provider — source-only; reuses scsdk/cps1 (M-10.2)
 
 platform/frontend/        Vue+Wujie 官网/控制台骨架 (source-only, 02章)
   apps/site/              营销官网: 7 个一期产品
@@ -330,7 +439,7 @@ tools/                    Repo validators (YAML, Lua, APISIX routes, proto break
 ## Build & test
 
 ```sh
-cd pkg-go && go test ./...     # 26 packages (incl. autoscaling/backup), 353 tests
+cd pkg-go && go test ./...     # 33 packages (incl. slo/chaos/release/...), 505 top-level tests
 cd sdk/python && python -m pytest   # Python SDK: 12 tests, incl. 7 golden-vector sigs
 ```
 
@@ -459,12 +568,22 @@ depend on.
 | Scaling is deny-first + cooldown-gated | `autoscaling.Evaluate` | No matching rule → no-op (never scale on unknown state); a metric spike can't trigger 5 scales in a minute — cooldown prevents flapping |
 | Backup retention is enforced, never unbounded | `backup.ExpiredSnapshots` | A policy with no retention is a config smell, not a license to grow forever; expired snapshots are returned for deletion by the reconcile loop |
 | The policy simulator shares the engine's Deny-first | `authz.Simulate` | An explicit Deny wins; absent any match → default_deny — the simulator's default is production's default, so a mis-scoped policy is caught at design time, not at the first customer-data incident |
+| Only IAM and billing are global; every other service is regional | `multiregion.Classify` | A service mis-placed as global cannot fail over regionally; an unknown service name is rejected, not silently defaulted to REGIONAL |
+| The standby region takes no writes and must be >300km away | `multiregion.Plan.Validate` | 00§4.5: P3 不承诺异地多活写 — a writable standby would be the unitization architecture, a separate project; a sub-300km "remote" site is not 异地 |
+| Kafka topics are rebuilt per region, never mirrored | `event` + `multiregion.ClassifyState` | 00§4.5: cross-region Kafka mirroring is explicitly not done; the standby rebuilds topics by the cloud.* conventions — mirroring would silently fork the topic contract |
+| Region names come from one source, not two | `identifier.IsValidRegion` | `multiregion` delegates region-name validation exactly as `topology` delegates AZ names — a forked regex drifts and rejects a valid region at failover time |
+| A settlement split sums back to the gross exactly | `settlement.Settle` | The platform share is derived by subtraction, never a second rounded computation — two independent roundings could disagree, which is a reconciliation defect |
+| Temporary credentials always expire | `sts.Issuer` | A zero/negative TTL is rejected at construction; expiry is an inclusive boundary — a non-expiring token is a permanent key wearing a temporary label |
+| A flat usage baseline still detects anomalies, without ±Inf | `anomaly.Detect` | stddev 0 makes a z-score undefined; any deviation from a constant stream is the anomaly signal, reported with a finite sentinel score |
+| Budget exhaustion freezes the domain's feature releases | `slo.BudgetPolicy` | 08§10.3: remaining <50% slows releases, 0 freezes non-reliability work — the policy is a function of remaining budget, not of operator mood |
 
 ## Verification status
 
 | Component | Verified how |
 |---|---|
-| `pkg-go/*` (26 packages) | `go test` — 353 tests: unit, golden vectors, contention, negative cases |
+| `pkg-go/*` (33 packages) | `go test` — 505 top-level tests: unit, golden vectors, contention, negative cases |
+| Phase-3 services (svc-marketplace, alert-center) | `go build` + `go vet` clean; `go test` green (marketplace 9, alert-center 4); svc-metering anomaly-scan + svc-iam STS endpoint build/vet/test green over real HTTP |
+| Phase-3 Terraform Provider (`sdk/terraform`) | Source-only: complete source + static consistency, not built (framework not vendored, see README Verification status) |
 | Phase-2 billing forms (M-4) | `go test` (reservepack/spot/invoice); svc-billing + console-bff smoke-tested over real HTTP end-to-end (purchase → settle → 资源包 rank-0 deduction → 红冲 → cost-analysis) |
 | Phase-2 OpenAPI ecosystem (M-5) | `go test` (scsdk: signs-via-cps1 + error model); Python `pytest` 12 tests (7 golden-vector sigs byte-match); Explorer smoke-tested over real HTTP (signature matches golden-vector body hash, missing-account 403); `check-proto-breaking` negative-tested |
 | Phase-2 dual-AZ topology (M-6) | `go test` (topology: 19 tests incl. the even-spread-can't-survive invariant + MGR majority math); svc-catalog placement + ZONAL quote gate smoke-tested over real HTTP (ZONAL-no-zone 400, zone/region mismatch 400, valid-zone 200); `check-topology-spread` negative-tested (stripped Redis shard caught); cross-AZ middleware manifests structurally validated |

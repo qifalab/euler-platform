@@ -1,5 +1,5 @@
 # Default values for the rc-logservice chart.
-# Env-specific overrides live in deploy/gitops-manifests/envs/<env>/values-overrides/.
+# Env-specific overrides live in deploy/gitops-manifests/envs/<region>/<env>/values-overrides/.
 
 image:
   repository: harbor.internal/cloudplatform/rc-logservice

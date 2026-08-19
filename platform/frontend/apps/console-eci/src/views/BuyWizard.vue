@@ -20,6 +20,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElButton, ElMessage } from "element-plus";
 import { createSDK } from "@sc/sdk";
+import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -27,11 +28,14 @@ const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
-  region: "cn-north-1", zone: "cn-north-1-a",
+  region: "", zone: "",
   spec: "", cpu: 0, memory: 0,
   image: "registry.starcloud.cn/library/nginx:1.27",
   command: "",
 });
+
+// --- region / zone metadata (catalogue-driven, no hardcoded lists) ---
+const { regions, placement, load, zonesOf } = useCatalogMeta("sceci");
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -75,6 +79,24 @@ onMounted(async () => {
     }
   } catch (e) {
     ElMessage.error(`加载规格目录失败:${(e as Error).message}`);
+  }
+  // Region / zone metadata: align defaults to the catalogue rows (load()
+  // swallows its own errors and just sets `error`; safe to await).
+  await load();
+  if (!regions.value.some((r) => r.regionId === form.value.region)) {
+    form.value.region = regions.value[0]?.regionId ?? "";
+  }
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
+  }
+});
+
+// Region switch: keep the zone valid for the newly-chosen region.
+watch(() => form.value.region, () => {
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
   }
 });
 
@@ -203,11 +225,10 @@ async function submit() {
         </ElSteps>
 
         <ElForm v-show="active === 0" label-position="top" class="buy-form">
-          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption value="cn-north-1" label="华北 1(北京)" /></ElSelect></ElFormItem>
-          <ElFormItem label="可用区">
+          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption v-for="r in regions" :key="r.regionId" :value="r.regionId" :label="r.regionName" /></ElSelect></ElFormItem>
+          <ElFormItem v-if="placement === null || placement.zoneRequired" label="可用区">
             <ElSelect v-model="form.zone">
-              <ElOption value="cn-north-1-a" label="华北 1 可用区 A" />
-              <ElOption value="cn-north-1-b" label="华北 1 可用区 B" />
+              <ElOption v-for="z in zonesOf(form.region)" :key="z.zoneId" :value="z.zoneId" :label="z.zoneName" />
             </ElSelect>
             <p class="form-hint">容器实例为 ZONAL 产品:调度器将 Pod 绑定到所选可用区内有容量的节点。</p>
           </ElFormItem>

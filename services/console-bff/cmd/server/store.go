@@ -52,18 +52,20 @@ const maxBodyBytes = 1 << 20 // 1 MiB
 // the BFF also caches aggregated views in Redis (03§4 console-bff storage);
 // phase-1 fan-out is live, caching is not.
 type consoleStore struct {
-	httpClient    *http.Client
+	httpClient      *http.Client
 	orchestratorURL string // e.g. http://localhost:9203
-	billingURL      string // e.g. http://localhost:9206
+	billingURL      string // e.g. http://localhost:9210 (9206 is svc-metering)
 	orderURL        string // e.g. http://localhost:9204
+	catalogURL      string // e.g. http://localhost:9207
 }
 
 func newConsoleStore() *consoleStore {
 	return &consoleStore{
 		httpClient:      &http.Client{Timeout: 5 * time.Second},
 		orchestratorURL: envOrDefault("SC_SVC_ORCHESTRATOR_URL", "http://localhost:9203"),
-		billingURL:      envOrDefault("SC_SVC_BILLING_URL", "http://localhost:9206"),
+		billingURL:      envOrDefault("SC_SVC_BILLING_URL", "http://localhost:9210"),
 		orderURL:        envOrDefault("SC_SVC_ORDER_URL", "http://localhost:9204"),
+		catalogURL:      envOrDefault("SC_SVC_CATALOG_URL", "http://localhost:9207"),
 	}
 }
 
@@ -605,6 +607,100 @@ func (s *consoleStore) handleCostAnalysis(w http.ResponseWriter, r *http.Request
 }
 
 // --- error helpers (original) ------------------------------------------------
+
+// handleSearch implements GET /console/search?q= — the console ⌘K palette's
+// backend (02§7.1). It fans out concurrently to the account's resources
+// (svc-orchestrator) and the product catalogue (svc-catalog) and server-side
+// filters both by the query against the fields a user can see (resource id /
+// spec / state; product code / name / category). Catalogue search is
+// anonymous-grade data, but the resource leg is account-scoped, so the whole
+// endpoint stays behind the account-id gate.
+func (s *consoleStore) handleSearch(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	ctx := r.Context()
+
+	type orchResource struct {
+		ResourceId  string `json:"resourceId"`
+		ProductCode string `json:"productCode"`
+		Region      string `json:"region"`
+		State       string `json:"state"`
+		SpecCode    string `json:"specCode"`
+	}
+	type catalogProduct struct {
+		ProductCode string `json:"productCode"`
+		ProductName string `json:"productName"`
+		Category    string `json:"category"`
+		Description string `json:"description"`
+	}
+
+	var (
+		resources []orchResource
+		products  []catalogProduct
+		resErr    error
+		prodErr   error
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resErr = s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &resources)
+	}()
+	go func() {
+		defer wg.Done()
+		prodErr = s.getJSON(ctx, s.catalogURL+"/api/v1/catalog/products", acct, &products)
+	}()
+	wg.Wait()
+	// The palette degrades per-leg, not all-or-nothing: a down catalogue must
+	// not blank resource hits (and vice versa). Only both-down is an error.
+	if resErr != nil && prodErr != nil {
+		writeError(w, e2ptr(resErr))
+		return
+	}
+
+	matches := func(fields ...string) bool {
+		if q == "" {
+			return true
+		}
+		for _, f := range fields {
+			if strings.Contains(strings.ToLower(f), q) {
+				return true
+			}
+		}
+		return false
+	}
+
+	resHits := make([]map[string]any, 0)
+	if resErr == nil {
+		for _, r0 := range resources {
+			if matches(r0.ResourceId, r0.SpecCode, r0.State, r0.ProductCode) {
+				resHits = append(resHits, map[string]any{
+					"resourceId": r0.ResourceId, "productCode": r0.ProductCode,
+					"region": r0.Region, "state": r0.State, "specCode": r0.SpecCode,
+				})
+			}
+		}
+	}
+	prodHits := make([]map[string]any, 0)
+	if prodErr == nil {
+		for _, p := range products {
+			if matches(p.ProductCode, p.ProductName, p.Category) {
+				prodHits = append(prodHits, map[string]any{
+					"productCode": p.ProductCode, "productName": p.ProductName,
+					"category": p.Category, "description": p.Description,
+				})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"query":     q,
+		"resources": resHits,
+		"products":  prodHits,
+	})
+}
 
 // e2ptr narrows an error returned by getJSON back to the *errorsx.Error it
 // always produces. getJSON only ever returns *errorsx.Error, so this is safe.

@@ -92,6 +92,7 @@ describe("useResourceTable", () => {
     expect(api).toHaveBeenCalledTimes(1);
     expect(api).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, pageSize: 20 }),
+      expect.any(AbortSignal),
     );
     expect(r.rows.value).toHaveLength(2);
     expect(r.rows.value[0]).toEqual({ id: "a", name: "Alpha" });

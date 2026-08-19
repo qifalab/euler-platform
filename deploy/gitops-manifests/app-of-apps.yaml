@@ -3,7 +3,7 @@
 # The root Application points at this directory; ArgoCD syncs every child
 # Application below it (dir-as-env, single trunk). Each child points at a
 # per-service Helm chart under apps/<svc>/ with env-specific values from
-# envs/<env>/values-overrides/. This is the single GitOps entry point.
+# envs/<region>/<env>/values-overrides/. This is the single GitOps entry point.
 #
 # Apply once per cluster:
 #   kubectl apply -f deploy/gitops-manifests/app-of-apps.yaml -n argocd

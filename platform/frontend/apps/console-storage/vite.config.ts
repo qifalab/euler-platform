@@ -38,6 +38,24 @@ export default defineConfig({
           r.setHeader("X-Sc-TraceId", `storage-${Date.now().toString(36)}`);
         }),
       },
+      // Real provisioning → svc-orchestrator (03§4.3, the 开通 step).
+      "/api/v1/orchestrator": {
+        target: "http://localhost:9203",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+      },
+      // Product catalogue + 询价 → svc-catalog (01§7, the quote link).
+      "/api/v1/catalog": {
+        target: "http://localhost:9207",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+      },
+      // Order creation/payment → svc-order (03§4.2.2).
+      "/api/v1/orders": {
+        target: "http://localhost:9204",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+      },
     },
   },
 });

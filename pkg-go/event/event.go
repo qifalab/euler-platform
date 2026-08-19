@@ -117,6 +117,15 @@ const (
 
 	// 营销域 (phase-2 only).
 	MarketActivityEvent     = Topic("cloud.market.activity.event")
+
+	// 地域复制域 (phase-3 M-8, 00§4.5). Replication status events carry the
+	// cross-region replication lag (now − last_replicated_at) the RPO
+	// observability needs to prove RPO≈0 (账务 binlog) and the async
+	// object-storage RPO. Kafka topics themselves are NOT replicated across
+	// regions — the standby rebuilds them per the cloud.* conventions
+	// (00§4.5 "不做跨城镜像, 异地按 cloud.* 规范重建 topic"); see
+	// pkg-go/multiregion.ClassifyState.
+	SysReplicationStatus    = Topic("cloud.sys.replication.status")
 )
 
 // PartitionKey returns the canonical Kafka partition key for a topic.

@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /** Ticket list (02§1.2). Wired to svc-ticket GET /api/v1/tickets. */
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
 import { createSDK } from "@sc/sdk";
 import { PageHeader } from "@sc/ui";
+import { useTicketMeta } from "@/useTicketMeta";
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
+// 枚举来自 svc-ticket /api/v1/tickets/meta(模块级缓存,与 CreateTicket 共享一次请求)。
+const { priorities, statuses, ready } = useTicketMeta();
 
 // Backend ticketDTO from svc-ticket /api/v1/tickets.
 interface TicketDTO {
@@ -32,11 +35,10 @@ interface Row {
   priority: string; state: string; created: string;
 }
 
-// Priority/status labels mapped to the existing (Chinese) display values.
-const PRIORITY_LABEL: Record<string, string> = { HIGH: "紧急", NORMAL: "普通", LOW: "低" };
-const STATUS_LABEL: Record<string, string> = {
-  OPEN: "待处理", PROCESSING: "处理中", WAITING_REPLY: "待回复", CLOSED: "已关闭",
-};
+// 枚举 value→label 派生映射,查不到回退原值显示。
+const priorityLabel = computed(() => new Map(priorities.value.map((p) => [p.value, p.label] as const)));
+const statusLabel = computed(() => new Map(statuses.value.map((s) => [s.value, s.label] as const)));
+// 优先级 tag 颜色纯视觉映射,保留。
 const PRIORITY_CLASS: Record<string, string> = { 紧急: "p-urgent", 普通: "p-normal", 低: "p-normal" };
 
 function toRow(t: TicketDTO): Row {
@@ -44,14 +46,15 @@ function toRow(t: TicketDTO): Row {
     id: t.ticket_id,
     title: t.message || t.category,
     type: t.category,
-    priority: PRIORITY_LABEL[t.priority] ?? t.priority,
-    state: STATUS_LABEL[t.status] ?? t.status,
+    priority: priorityLabel.value.get(t.priority) ?? t.priority,
+    state: statusLabel.value.get(t.status) ?? t.status,
     created: t.created_at ? t.created_at.slice(0, 10) : "",
   };
 }
 
 onMounted(async () => {
   try {
+    await ready; // 先等枚举就绪(内部已容错),再拉列表保证 label 就位
     const res = await sdk.get<TicketsEnvelope>("/api/v1/tickets");
     tickets.value = (res.data?.tickets ?? []).map(toRow);
   } catch (e) {

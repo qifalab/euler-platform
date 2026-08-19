@@ -7,8 +7,16 @@ import ResourceTable from "./ResourceTable.vue";
 import RegionSelector from "./RegionSelector.vue";
 import AppErrorBoundary from "./AppErrorBoundary.vue";
 export { useResourceTable } from "./useResourceTable";
+export { useCatalogMeta, fetchRegions, fetchImages, fetchPlacement } from "./useCatalogMeta";
 export { ResourceTable, RegionSelector, AppErrorBoundary };
 export type { Column, ResourceTableOptions } from "./useResourceTable";
+export type {
+  CatalogRegion,
+  CatalogZone,
+  CatalogImage,
+  CatalogPlacement,
+  UseCatalogMetaOptions,
+} from "./useCatalogMeta";
 
 import type { App } from "vue";
 const components = { ResourceTable, RegionSelector, AppErrorBoundary };

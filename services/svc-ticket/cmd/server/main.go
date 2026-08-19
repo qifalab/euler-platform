@@ -62,9 +62,13 @@ type Ticket struct {
 	Status     TicketStatus `json:"status"`
 	SLADeadline time.Time  `json:"sla_deadline"`
 	Assignee   string      `json:"assignee"`
-	Messages   []Message   `json:"messages"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// Contact is the phone/email the customer supplied; the support workbench
+	// reads it when reaching out, so it must be persisted, not collected and
+	// dropped.
+	Contact   string      `json:"contact,omitempty"`
+	Messages  []Message   `json:"messages"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // Message is a single entry in the ticket thread.
@@ -313,6 +317,7 @@ type apiCreateReq struct {
 	Priority string `json:"priority"`
 	Title    string `json:"title"`  // human title; persisted as the first message body
 	Message  string `json:"message"`
+	Contact  string `json:"contact"` // phone/email the customer supplied
 }
 
 // handleAPICreate is the public create endpoint. It reuses the Store/app
@@ -366,6 +371,7 @@ func (a *app) handleAPICreate(w http.ResponseWriter, r *http.Request) {
 		Status:      StatusOpen,
 		SLADeadline: slaDeadline(body.Priority, now),
 		Assignee:    identifier.ServiceName("ticket"),
+		Contact:     strings.TrimSpace(body.Contact),
 		Messages: []Message{{
 			ID:        uuid.NewString(),
 			Author:    strconv.FormatInt(accountID, 10),
@@ -407,6 +413,7 @@ type ticketDTO struct {
 	Priority    string       `json:"priority"`
 	Status      TicketStatus `json:"status"`
 	Assignee    string       `json:"assignee"`
+	Contact     string       `json:"contact,omitempty"`
 	SLADeadline time.Time    `json:"sla_deadline"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
@@ -424,11 +431,45 @@ func toTicketDTO(t *Ticket) ticketDTO {
 		Priority:    t.Priority,
 		Status:      t.Status,
 		Assignee:    t.Assignee,
+		Contact:     t.Contact,
 		SLADeadline: t.SLADeadline,
 		CreatedAt:   t.CreatedAt,
 		UpdatedAt:   t.UpdatedAt,
 		Message:     msg,
 	}
+}
+
+// ticketOption is one selectable value of the create form's category/priority
+// dropdowns. The backend owns the enum — the console renders what it is given,
+// so adding a category is a config row, not a frontend release.
+type ticketOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// handleAPIMeta implements GET /api/v1/tickets/meta — the form enums the create
+// page renders (categories, priorities) and the list page's status label map.
+// Anonymous-suffix route under the authenticated /api/v1/tickets prefix; the
+// payload is public form metadata.
+func (a *app) handleAPIMeta(w http.ResponseWriter, r *http.Request) {
+	writeEnvelope(w, r, http.StatusOK, "OK", "", map[string]any{
+		"categories": []ticketOption{
+			{Value: "故障", Label: "故障"},
+			{Value: "咨询", Label: "咨询"},
+			{Value: "账单", Label: "账单"},
+			{Value: "需求", Label: "需求"},
+		},
+		"priorities": []ticketOption{
+			{Value: "NORMAL", Label: "普通"},
+			{Value: "HIGH", Label: "紧急"},
+		},
+		"statuses": []ticketOption{
+			{Value: "OPEN", Label: "待处理"},
+			{Value: "PROCESSING", Label: "处理中"},
+			{Value: "WAITING_REPLY", Label: "待您回复"},
+			{Value: "CLOSED", Label: "已关闭"},
+		},
+	})
 }
 
 // --- Routing helpers --------------------------------------------------------
@@ -524,7 +565,9 @@ func writeEnvelopedErr(w http.ResponseWriter, r *http.Request, status int, code,
 
 func main() {
 	var (
-		httpAddr = flag.String("http", ":8080", "HTTP listen address")
+		// Dev port allocation for svc-ticket (frontend vite proxies expect
+		// :9209); production overrides via the -http flag / Helm values.
+		httpAddr = flag.String("http", ":9209", "HTTP listen address")
 	)
 	flag.Parse()
 
@@ -573,9 +616,15 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/api/v1/tickets/", func(w http.ResponseWriter, r *http.Request) {
-		// Placeholder for future sub-resource routes (reply/close) on the public
-		// API; the internal routes remain authoritative for now.
-		writeEnvelopedErr(w, r, http.StatusNotFound, "Ticket.NotFound", "not found")
+		path := strings.Trim(r.URL.Path, "/")
+		switch {
+		case path == "api/v1/tickets/meta" && r.Method == http.MethodGet:
+			a.handleAPIMeta(w, r)
+		default:
+			// Placeholder for future sub-resource routes (reply/close) on the
+			// public API; the internal routes remain authoritative for now.
+			writeEnvelopedErr(w, r, http.StatusNotFound, "Ticket.NotFound", "not found")
+		}
 	})
 
 	srv := &http.Server{

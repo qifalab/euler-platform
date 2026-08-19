@@ -11,6 +11,8 @@
 //	GET    /api/v1/orders/{id}        — order detail
 //	POST   /api/v1/orders/{id}/pay    — mark order paid (→ triggers orchestrator in real deploy)
 //	POST   /api/v1/orders/{id}/cancel — cancel a pending order
+//	GET    /api/v1/orders/autorenew   — list the account's auto-renew settings
+//	PUT    /api/v1/orders/autorenew   — set/clear a resource's auto-renew flag
 //
 // stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
 // (MySQL sharded by account_id in production).
@@ -28,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -59,15 +62,21 @@ type orderStore struct {
 	mu      sync.RWMutex
 	orders  map[int64]*order.Order
 	byToken map[string]int64 // "accountID|clientToken" → orderID (idempotency index)
-	machine *order.Machine
-	seq     int64
+	// autoRenews holds the account's auto-renew settings, keyed
+	// "accountID|resourceId". Auto-renew is a trade-plane concern — when the
+	// renewal scheduler fires it issues a RENEW order through this same model —
+	// so the flag lives with orders, not on the resource plane.
+	autoRenews map[string]bool
+	machine    *order.Machine
+	seq        int64
 }
 
 func newOrderStore() *orderStore {
 	s := &orderStore{
-		orders:  make(map[int64]*order.Order),
-		byToken: make(map[string]int64),
-		machine: order.NewMachine(time.Now),
+		orders:     make(map[int64]*order.Order),
+		byToken:    make(map[string]int64),
+		autoRenews: make(map[string]bool),
+		machine:    order.NewMachine(time.Now),
 	}
 	s.seed()
 	return s
@@ -259,6 +268,80 @@ func (s *orderStore) handleCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "OK", orderToMap(o))
 }
 
+// --- auto-renew settings -------------------------------------------------
+
+// autoRenewSetting is one row of the account's auto-renew settings. ProductCode
+// is carried so the console can label rows without a second join.
+type autoRenewSetting struct {
+	ResourceID  string `json:"resourceId"`
+	ProductCode string `json:"productCode"`
+	Enabled     bool   `json:"enabled"`
+}
+
+type autoRenewReq struct {
+	ResourceID  string `json:"resourceId"`
+	ProductCode string `json:"productCode"`
+	Enabled     *bool  `json:"enabled"`
+}
+
+func autoRenewKey(acct int64, resourceID string) string {
+	return fmt.Sprintf("%d|%s", acct, resourceID)
+}
+
+// handleAutoRenewList implements GET /api/v1/orders/autorenew: every setting the
+// account has ever touched (enabled or not), so the console's renewal page can
+// render the persisted state instead of a client-side guess.
+func (s *orderStore) handleAutoRenewList(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]autoRenewSetting, 0, len(s.autoRenews))
+	for k, enabled := range s.autoRenews {
+		// key layout: "accountID|resourceId|productCode"
+		parts := strings.SplitN(k, "|", 3)
+		if len(parts) != 3 || parts[0] != strconv.FormatInt(acct, 10) {
+			continue
+		}
+		out = append(out, autoRenewSetting{ResourceID: parts[1], ProductCode: parts[2], Enabled: enabled})
+	}
+	writeJSON(w, "OK", out)
+}
+
+// handleAutoRenewSet implements PUT /api/v1/orders/autorenew — persist the flag
+// the renewal scheduler later reads when it mints the RENEW order.
+func (s *orderStore) handleAutoRenewSet(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req autoRenewReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+	if req.ResourceID == "" {
+		writeErr(w, "Common.InvalidParameter", 400, "resourceId is required")
+		return
+	}
+	if req.Enabled == nil {
+		writeErr(w, "Common.InvalidParameter", 400, "enabled is required")
+		return
+	}
+	s.mu.Lock()
+	key := autoRenewKey(acct, req.ResourceID) + "|" + req.ProductCode
+	if *req.Enabled {
+		s.autoRenews[key] = true
+	} else {
+		delete(s.autoRenews, key)
+	}
+	s.mu.Unlock()
+	writeJSON(w, "OK", autoRenewSetting{ResourceID: req.ResourceID, ProductCode: req.ProductCode, Enabled: *req.Enabled})
+}
+
 func orderToMap(o *order.Order) map[string]any {
 	return map[string]any{
 		"orderId": o.OrderID, "orderNo": o.OrderNo, "type": string(o.Type),
@@ -350,6 +433,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orders/{id}", store.handleDetail)
 	mux.HandleFunc("POST /api/v1/orders/{id}/pay", store.handlePay)
 	mux.HandleFunc("POST /api/v1/orders/{id}/cancel", store.handleCancel)
+	// Static segment beats {id} in Go 1.22 mux precedence, so "autorenew" is
+	// routed here and not swallowed by the {id} detail route.
+	mux.HandleFunc("GET /api/v1/orders/autorenew", store.handleAutoRenewList)
+	mux.HandleFunc("PUT /api/v1/orders/autorenew", store.handleAutoRenewSet)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

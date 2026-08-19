@@ -39,6 +39,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/starcloud/sc-platform/anomaly"
 	"github.com/starcloud/sc-platform/billing"
 	"github.com/starcloud/sc-platform/metering"
 	"github.com/starcloud/sc-platform/pricing"
@@ -470,6 +471,58 @@ func inPeriod(h time.Time, period string, newest time.Time) bool {
 	}
 }
 
+// handleAnomalyScan implements GET /api/v1/metering/anomaly-scan — phase-3
+// D-2 异常用量检测 (deferred from phase 2, 09§4.4 B7): runs the pkg-go/anomaly
+// z-score detector over a resource's stored usage series and returns the
+// verdict (SPIKE/DROP/NONE) plus the trailing baseline. The verdict is a SIGNAL
+// for alert-center, never a billing decision — metering does not drop or
+// relabel a usage record on an anomaly verdict (03§4.2.5 宁可重采不可漏采).
+func (s *meteringStore) handleAnomalyScan(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDFrom(w, r); !ok {
+		return
+	}
+	resourceID := r.URL.Query().Get("resourceId")
+	metric := r.URL.Query().Get("metric")
+	if resourceID == "" || metric == "" {
+		writeErr(w, "Metering.InvalidParameter", 400, "resourceId and metric are required")
+		return
+	}
+	key := resourceID + "|" + metric
+	s.mu.RLock()
+	records := make([]metering.UsageRecord, len(s.records[key]))
+	copy(records, s.records[key])
+	s.mu.RUnlock()
+
+	sort.Slice(records, func(i, j int) bool { return records[i].WindowStart.Before(records[j].WindowStart) })
+	series := make([]float64, 0, len(records))
+	for _, rec := range records {
+		series = append(series, float64(rec.Quantity))
+	}
+	if len(series) < 2 {
+		writeJSON(w, "OK", map[string]any{
+			"resourceId": resourceID, "metric": metric,
+			"anomalous": false, "kind": "NONE", "reason": "insufficient samples",
+		})
+		return
+	}
+	// Baseline over the trailing window (all but the latest), verdict on the
+	// latest point — the baseline never includes the point under test.
+	var b anomaly.Baseline
+	for _, x := range series[:len(series)-1] {
+		b.Add(x)
+	}
+	result := anomaly.Detect(series[len(series)-1], b.Mean, b.StdDev())
+	writeJSON(w, "OK", map[string]any{
+		"resourceId":     resourceID,
+		"metric":         metric,
+		"anomalous":      result.Anomalous,
+		"kind":           string(result.Kind),
+		"score":          result.Score,
+		"baselineMean":   b.Mean,
+		"baselineStdDev": b.StdDev(),
+	})
+}
+
 // accountIDFrom extracts the caller's account id.
 //
 // TRUST BOUNDARY: X-Sc-Account-Id is trusted only because these routes are
@@ -543,6 +596,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/metering/ingest", store.handleIngest)
 	mux.HandleFunc("GET /api/v1/metering/aggregate", store.handleAggregate)
 	mux.HandleFunc("GET /api/v1/metering/bills", store.handleBills)
+	mux.HandleFunc("GET /api/v1/metering/anomaly-scan", store.handleAnomalyScan)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

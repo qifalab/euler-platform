@@ -42,7 +42,10 @@ import (
 )
 
 func main() {
-	var httpAddr = flag.String("http", ":8080", "HTTP listen address")
+	// Dev port allocation for svc-billing is :9210 — the 92xx block the console
+	// plane uses (:9206 belongs to svc-metering). console-bff's SC_SVC_BILLING_URL
+	// default points at the same port; production overrides via -http / Helm.
+	var httpAddr = flag.String("http", ":9210", "HTTP listen address")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

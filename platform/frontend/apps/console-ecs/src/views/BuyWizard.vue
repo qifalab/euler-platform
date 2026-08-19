@@ -16,18 +16,22 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
 import { sdk } from "../sdk";
+import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
 const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
-  region: "cn-north-1", zone: "cn-north-1-a",
+  region: "", zone: "",
   spec: "", cpu: 0, memory: 0,
   disk: 40, bandwidth: 5,
-  image: "centos-7", password: "", confirm: "",
+  image: "", password: "", confirm: "",
   period: 1, chargeType: "prepaid",
 });
+
+// --- region / zone / image metadata (catalogue-driven, no hardcoded lists) ---
+const { regions, images, placement, load, zonesOf } = useCatalogMeta("scecs", { withImages: true });
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -92,6 +96,27 @@ onMounted(async () => {
     }
   } catch (e) {
     ElMessage.error(`加载规格目录失败:${(e as Error).message}`);
+  }
+  // Region / zone / image metadata: align defaults to the catalogue rows
+  // (load() swallows its own errors and just sets `error`; safe to await).
+  await load();
+  if (!regions.value.some((r) => r.regionId === form.value.region)) {
+    form.value.region = regions.value[0]?.regionId ?? "";
+  }
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
+  }
+  if (!images.value.some((im) => im.imageId === form.value.image)) {
+    form.value.image = images.value[0]?.imageId ?? "";
+  }
+});
+
+// Region switch: keep the zone valid for the newly-chosen region.
+watch(() => form.value.region, () => {
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
   }
 });
 
@@ -250,8 +275,8 @@ async function submit() {
         </ElSteps>
 
         <ElForm v-show="active === 0" label-position="top" class="buy-form">
-          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption value="cn-north-1" label="华北 1(北京)" /></ElSelect></ElFormItem>
-          <ElFormItem label="可用区"><ElSelect v-model="form.zone"><ElOption value="cn-north-1-a" label="华北 1 可用区 A" /><ElOption value="cn-north-1-b" label="华北 1 可用区 B" /></ElSelect></ElFormItem>
+          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption v-for="r in regions" :key="r.regionId" :value="r.regionId" :label="r.regionName" /></ElSelect></ElFormItem>
+          <ElFormItem v-if="placement === null || placement.zoneRequired" label="可用区"><ElSelect v-model="form.zone"><ElOption v-for="z in zonesOf(form.region)" :key="z.zoneId" :value="z.zoneId" :label="z.zoneName" /></ElSelect></ElFormItem>
           <ElFormItem label="实例规格">
             <ElSelect v-model="form.spec" :loading="skus.length === 0">
               <ElOption v-for="s in specs" :key="s.code" :value="s.code" :label="s.label" />
@@ -265,7 +290,7 @@ async function submit() {
         </ElForm>
 
         <ElForm v-show="active === 2" label-position="top" class="buy-form">
-          <ElFormItem label="镜像"><ElSelect v-model="form.image"><ElOption value="centos-7" label="CentOS 7.9 64位" /><ElOption value="ubuntu-22" label="Ubuntu 22.04 64位" /></ElSelect></ElFormItem>
+          <ElFormItem label="镜像"><ElSelect v-model="form.image"><ElOption v-for="im in images" :key="im.imageId" :value="im.imageId" :label="im.name" /></ElSelect></ElFormItem>
           <ElFormItem label="登录密码"><ElInput v-model="form.password" type="password" show-password /></ElFormItem>
           <ElFormItem label="确认密码"><ElInput v-model="form.confirm" type="password" show-password /></ElFormItem>
         </ElForm>

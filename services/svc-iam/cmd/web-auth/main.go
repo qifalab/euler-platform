@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/starcloud/sc-platform/authz"
+	"github.com/starcloud/sc-platform/sts"
 )
 
 const (
@@ -636,6 +637,9 @@ func handleAccountProfile(w http.ResponseWriter, r *http.Request) {
 		"email":          a.AccountName,
 		"phoneBound":     false, // phase-1: no phone-binding flow yet (07§2.5)
 		"mfaEnabled":     false, // phase-1: MFA not yet enforced (07§2.4)
+		// Password status for the security settings card: the account always
+		// authenticates by password in phase-1, so the hash presence IS the truth.
+		"passwordSet": a.PasswordHash != "",
 	})
 }
 
@@ -811,6 +815,50 @@ func handleDeleteRAMUser(w http.ResponseWriter, r *http.Request) {
 // --- AccessKeys (07§2.7) ---
 
 // handleListAccessKeys returns the account's AKs. The secret is never returned.
+// stsIssuer mints temporary credentials (STS, phase-3 D-3; 03§9.2
+// x-cps-security-token). Initialized in main with the default TTL.
+var stsIssuer *sts.Issuer
+
+// handleAssumeRole implements POST /api/sts/assume-role — the phase-3 STS
+// productization (07§10 M1 角色/STS; deferred from phase 2). It issues a
+// temporary AK/SK/SecurityToken triple for the authenticated account; the
+// token rides x-cps-security-token so the gateway verifier can validate it on
+// top of the CPS1 signature (03§9.2). The plaintext secret is returned once.
+func handleAssumeRole(w http.ResponseWriter, r *http.Request) {
+	a, err := requireAuth(r)
+	if err != nil {
+		writeErr(w, 401, err.Error(), "未认证")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "Auth.InvalidParameter", "malformed body")
+		return
+	}
+	if strings.TrimSpace(req.Role) == "" {
+		writeErr(w, 400, "Auth.InvalidParameter", "role is required")
+		return
+	}
+	if stsIssuer == nil {
+		writeErr(w, 503, "Common.InternalError", "STS not initialised")
+		return
+	}
+	cred, err := stsIssuer.AssumeRole(req.Role, strconv.FormatInt(a.AccountID, 10))
+	if err != nil {
+		writeErr(w, 500, "Common.InternalError", err.Error())
+		return
+	}
+	writeJSON(w, 200, "OK", map[string]any{
+		"accessKey":     cred.AccessKey,
+		"secretKey":     cred.SecretKey, // shown once
+		"securityToken": cred.SecurityToken,
+		"expiresAt":     cred.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
 func handleListAccessKeys(w http.ResponseWriter, r *http.Request) {
 	a, err := requireAuth(r)
 	if err != nil {
@@ -1349,6 +1397,10 @@ func main() {
 	// Real seeded account with a real salted password hash (not a mock that
 	// always returns success). Credentials are logged once for dev convenience.
 	seedAccount(100123, "admin@starcloud.cn", "种子管理员", "starcloud123")
+	// STS temporary-credential issuer (phase-3 D-3). Default TTL; a nil issuer
+	// here would leave the endpoint 503ing, which is better than issuing
+	// permanent credentials by accident.
+	stsIssuer, _ = sts.NewIssuer(sts.DefaultTTL, nil)
 	slog.Warn("DEV SEED account provisioned", "email", "admin@starcloud.cn",
 		"account_id", 100123, "note", "salted SHA-256; prod uses argon2id")
 	// Seed demo RAM sub-users + one AccessKey + RAM roles/policies so the
@@ -1373,6 +1425,7 @@ func main() {
 	mux.HandleFunc("GET /api/ram/users", handleListRAMUsers)
 	mux.HandleFunc("POST /api/ram/users", handleCreateRAMUser)
 	mux.HandleFunc("DELETE /api/ram/users/{id}", handleDeleteRAMUser)
+	mux.HandleFunc("POST /api/sts/assume-role", handleAssumeRole)
 	mux.HandleFunc("GET /api/ak", handleListAccessKeys)
 	mux.HandleFunc("POST /api/ak", handleCreateAccessKey)
 	mux.HandleFunc("POST /api/ak/{akId}/disable", handleDisableAccessKey)

@@ -20,6 +20,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInputNumber, ElSwitch, ElButton, ElMessage } from "element-plus";
 import { createSDK } from "@sc/sdk";
+import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -27,12 +28,16 @@ const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
-  region: "cn-north-1",
+  region: "",
   spec: "", edition: "",
   retentionDays: 30,
   storageGb: 200,
   crossAz: false,
 });
+
+// --- region metadata (catalogue-driven, no hardcoded lists). SCLOG is
+// REGIONAL: no zone picker at all, so only the region list is needed. ---
+const { regions, load } = useCatalogMeta("sclog");
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -76,6 +81,12 @@ onMounted(async () => {
     }
   } catch (e) {
     ElMessage.error(`加载规格目录失败:${(e as Error).message}`);
+  }
+  // Region metadata: align the default to the first catalogue row (load()
+  // swallows its own errors and just sets `error`; safe to await).
+  await load();
+  if (!regions.value.some((r) => r.regionId === form.value.region)) {
+    form.value.region = regions.value[0]?.regionId ?? "";
   }
 });
 
@@ -202,7 +213,7 @@ async function submit() {
         </ElSteps>
 
         <ElForm v-show="active === 0" label-position="top" class="buy-form">
-          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption value="cn-north-1" label="华北 1(北京)" /></ElSelect></ElFormItem>
+          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption v-for="r in regions" :key="r.regionId" :value="r.regionId" :label="r.regionName" /></ElSelect></ElFormItem>
           <ElFormItem label="日志服务规格">
             <ElSelect v-model="form.spec" :loading="skus.length === 0">
               <ElOption v-for="s in specs" :key="s.code" :value="s.code" :label="s.label" />

@@ -41,10 +41,17 @@ export interface SdkOptions {
 const DEFAULT_TIMEOUT = 15_000;
 
 function toError(payload: unknown, status: number, requestId?: string): ScError {
-  const body = (payload ?? {}) as { code?: string; message?: string; detailUrl?: string; requestId?: string };
-  const err = new Error(body.message ?? "request failed") as ScError;
-  err.code = body.code ?? `HTTP_${status}`;
-  err.message = body.message ?? "request failed";
+  // Go services write {Code, Message, RequestId} (capitalized); the lower-case
+  // variants cover gateway-generated error bodies.
+  const body = (payload ?? {}) as {
+    code?: string; Code?: string;
+    message?: string; Message?: string;
+    detailUrl?: string; requestId?: string;
+  };
+  const message = body.message ?? body.Message;
+  const err = new Error(message ?? "request failed") as ScError;
+  err.code = body.code ?? body.Code ?? `HTTP_${status}`;
+  err.message = message ?? "request failed";
   err.requestId = body.requestId ?? requestId;
   err.detailUrl = body.detailUrl;
   err.status = status;

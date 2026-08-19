@@ -70,6 +70,10 @@ func main() {
 	mux.HandleFunc("POST /console/invoices/void", store.handleInvoiceVoid)
 	mux.HandleFunc("GET /console/cost-analysis", store.handleCostAnalysis)
 
+	// Global search for the console ⌘K palette: aggregates live resources
+	// (svc-orchestrator) and product catalogue entries (svc-catalog).
+	mux.HandleFunc("GET /console/search", store.handleSearch)
+
 	srv := &http.Server{
 		Addr:              *httpAddr,
 		Handler:           withMiddleware(mux),

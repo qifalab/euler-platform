@@ -356,6 +356,42 @@ flowchart LR
 
 ## 5. 三期(规模化):多地域、稳定性工程与生态
 
+### 5.0 三期实装状态回写(2026-08)
+
+> 本小节是**实装追溯**(what was built),与 §5.1~§5.3 的**规划意图**(what is planned)并存。路线图保留前瞻性表述(T0+N 月…上线);实装结果在此单点回写,供全书交叉引用。口径与一期/二期一致:**Go-first source-only**——Go 代码静态校验通过即视为本里程碑达成,非 Go 产物交付完整源码 + 静态校验,不声称已构建。
+
+**里程碑实装状态(截至 2026-08-19):**
+
+| 里程碑 | 规划时间点 | 实装状态 | 实装证据(代码路径) |
+|---|---|---|---|
+| M-8 第二地域点亮 | T0+22 月 | ✅ 已交付 | `pkg-go/multiregion`(Region 主备/`Classify` 全局vs地域/`ClassifyState` 共享·复制·重建/`MeetsRPO`·`MeetsRTO`≤30min,region 命名委托 identifier 不 fork)+ `pkg-go/event.SysReplicationStatus` + `deploy/gitops-manifests/envs/` 重构为 `envs/<region>/<env>/`(applicationset 加 region 维度)+ `platform/middleware/minio-replication.yaml`(异地对象存储异步复制)+ `svc-orchestrator/sql/V3__resource_db_region_topology.sql`(`region_replication_status` 复制水位 + `v_resource_by_region`/`v_resource_region_failover_impact`) |
+| M-9 稳定性平台 | T0+24 月 | ✅ 已交付 | `pkg-go/slo`(错误预算=1−SLO、多窗口多燃烧率 1h·14.4× page / 3d·1× ticket、预算政策 <50% 降频/耗尽冻结、`CanCommitSLA` 两季门禁)+ `pkg-go/chaos`(6 必练科目、prod 演练 10min 终止 + 限定爆炸半径、偏差>50% 立项)+ `tools/chaos-drill-runbook.md`(季度演练载体:6 科目/staging 先行/prod 终止手段/归档判定)+ `pkg-go/release`(金丝雀 5→20→50→100、门禁 success≥0.995/p99≤1.5s、expand-contract 观察 ≥7 天、git revert 优先) |
+| M-10 生态门户 | T0+27 月 | ✅ 已交付 | `pkg-go/settlement`(分账 partner+platform≡gross 精确)+ `services/svc-marketplace`(上架审核 PENDING→APPROVED/REJECTED + 分账幂等,proto `marketplace/v1` + DDL + Helm + :9212)+ `sdk/terraform`(Provider 骨架,复用 scsdk/cps1 单源签名,SCECS/SCOSS/SCVPC/SCRDS 四资源,source-only)+ 开发者社区(`devops-explorer` Community 视图:文档/示例/社区入口,M-10.3) |
+| M-11 三期 GA | T0+30 月 | ✅ 模型层通过 | `tools/cross-region-failover-drill.md`(异地冷转热+DNS 切换,RPO≤5min/RTO≤30min,分层于 az-failover-drill)+ `tools/dengbao-level3-checklist.md`(等保三级要点自查 + 审计留存三档口径) |
+
+**三期验收门禁(§5.3)实装核对:**
+
+| # | 验收项 | 实装状态 | 实装证据 |
+|---|---|---|---|
+| C1 | 多地域 | ✅ 模型层通过 | `multiregion.Validate`(恰一 PRIMARY、standby>300km)+ `Classify`(IAM/计费 GLOBAL 单例)+ 跨地域演练 runbook;全局服务主备自动切换由 cn-east-1 冷备 override 建模 |
+| C2 | 稳定性 | ✅ 模型层通过 | `slo`(99.99% 关键链路可用性目标进平台 SLO seed)+ `chaos`(季度演练 6 科目 + prod 10min 终止)+ `tools/chaos-drill-runbook.md`(演练载体);P0 MTTR ≤15min 为 08§1.2 成熟期目标,slo/chaos 是达成载体 |
+| C3 | 生态 | ✅ 模型层通过 | `svc-marketplace` 上架/分账闭环 + `sdk/terraform` 覆盖 4 核心产品 + `devops-explorer` 开发者社区入口(≥20 第三方上架是运营指标,交易闭环模型已备) |
+| C4 | 合规 | ✅ 模型层通过 | `dengbao-level3-checklist.md` + 审计留存口径(03§4.4.3 权威:180 天热存+MinIO 冷备,365 天/18 个月付费档)三章同步 |
+| C5 | 成本 | ✅ 模型层通过 | `settlement` 分账金额精确(pricing.Amount 固定点);FinOps 产品线成本分摊的计量面由 `pkg-go/metering` + `billing.CostReport` 承接 |
+
+**二期延后项(§4.0"延后三期的项")三期补做:**
+
+| 延后项 | 实装状态 | 实装证据 |
+|---|---|---|
+| 云监控高级告警产品化(alert-center) | ✅ 已交付 | `pkg-go/alertcenter`(4 级收敛 去重/分组/抑制/静默 + 单租户 10 条/分钟限流)+ `services/alert-center`(:9213,ingest/flush/alerts,ClickHouse 告警历史 DDL)+ Helm chart |
+| 异常用量检测 | ✅ 已交付 | `pkg-go/anomaly`(z-score 检测,平基线除零→有限哨兵分数)+ `svc-metering /api/v1/metering/anomaly-scan`(判决是信号,非计费决定) |
+| 第二物理地域 | ✅ 已交付(M-8) | 见 M-8 行(`multiregion` + 多地域 IaC) |
+| 云市场/ISV | ✅ 已交付(M-10) | 见 M-10 行(`svc-marketplace`) |
+| STS 临时凭证 | ✅ 已交付 | `pkg-go/sts`(AssumeRole → 临时 AK/SK/Token,TTL 必正、到期即失效)+ `svc-iam /api/sts/assume-role` |
+| 大数据/AI 平台 | ⏸ 仍后置 | 09§5.1 非目标/01§1.2 决策 D1"第三批或更后";三期不启动(规划口径不变) |
+
+> **关键实装原则**(供四期/新产品参考):① region 模型"预留→实装"靠新包分层而非改旧包——`multiregion` 管跨地域、`topology` 仍管 AZ 级,两套承诺(00§4.4 vs §4.5)不混;② 全局服务集是封闭小集合,`Classify` 列全量目录、未知名拒绝(防 typo 静默误放);③ Kafka 跨地域是"重建"不是"复制"(00§4.5),`ClassifyState` 显式编码 REBUILT;④ 稳定性/生态/合规的"模型层通过"延续 source-only 口径——引擎与门禁是 tested Go 代码,演练与测评是静态 runbook/清单,不声称已在真实集群执行。
+
 ### 5.1 阶段目标与非目标
 
 **目标(T0+18 ~ T0+30 个月)**

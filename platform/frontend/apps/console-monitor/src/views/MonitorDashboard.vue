@@ -92,8 +92,8 @@ function copyId() {
           <StatusBadge :status="statusValue" :label="statusLabel" />
         </div>
         <div class="mon-meta">
-          <span class="mon-meta-label">有效期</span>
-          <span class="mon-meta-value">长期</span>
+          <span class="mon-meta-label">持续条件</span>
+          <span class="mon-meta-value">{{ durationLabel }}</span>
         </div>
       </div>
     </header>

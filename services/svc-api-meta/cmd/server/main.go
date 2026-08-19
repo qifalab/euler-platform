@@ -33,7 +33,9 @@ import (
 
 func main() {
 	var (
-		httpAddr = flag.String("http", ":8080", "HTTP listen address")
+		// Dev port allocation :9201 — the console-base vite proxy forwards
+		// /api/v1/meta here; production overrides via -http / Helm values.
+		httpAddr = flag.String("http", ":9201", "HTTP listen address")
 	)
 	flag.Parse()
 

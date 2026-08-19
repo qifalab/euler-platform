@@ -699,6 +699,70 @@
         }
       }
     },
+    "proto-hub/proto/starcloud/marketplace/v1/marketplace.proto": {
+      "ApproveProductRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "bool",
+          "3": "string"
+        }
+      },
+      "ListProductsRequest": {
+        "fields": {
+          "1": "int32",
+          "2": "int32",
+          "3": "ListingCategory"
+        }
+      },
+      "ListProductsResponse": {
+        "fields": {
+          "1": "Listing",
+          "2": "int32"
+        }
+      },
+      "Listing": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "string",
+          "4": "ListingCategory",
+          "5": "string",
+          "6": "ListingStatus",
+          "7": "int64",
+          "8": "int64",
+          "9": "int64"
+        }
+      },
+      "PublishProductRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "string",
+          "3": "ListingCategory",
+          "4": "string",
+          "5": "int64"
+        }
+      },
+      "SettleOrderRequest": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64"
+        }
+      },
+      "SettlementRecord": {
+        "fields": {
+          "1": "int64",
+          "2": "int64",
+          "3": "int64",
+          "4": "int64",
+          "5": "int64",
+          "6": "int64",
+          "7": "int64",
+          "8": "int64",
+          "9": "int64"
+        }
+      }
+    },
     "proto-hub/proto/starcloud/metering/v1/metering.proto": {
       "DescribeMeteringDataRequest": {
         "fields": {

@@ -37,7 +37,9 @@ import yaml
 
 MANIFEST_GLOB = "deploy/gitops-manifests/platform/middleware/*.yaml"
 DEPLOYMENT_TEMPLATES = "deploy/gitops-manifests/apps/*/templates/deployment.yaml"
-ENV_OVERRIDES = "deploy/gitops-manifests/envs/{env}/values-overrides/*.yaml"
+# M-8 multi-region: overrides live per (region, env) — envs/<region>/<env>/
+# (08§4.2; the region level is the P3 extension of dir-as-env).
+ENV_OVERRIDES = "deploy/gitops-manifests/envs/*/{env}/values-overrides/*.yaml"
 
 # Stateful workloads that MUST carry cross-AZ placement intent, because they
 # are the data plane whose AZ-loss survival is the P2 promise (00 §4.4).
@@ -166,8 +168,8 @@ def check_deployment_zone_path() -> list[str]:
     """A chart template referenced by a zoneSpread override MUST contain the
     zone-spread code path, or the override is a placebo."""
     errs: list[str] = []
-    # Gather which env overrides turn zoneSpread on.
-    zone_spread_services: dict[str, list[str]] = {}  # service -> [envs]
+    # Gather which (region, env) overrides turn zoneSpread on.
+    zone_spread_services: dict[str, list[str]] = {}  # service -> ["<region>/<env>"]
     for env in ("prod", "staging"):
         for path in sorted(glob.glob(ENV_OVERRIDES.format(env=env))):
             for doc in load_docs(path):
@@ -177,7 +179,9 @@ def check_deployment_zone_path() -> list[str]:
                 if isinstance(topo, dict) and topo.get("zoneSpread") is True:
                     svc = re.search(r"values-overrides[/\\](.+)\.yaml$", path)
                     svc_name = svc.group(1) if svc else path
-                    zone_spread_services.setdefault(svc_name, []).append(env)
+                    region = re.search(r"envs[/\\]([^/\\]+)[/\\]" + env, path)
+                    label = (region.group(1) + "/" + env) if region else env
+                    zone_spread_services.setdefault(svc_name, []).append(label)
     if not zone_spread_services:
         return []
     # Read each deployment template; the zone path must be present.
