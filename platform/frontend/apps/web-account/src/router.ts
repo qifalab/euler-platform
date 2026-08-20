@@ -19,6 +19,7 @@ const routes: RouteRecordRaw[] = [
   { path: "/ram/roles", name: "ram-roles", component: () => import("./views/RoleList.vue"), meta: { title: "RAM 角色" } },
   { path: "/ram/simulator", name: "ram-simulator", component: () => import("./views/PolicySimulator.vue"), meta: { title: "策略模拟器" } },
   { path: "/ak", name: "ak", component: () => import("./views/AccessKeys.vue"), meta: { title: "AccessKey 管理" } },
+  { path: "/sts", name: "sts", component: () => import("./views/StsCredentials.vue"), meta: { title: "STS 临时凭证" } },
 ];
 
 export const router = createRouter({ history: createWebHistory(), routes });

@@ -59,7 +59,7 @@ func newRegistryStore() *registryStore {
 // (https://static.starcloud.cn/apps/{app}/{ver}/index.html).
 func seedRegistry() Registry {
 	return Registry{
-		Revision: 1,
+		Revision: 2,
 		TTL:      300,
 		Apps: []RegistryApp{
 			{AppCode: "console-ecs", AppTitle: "云服务器 ECS", ProductCodes: []string{"scecs"}, ActiveRules: []string{"/scecs"}, EntryURL: "http://localhost:5174/", Version: "0.1.0", KeepAlive: true, Preload: true, Status: "online"},
@@ -71,6 +71,7 @@ func seedRegistry() Registry {
 			{AppCode: "web-account", AppTitle: "账号与访问控制", ProductCodes: []string{}, ActiveRules: []string{"/account"}, EntryURL: "http://localhost:5175/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 			{AppCode: "web-ticket", AppTitle: "工单支持", ProductCodes: []string{}, ActiveRules: []string{"/ticket"}, EntryURL: "http://localhost:5181/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 			{AppCode: "devops-explorer", AppTitle: "OpenAPI Explorer", ProductCodes: []string{}, ActiveRules: []string{"/explorer"}, EntryURL: "http://localhost:5182/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "web-marketplace", AppTitle: "云市场", ProductCodes: []string{}, ActiveRules: []string{"/marketplace"}, EntryURL: "http://localhost:5190/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 		},
 	}
 }

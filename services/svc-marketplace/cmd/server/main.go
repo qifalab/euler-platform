@@ -105,6 +105,7 @@ type Store interface {
 	CreateListing(l *Listing) error
 	GetListing(id int64) (*Listing, error)
 	ListApproved(category ListingCategory) []*Listing
+	ListByStatus(status ListingStatus, category ListingCategory) []*Listing
 	UpdateListingStatus(id int64, from, to ListingStatus) (*Listing, error)
 	CreateSettlement(s *SettlementRecord) error
 	GetSettlementByOrder(orderID string) (*SettlementRecord, bool)
@@ -153,11 +154,15 @@ func (s *memoryStore) GetListing(id int64) (*Listing, error) {
 }
 
 func (s *memoryStore) ListApproved(category ListingCategory) []*Listing {
+	return s.ListByStatus(StatusApproved, category)
+}
+
+func (s *memoryStore) ListByStatus(status ListingStatus, category ListingCategory) []*Listing {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Listing, 0)
 	for _, l := range s.listings {
-		if l.Status != StatusApproved {
+		if l.Status != status {
 			continue
 		}
 		if category != "" && l.Category != category {
@@ -316,7 +321,20 @@ func (a *app) handleList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Marketplace.InvalidCategory", "category must be IMAGE/SAAS/SERVICE")
 		return
 	}
-	writeOK(w, map[string]any{"listings": a.store.ListApproved(category)})
+	// Default remains APPROVED (对客目录). The console review desk asks for
+	// ?status=PENDING_APPROVAL — every other lifecycle state stays queryable
+	// too, so the desk can also show rejected/off-shelf history.
+	status := StatusApproved
+	if raw := r.URL.Query().Get("status"); raw != "" {
+		status = ListingStatus(raw)
+		switch status {
+		case StatusDraft, StatusPendingApproval, StatusApproved, StatusRejected, StatusOffShelf:
+		default:
+			writeErr(w, 400, "Marketplace.InvalidStatus", "status must be DRAFT/PENDING_APPROVAL/APPROVED/REJECTED/OFF_SHELF")
+			return
+		}
+	}
+	writeOK(w, map[string]any{"listings": a.store.ListByStatus(status, category)})
 }
 
 // settleReq is POST /api/v1/marketplace/settlements.

@@ -98,6 +98,7 @@ function toggleDark() {
       </button>
 
       <a class="shell-nav-link" href="#" @click.prevent="router.push('/billing')">费用</a>
+      <a class="shell-nav-link" href="#" @click.prevent="router.push('/marketplace')">市场</a>
       <a class="shell-nav-link" href="#" @click.prevent="router.push('/explorer')">API 调试</a>
       <a class="shell-nav-link" href="#" @click.prevent="router.push('/ticket')">工单</a>
       <span class="shell-account">账号 ▾</span>

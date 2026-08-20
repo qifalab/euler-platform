@@ -14,6 +14,8 @@
 //	DELETE /api/v1/monitor/rules/{id}        — delete a rule
 //	GET    /api/v1/monitor/metrics           — query a metric for a resource (query proxy)
 //	GET    /api/v1/monitor/templates         — list platform rule templates
+//	GET    /api/v1/monitor/slo               — M-9 SLO dashboard: error budget, burn rates, release policy
+//	GET    /api/v1/monitor/chaos             — M-9 chaos drills: six mandatory subjects + remediation verdicts
 //
 // stdlib-HTTP service (repo convention). Every handler emits the platform
 // envelope {RequestId, Code, Message, Data} (03§9.3).
@@ -33,6 +35,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/starcloud/sc-platform/chaos"
+	"github.com/starcloud/sc-platform/slo"
 )
 
 const accountIDHeader = "X-Sc-Account-Id"
@@ -298,6 +303,133 @@ func (s *ruleStore) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "OK", templates)
 }
 
+// --- M-9 stability platform: SLO + chaos (09-roadmap §5.2 M-9, 08§9.5/§10) -----
+
+// sloObservation is the observed budget consumption for one objective: the
+// 1h/3d multi-window burn inputs plus the total consumed over the SLO window
+// and the consecutive quarters the SLO has been met. Production feeds this from
+// the metrics pipeline; the verdicts below are always computed by pkg-go/slo.
+type sloObservation struct {
+	consumed1h    time.Duration
+	consumed3d    time.Duration
+	consumedTotal time.Duration
+	quartersMet   int
+}
+
+// sloObservations seeds one observation per PlatformObjectives entry, keyed by
+// objective name. The mix is deliberately varied: metering is in fast burn
+// (pages) with its budget exhausted (release freeze), billing is in slow burn
+// with a SLOW_DOWN release policy, and the gateway/login objectives have two
+// clean quarters (SLA-gate eligible).
+var sloObservations = map[string]sloObservation{
+	"openapi-gateway-availability":   {consumed1h: 1200 * time.Millisecond, consumed3d: 90 * time.Second, consumedTotal: 400 * time.Second, quartersMet: 2},
+	"resource-control-plane-success": {consumed1h: 3 * time.Second, consumed3d: 200 * time.Second, consumedTotal: 900 * time.Second, quartersMet: 1},
+	"metering-no-loss":               {consumed1h: 60 * time.Second, consumed3d: 80 * time.Second, consumedTotal: 280 * time.Second, quartersMet: 0},
+	"billing-on-time":                {consumed1h: 10 * time.Second, consumed3d: 4000 * time.Second, consumedTotal: 7800 * time.Second, quartersMet: 1},
+	"login-auth-success":             {consumed1h: 800 * time.Millisecond, consumed3d: 60 * time.Second, consumedTotal: 300 * time.Second, quartersMet: 2},
+}
+
+// handleSLO returns the M-9 SLO dashboard feed: every platform objective with
+// its error budget, multi-window burn rates, alert severity, release policy,
+// and the SLA gate verdict. All math is pkg-go/slo's — this handler assembles.
+func (s *ruleStore) handleSLO(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDFrom(w, r); !ok {
+		return
+	}
+	objectives := make([]map[string]any, 0, len(slo.PlatformObjectives))
+	for _, o := range slo.PlatformObjectives {
+		if err := o.Validate(); err != nil {
+			writeErr(w, "Common.InternalError", 500, err.Error())
+			return
+		}
+		obs := sloObservations[o.Name]
+		budget := o.ErrorBudget()
+		remaining := budget - obs.consumedTotal
+		objectives = append(objectives, map[string]any{
+			"name":           o.Name,
+			"target":         o.Target,
+			"windowMs":       o.Window.Milliseconds(),
+			"errorBudgetMs":  budget.Milliseconds(),
+			"consumed1hMs":   obs.consumed1h.Milliseconds(),
+			"consumed3dMs":   obs.consumed3d.Milliseconds(),
+			"consumedTotalMs": obs.consumedTotal.Milliseconds(),
+			"remainingMs":    remaining.Milliseconds(),
+			"burnRate1h":     o.BurnRate(obs.consumed1h, slo.FastBurnWindow),
+			"burnRate3d":     o.BurnRate(obs.consumed3d, slo.SlowBurnWindow),
+			"alert1h":        string(o.Alert(obs.consumed1h, slo.FastBurnWindow)),
+			"alert3d":        string(o.Alert(obs.consumed3d, slo.SlowBurnWindow)),
+			"budgetPolicy":   string(o.BudgetPolicy(remaining)),
+			"quartersMet":    obs.quartersMet,
+			"slaEligible":    slo.CanCommitSLA(obs.quartersMet),
+		})
+	}
+	writeJSON(w, "OK", map[string]any{
+		"objectives": objectives,
+		"slaGate": map[string]any{
+			"consecutiveQuartersRequired": 2,
+			"note":                        "SLA 仅对连续两个季度满足 SLO 的服务开放 (08§10.1)",
+		},
+		"thresholds": map[string]any{
+			"fastBurnWindowMs":   slo.FastBurnWindow.Milliseconds(),
+			"fastBurnThreshold":  slo.FastBurnThreshold,
+			"slowBurnWindowMs":   slo.SlowBurnWindow.Milliseconds(),
+			"slowBurnThreshold":  slo.SlowBurnThreshold,
+		},
+	})
+}
+
+// chaosDrill is one seeded drill entry: the plan (subject/stage/radius/abort
+// path) plus the expected-vs-actual recovery result of its last execution.
+type chaosDrill struct {
+	plan   chaos.DrillPlan
+	result chaos.DrillResult
+	at     time.Time
+}
+
+// chaosDrills seeds the six 必练科目 (08§9.5) with their latest run. mysql
+// primary failover exceeded 150% of expected recovery — pkg-go/chaos flags it
+// for remediation (偏差 > 50% 立项整改).
+var chaosDrills = []chaosDrill{
+	{plan: chaos.DrillPlan{Kind: chaos.DrillNacosSplitBrain, Stage: chaos.StageStaging}, result: chaos.DrillResult{Kind: chaos.DrillNacosSplitBrain, Expected: 300 * time.Second, Actual: 240 * time.Second}, at: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)},
+	{plan: chaos.DrillPlan{Kind: chaos.DrillRedisFailover, Stage: chaos.StageProd, BlastRadius: "单个 redis 副本", AbortDeadline: 10 * time.Minute}, result: chaos.DrillResult{Kind: chaos.DrillRedisFailover, Expected: 30 * time.Second, Actual: 28 * time.Second}, at: time.Date(2026, 6, 11, 14, 0, 0, 0, time.UTC)},
+	{plan: chaos.DrillPlan{Kind: chaos.DrillMySQLFailover, Stage: chaos.StageProd, BlastRadius: "较轻的 MySQL AZ", AbortDeadline: 10 * time.Minute}, result: chaos.DrillResult{Kind: chaos.DrillMySQLFailover, Expected: 120 * time.Second, Actual: 210 * time.Second}, at: time.Date(2026, 6, 11, 15, 30, 0, 0, time.UTC)},
+	{plan: chaos.DrillPlan{Kind: chaos.DrillApisixEtcdSelfHeal, Stage: chaos.StageStaging}, result: chaos.DrillResult{Kind: chaos.DrillApisixEtcdSelfHeal, Expected: 180 * time.Second, Actual: 160 * time.Second}, at: time.Date(2026, 5, 14, 11, 0, 0, 0, time.UTC)},
+	{plan: chaos.DrillPlan{Kind: chaos.DrillKafkaBrokerLoss, Stage: chaos.StageProd, BlastRadius: "单个 kafka broker", AbortDeadline: 10 * time.Minute}, result: chaos.DrillResult{Kind: chaos.DrillKafkaBrokerLoss, Expected: 60 * time.Second, Actual: 55 * time.Second}, at: time.Date(2026, 7, 9, 9, 0, 0, 0, time.UTC)},
+	{plan: chaos.DrillPlan{Kind: chaos.DrillSingleAZLoss, Stage: chaos.StageStaging}, result: chaos.DrillResult{Kind: chaos.DrillSingleAZLoss, Expected: 600 * time.Second, Actual: 540 * time.Second}, at: time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC)},
+}
+
+// handleChaosDrills returns the M-9 chaos discipline feed: the six mandatory
+// drill subjects, each with its plan discipline (stage/radius/abort path,
+// validated by pkg-go/chaos) and the remediation verdict of its latest run.
+func (s *ruleStore) handleChaosDrills(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDFrom(w, r); !ok {
+		return
+	}
+	drills := make([]map[string]any, 0, len(chaosDrills))
+	for _, d := range chaosDrills {
+		if err := d.plan.Validate(); err != nil {
+			writeErr(w, "Common.InternalError", 500, err.Error())
+			return
+		}
+		drills = append(drills, map[string]any{
+			"kind":            string(d.plan.Kind),
+			"stage":           string(d.plan.Stage),
+			"blastRadius":     d.plan.BlastRadius,
+			"abortDeadlineMs": d.plan.AbortDeadline.Milliseconds(),
+			"expectedMs":      d.result.Expected.Milliseconds(),
+			"actualMs":        d.result.Actual.Milliseconds(),
+			"needsRemediation": d.result.NeedsRemediation(),
+			"drilledAt":       d.at.Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, "OK", map[string]any{
+		"drills":             drills,
+		"prodAbortDeadlineMs": chaos.ProdAbortDeadline.Milliseconds(),
+		"mandatoryCount":     len(chaos.MandatoryDrills),
+		"note":               "每季度至少一次全科目演练, 生产演练须具名爆炸半径且 10 分钟内可终止 (08§9.5)",
+	})
+}
+
 // --- middleware ---
 
 func requestIDMiddleware(h http.Handler) http.Handler {
@@ -355,6 +487,8 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/monitor/rules/{id}", store.handleDeleteRule)
 	mux.HandleFunc("GET /api/v1/monitor/metrics", store.handleQueryMetrics)
 	mux.HandleFunc("GET /api/v1/monitor/templates", store.handleTemplates)
+	mux.HandleFunc("GET /api/v1/monitor/slo", store.handleSLO)
+	mux.HandleFunc("GET /api/v1/monitor/chaos", store.handleChaosDrills)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

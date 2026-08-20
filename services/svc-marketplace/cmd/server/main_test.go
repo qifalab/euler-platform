@@ -67,6 +67,24 @@ func TestListOnlyShowsApproved(t *testing.T) {
 	}
 }
 
+func TestListByStatusFeedsReviewDesk(t *testing.T) {
+	h := newMux(newApp(newMemoryStore()))
+	publishListing(t, h) // PENDING_APPROVAL
+	// The console review desk queries the pending queue.
+	rec := do(t, h, http.MethodGet, "/api/v1/marketplace/listings?status=PENDING_APPROVAL", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pending queue: status %d body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "partner-mysql-image") {
+		t.Fatal("pending listing must appear in the ?status=PENDING_APPROVAL queue")
+	}
+	// Unknown status values are rejected, not silently treated as APPROVED.
+	rec = do(t, h, http.MethodGet, "/api/v1/marketplace/listings?status=NOPE", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status: %d, want 400", rec.Code)
+	}
+}
+
 func TestApproveMakesSellable(t *testing.T) {
 	h := newMux(newApp(newMemoryStore()))
 	id := publishListing(t, h)

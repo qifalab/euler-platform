@@ -49,6 +49,7 @@ const fallback: Registry = {
     { appCode: "web-billing", appTitle: "费用中心", productCodes: [], activeRules: ["/billing"], entryUrl: "http://localhost:5180/", version: "0.1.0", keepAlive: false, preload: true, status: "online" },
     { appCode: "web-account", appTitle: "账号与访问控制", productCodes: [], activeRules: ["/account"], entryUrl: "http://localhost:5175/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
     { appCode: "web-ticket", appTitle: "工单支持", productCodes: [], activeRules: ["/ticket"], entryUrl: "http://localhost:5181/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "web-marketplace", appTitle: "云市场", productCodes: [], activeRules: ["/marketplace"], entryUrl: "http://localhost:5190/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
     { appCode: "devops-explorer", appTitle: "OpenAPI Explorer", productCodes: [], activeRules: ["/explorer"], entryUrl: "http://localhost:5182/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
   ],
 };

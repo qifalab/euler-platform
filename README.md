@@ -321,6 +321,36 @@ field into an implemented P3 contract.
 §5.0 "三期实装状态回写" (milestone table M-8→M-11 + C1–C5 gate verification +
 deferred-item closure), mirroring the §4.0 phase-2 writeback.
 
+### Phase-3 frontend sync (三期工程同步到前端)
+
+The phase-3 surfaces are live in the frontend with real backend connections —
+no mocks; each sub-app's vite dev proxy injects the gateway-authorized
+`X-Sc-Account-Id`:
+
+- **`platform/frontend/apps/web-marketplace`** (new, :5190) — the M-10
+  commerce surface: 商品目录 (`GET /listings`, APPROVED + category filter),
+  发布商品 (`POST /listings` → PENDING_APPROVAL), 审核台
+  (`GET ?status=PENDING_APPROVAL` + `POST /listings/{id}/approve`),
+  分账结算 (`POST /settlements`, idempotent per order). Registered in
+  `svc-api-meta` + the console-base fallback registry, so it runs standalone
+  or inside the Wujie shell at `/marketplace`.
+- **`console-monitor`** four new views — 告警中心 (alert-center :9213
+  ingest → flush 收敛 → alerts history), 异常检测 (svc-metering
+  `/api/v1/metering/anomaly-scan`), 稳定性平台 (svc-monitor `/slo` + `/chaos`:
+  error budget, 1h/3d burn rates, 发布政策, SLA 资格), 地域容灾 (svc-catalog
+  `/api/v1/catalog/region-topology`: 两地三中心 + RPO 判定 + 故障切换).
+- **`web-account`** — STS 临时凭证 view: `GET /api/ram/roles` →
+  `POST /api/sts/assume-role`, showing the AK/SK/SecurityToken triple with a
+  countdown (SecretKey surfaced exactly once).
+- Backend additions that back these views: `svc-catalog` region-topology,
+  `svc-monitor` slo/chaos, `svc-marketplace` status-filtered listings.
+- Verified end-to-end with real HTTP smoke (region-topology RPO verdicts,
+  SLO FREEZE policy, chaos remediation flags, marketplace
+  publish→approve→settle 70/30, alert dedup 3→2, anomaly SPIKE, STS issuance)
+  plus go vet/test × 7 services, frontend typecheck/build × 4 apps, vitest
+  34/34 — see `platform/frontend/README.md` § Phase-3 frontend sync.
+
+
 ## Repository layout
 
 ```

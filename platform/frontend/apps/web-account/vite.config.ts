@@ -22,6 +22,8 @@ export default defineConfig({
       "/api/account": { target: "http://localhost:9101", changeOrigin: true },
       "/api/ram": { target: "http://localhost:9101", changeOrigin: true },
       "/api/ak": { target: "http://localhost:9101", changeOrigin: true },
+      // STS 临时凭证 (phase-3 D-3, 07§10 M1) → svc-iam web-auth.
+      "/api/sts": { target: "http://localhost:9101", changeOrigin: true },
     },
   },
   build: {

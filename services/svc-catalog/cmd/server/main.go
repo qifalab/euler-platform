@@ -15,8 +15,9 @@
 //	GET   /api/v1/catalog/skus     — list SKUs, filter by ?productCode= (anonymous-safe)
 //	GET   /api/v1/catalog/placement — placement contract (scope/crossAz/zoneRequired), M-6 (anonymous-safe)
 //	GET   /api/v1/catalog/regions  — region/zone metadata for console region pickers (anonymous-safe)
+//	GET   /api/v1/catalog/region-topology — M-8 两地三中心 plan + replication RPO verdicts (anonymous-safe)
 //	GET   /api/v1/catalog/images   — public image list, filter by ?productCode= (anonymous-safe)
-//	GET   /healthz, /readyz
+//	/healthz, /readyz
 //
 // stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
 // (MySQL t_product/t_sku/t_pricing_rule/t_promo_policy in production). The seed
@@ -39,6 +40,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/starcloud/sc-platform/multiregion"
 	"github.com/starcloud/sc-platform/pricing"
 	"github.com/starcloud/sc-platform/topology"
 )
@@ -541,6 +543,119 @@ func (s *catalogStore) handleRegions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "OK", out)
 }
 
+// --- M-8 multi-region topology (09-roadmap §5.2 M-8, 00§4.2/§4.5) --------------
+
+// phase3Plan is the 两地三中心 topology: one in-city dual-active primary
+// (cn-north-1, the P2 dual-AZ shape) plus one remote standby (cn-east-1,
+// >300km, read-only/DR — Role.Writable() is false, P3 does not promise
+// 异地多活写). The classification math lives in pkg-go/multiregion; this seed
+// is the plan the cross-region DR drill (tools/cross-region-failover-drill.md)
+// executes, matching the GitOps env split (primary carries dev/staging/prod,
+// standby carries prod only, 08§4.2).
+var phase3Plan = multiregion.Plan{
+	Primary: multiregion.Region{Name: "cn-north-1", Role: multiregion.RolePrimary, ZoneLetters: []string{"a", "b"}},
+	Standby: multiregion.Region{Name: "cn-east-1", Role: multiregion.RoleStandby, DistanceKm: 1100, ZoneLetters: []string{"a"}},
+	Channels: []multiregion.ReplicationChannel{
+		multiregion.CoreLedgerChannel(),
+		multiregion.ObjectStorageChannel(),
+	},
+}
+
+// replicationLag is the in-memory stand-in for the region_replication_status
+// rows (orchestrator sql/V3): the latest observed lag per cross-region channel.
+// Production is written by the replication monitor; the RPO verdict below is
+// still computed by the pkg (MeetsRPO), never hand-labelled.
+var replicationLag = map[string]time.Duration{
+	"ledger-binlog":  2100 * time.Millisecond, // vs 5s RPO
+	"object-storage": 8 * time.Minute,         // vs 1h RPO
+}
+
+// phase3Services is the core commercial-loop slice classified for the console
+// view. The authority is multiregion.Classify — unknown names error loudly, so
+// this list can only reference services the pkg knows (IAM/计费 are the two
+// GLOBAL singletons, 09§5.2 M-8).
+var phase3Services = []string{
+	"svc-iam", "svc-billing", "svc-order", "svc-payment", "svc-metering",
+	"svc-orchestrator", "svc-quota", "svc-catalog", "svc-monitor",
+}
+
+// phase3States is the cross-region state taxonomy the pkg declares
+// (ClassifyState's four legal names: account/ledger/object-storage/kafka-topic).
+var phase3States = []string{"account", "ledger", "object-storage", "kafka-topic"}
+
+func regionTopologyView(r multiregion.Region) map[string]any {
+	zones := make([]string, 0, len(r.ZoneLetters))
+	for _, z := range r.ZoneLetters {
+		zones = append(zones, r.Name+"-"+z)
+	}
+	return map[string]any{
+		"name": r.Name, "role": string(r.Role), "writable": r.Role.Writable(),
+		"distanceKm": r.DistanceKm, "zones": zones,
+	}
+}
+
+// handleRegionTopology returns the M-8 topology for the console's 地域与容灾
+// view: region roles (who writes), the replication channels with live RPO
+// verdicts, the canonical 灾备接管 sequence, and the global/regional
+// classification. Everything computed comes from pkg-go/multiregion — this
+// handler only assembles, it never re-derives.
+func (s *catalogStore) handleRegionTopology(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDOptional(w, r); !ok {
+		return
+	}
+	if err := phase3Plan.Validate(); err != nil {
+		writeErr(w, "Common.InternalError", 500, "region topology plan invalid: "+err.Error())
+		return
+	}
+
+	channels := make([]map[string]any, 0, len(phase3Plan.Channels))
+	for _, c := range phase3Plan.Channels {
+		lag := replicationLag[c.Name]
+		channels = append(channels, map[string]any{
+			"name": c.Name, "mode": c.Mode,
+			"rpoMs": c.RPO.Milliseconds(), "lagMs": lag.Milliseconds(),
+			"rpoMet": c.MeetsRPO(lag),
+		})
+	}
+
+	steps := make([]map[string]any, 0, 2)
+	for _, st := range phase3Plan.FailoverSteps() {
+		steps = append(steps, map[string]any{"name": st.Name, "detail": st.Detail})
+	}
+
+	scopes := make([]map[string]any, 0, len(phase3Services))
+	for _, svc := range phase3Services {
+		scope, err := multiregion.Classify(svc)
+		if err != nil {
+			writeErr(w, "Common.InternalError", 500, err.Error())
+			return
+		}
+		scopes = append(scopes, map[string]any{"service": svc, "scope": string(scope)})
+	}
+
+	states := make([]map[string]any, 0, len(phase3States))
+	for _, st := range phase3States {
+		class, err := multiregion.ClassifyState(st)
+		if err != nil {
+			writeErr(w, "Common.InternalError", 500, err.Error())
+			return
+		}
+		states = append(states, map[string]any{"state": st, "class": string(class)})
+	}
+
+	writeJSON(w, "OK", map[string]any{
+		"plan": map[string]any{
+			"primary":  regionTopologyView(phase3Plan.Primary),
+			"standby":  regionTopologyView(phase3Plan.Standby),
+			"maxRtoMs": multiregion.MaxRTO.Milliseconds(),
+		},
+		"channels":      channels,
+		"failoverSteps": steps,
+		"serviceScopes": scopes,
+		"stateClasses":  states,
+	})
+}
+
 // handleImages returns the public image inventory, optionally filtered by
 // productCode. The purchase wizard renders it as the 镜像 dropdown so a boot
 // request can only carry an image provisioning actually knows.
@@ -763,6 +878,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/catalog/skus", store.handleSKUs)
 	mux.HandleFunc("GET /api/v1/catalog/placement", store.handlePlacement)
 	mux.HandleFunc("GET /api/v1/catalog/regions", store.handleRegions)
+	mux.HandleFunc("GET /api/v1/catalog/region-topology", store.handleRegionTopology)
 mux.HandleFunc("GET /api/v1/catalog/images", store.handleImages)
 mux.HandleFunc("GET /api/v1/catalog/categories", store.handleCategories)
 
