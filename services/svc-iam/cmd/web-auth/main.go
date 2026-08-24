@@ -47,28 +47,77 @@ import (
 	"time"
 
 	"github.com/starcloud/sc-platform/authz"
+	"github.com/starcloud/sc-platform/sts"
 )
 
 const (
 	accessTTL  = 15 * time.Minute
 	refreshTTL = 7 * 24 * time.Hour
-	// dev signing secret — production loads from KMS/secret manager (07§5.3).
-	hmacSecret = "sc-dev-hs256-secret-do-not-use-in-prod"
+	// maxBodyBytes caps every JSON request body (defense against oversized
+	// payloads); http.MaxBytesReader enforces it per-handler.
+	maxBodyBytes = 1 << 20 // 1 MiB
 )
+
+// hmacSecret is the HS256 signing key. Loaded from SC_JWT_SECRET; when unset
+// (dev) a process-local random key is generated so the service stays usable,
+// at the cost of invalidating tokens across restarts. Production must set
+// SC_JWT_SECRET (loaded from KMS/secret manager — 07§5.3).
+var hmacSecret = loadJWTSecret()
+
+func loadJWTSecret() string {
+	if s := os.Getenv("SC_JWT_SECRET"); s != "" {
+		return s
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	slog.Warn("SC_JWT_SECRET not set — generated ephemeral JWT signing key (dev only); tokens will not survive restarts")
+	return hex.EncodeToString(b)
+}
+
+// cookieSecure controls the Secure attribute of the refresh cookie.
+// SC_COOKIE_SECURE=true/false overrides; when unset it defaults to true in
+// production (SC_ENV=prod/production) and false in dev so plain-HTTP localhost
+// keeps working.
+var cookieSecure = loadCookieSecure()
+
+func loadCookieSecure() bool {
+	if v := os.Getenv("SC_COOKIE_SECURE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err == nil {
+			return b
+		}
+		slog.Warn("invalid SC_COOKIE_SECURE, falling back to env default", "value", v)
+	}
+	env := strings.ToLower(os.Getenv("SC_ENV"))
+	return env == "prod" || env == "production"
+}
+
+// dummyPasswordHash is compared against when the account does not exist, so
+// login latency does not reveal whether an email is registered.
+var dummyPasswordHash = func() string {
+	salt := randHex(16)
+	return salt + "$" + sha256Hex(salt+randHex(16))
+}()
 
 // --- domain ---
 
 type account struct {
-	AccountID       int64
-	AccountName     string // login (email)
-	RealName        string
-	PasswordHash    string // salted sha256: salt$hex
-	Status          int    // 1 normal, 2 frozen, 3 closed
-	RealNameStatus  int    // 0 unverified, 1 individual verified, 2 enterprise verified (07§2.3)
-	RealNameType    string // "individual" | "enterprise" | ""
-	IDCardNo        string // masked after verification (real-name doc number)
-	EnterpriseName  string
-	CreatedAt        time.Time // provisioning time, surfaced in profile (03§9.3)
+	AccountID      int64
+	AccountName    string // login (email)
+	RealName       string
+	PasswordHash   string // salted sha256: salt$hex
+	Status         int    // 1 normal, 2 frozen, 3 closed
+	RealNameStatus int    // 0 unverified, 1 individual verified, 2 enterprise verified (07§2.3)
+	RealNameType   string // "individual" | "enterprise" | ""
+	IDCardNo       string // masked after verification (real-name doc number)
+	EnterpriseName string
+	CreatedAt      time.Time // provisioning time, surfaced in profile (03§9.3)
+	// TokenVersion is bumped whenever credentials change (e.g. password
+	// change). It is embedded in issued access tokens ("tv" claim) and
+	// compared on verification, so older tokens are rejected immediately.
+	TokenVersion int
 	// phoneBound/mfaEnabled are not yet tracked in phase-1; profile reports false
 	// until the binding flows land (07§2.5). Fields kept for forward-compat.
 }
@@ -82,9 +131,9 @@ type session struct {
 
 var (
 	mu       sync.RWMutex
-	accounts = map[string]account{}   // accountName → account
-	byID     = map[int64]account{}    // accountID → account
-	sessions = map[string]*session{}  // refreshToken → session
+	accounts = map[string]account{}  // accountName → account
+	byID     = map[int64]account{}   // accountID → account
+	sessions = map[string]*session{} // refreshToken → session
 
 	// RAM sub-users keyed by accountID → username → ramUser. Phase-1 is
 	// in-memory (02§5.3); prod persists to the iam_user table (03 DDL).
@@ -103,8 +152,8 @@ var (
 	// key (the doc has no Name field, matching pkg-go/authz.Policy).
 	ramPolicies = map[int64]map[string]storedPolicy{}
 
-	roleSeq  int64
-	polSeq    int64
+	roleSeq int64
+	polSeq  int64
 )
 
 // ramUser is a RAM sub-account (07§2.6). Status mirrors the account status enum.
@@ -122,17 +171,17 @@ type ramUser struct {
 // at creation and never stored in plaintext — only its salted hash is retained
 // for later verification (prod never returns the secret again).
 type accessKey struct {
-	AKID           string // "SC"+14 chars, masked for display after creation
-	SecretHash     string // salted sha256 of the plaintext secret
-	Status         int    // 1 enabled, 2 disabled
-	CreatedAt      time.Time
-	LastUsed       time.Time
-	RotationGrace  bool // true while this AK is the outgoing side of a rotation (07§2.2)
+	AKID          string // "SC"+14 chars, masked for display after creation
+	SecretHash    string // salted sha256 of the plaintext secret
+	Status        int    // 1 enabled, 2 disabled
+	CreatedAt     time.Time
+	LastUsed      time.Time
+	RotationGrace bool // true while this AK is the outgoing side of a rotation (07§2.2)
 }
 
-func nextRAMID() int64 { ramSeq++; return ramSeq }
-func nextAKIDSeq() int64 { akSeq++; return akSeq }
-func nextRoleID() int64 { roleSeq++; return roleSeq }
+func nextRAMID() int64    { ramSeq++; return ramSeq }
+func nextAKIDSeq() int64  { akSeq++; return akSeq }
+func nextRoleID() int64   { roleSeq++; return roleSeq }
 func nextPolicyID() int64 { polSeq++; return polSeq }
 
 // ramRole is a named role that groups policies (07§3.2 RBAC skeleton:
@@ -152,13 +201,13 @@ type ramRole struct {
 // The document shape matches pkg-go/authz.Policy ({Version,Statement}); the
 // parsed form is what the simulator evaluates.
 type storedPolicy struct {
-	ID          int64
-	AccountID   int64
-	Name        string // unique within the account (07§3.2 system policy naming)
-	Type        string // "system" | "custom"
-	Document    string // raw policy JSON (audit + round-trip)
-	Parsed      authz.Policy
-	CreatedAt   time.Time
+	ID        int64
+	AccountID int64
+	Name      string // unique within the account (07§3.2 system policy naming)
+	Type      string // "system" | "custom"
+	Document  string // raw policy JSON (audit + round-trip)
+	Parsed    authz.Policy
+	CreatedAt time.Time
 }
 
 // seedAccount provisions a real account with a real salted password hash so the
@@ -214,13 +263,13 @@ func seedRAMRolesPolicies(accountID int64) {
 		return storedPolicy{ID: nextPolicyID(), AccountID: accountID, Name: name, Type: typ, Document: doc, Parsed: p, CreatedAt: now}
 	}
 	ramPolicies[accountID] = map[string]storedPolicy{
-		"ScEcsFullAccess": mustParseStored("ScEcsFullAccess", "system", fullAccess),
+		"ScEcsFullAccess":  mustParseStored("ScEcsFullAccess", "system", fullAccess),
 		"ScReadOnlyAccess": mustParseStored("ScReadOnlyAccess", "system", readOnly),
 	}
 	ramRoles[accountID] = map[string]ramRole{
-		"Admin":     {ID: nextRoleID(), AccountID: accountID, Name: "Admin", Description: "全部权限", Policies: []string{"ScEcsFullAccess"}, Status: 1, CreatedAt: now},
-		"Operator":  {ID: nextRoleID(), AccountID: accountID, Name: "Operator", Description: "运维操作", Policies: []string{"ScEcsFullAccess"}, Status: 1, CreatedAt: now},
-		"ReadOnly":  {ID: nextRoleID(), AccountID: accountID, Name: "ReadOnly", Description: "只读", Policies: []string{"ScReadOnlyAccess"}, Status: 1, CreatedAt: now},
+		"Admin":    {ID: nextRoleID(), AccountID: accountID, Name: "Admin", Description: "全部权限", Policies: []string{"ScEcsFullAccess"}, Status: 1, CreatedAt: now},
+		"Operator": {ID: nextRoleID(), AccountID: accountID, Name: "Operator", Description: "运维操作", Policies: []string{"ScEcsFullAccess"}, Status: 1, CreatedAt: now},
+		"ReadOnly": {ID: nextRoleID(), AccountID: accountID, Name: "ReadOnly", Description: "只读", Policies: []string{"ScReadOnlyAccess"}, Status: 1, CreatedAt: now},
 	}
 }
 
@@ -256,11 +305,12 @@ func sha256Hex(s string) string {
 
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// issueAccessToken signs a minimal HS256 JWT carrying sub/name/exp.
+// issueAccessToken signs a minimal HS256 JWT carrying sub/name/exp plus the
+// account's TokenVersion ("tv") so credential changes invalidate old tokens.
 func issueAccessToken(a account, now time.Time) string {
 	header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := fmt.Sprintf(`{"sub":"%d","name":"%s","real_name":"%s","iat":%d,"exp":%d}`,
-		a.AccountID, a.AccountName, a.RealName, now.Unix(), now.Add(accessTTL).Unix())
+	payload := fmt.Sprintf(`{"sub":"%d","name":"%s","real_name":"%s","tv":%d,"iat":%d,"exp":%d}`,
+		a.AccountID, a.AccountName, a.RealName, a.TokenVersion, now.Unix(), now.Add(accessTTL).Unix())
 	payloadB64 := b64url([]byte(payload))
 	signingInput := header + "." + payloadB64
 	mac := hmac.New(sha256.New, []byte(hmacSecret))
@@ -268,36 +318,38 @@ func issueAccessToken(a account, now time.Time) string {
 	return signingInput + "." + b64url(mac.Sum(nil))
 }
 
-// verifyAccessToken returns the account ID embedded in a valid JWT, or an error.
-func verifyAccessToken(token string, now time.Time) (int64, error) {
+// verifyAccessToken returns the account ID and token version embedded in a
+// valid JWT, or an error.
+func verifyAccessToken(token string, now time.Time) (int64, int, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return 0, errors.New("Auth.MalformedToken")
+		return 0, 0, errors.New("Auth.MalformedToken")
 	}
 	mac := hmac.New(sha256.New, []byte(hmacSecret))
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	if !hmac.Equal([]byte(parts[2]), []byte(b64url(mac.Sum(nil)))) {
-		return 0, errors.New("Auth.InvalidSignature")
+		return 0, 0, errors.New("Auth.InvalidSignature")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return 0, errors.New("Auth.MalformedToken")
+		return 0, 0, errors.New("Auth.MalformedToken")
 	}
 	var p struct {
 		Sub string `json:"sub"`
+		Tv  int    `json:"tv"`
 		Exp int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return 0, errors.New("Auth.MalformedToken")
+		return 0, 0, errors.New("Auth.MalformedToken")
 	}
 	if now.Unix() >= p.Exp {
-		return 0, errors.New("Auth.TokenExpired")
+		return 0, 0, errors.New("Auth.TokenExpired")
 	}
 	id, err := strconv.ParseInt(p.Sub, 10, 64)
 	if err != nil {
-		return 0, errors.New("Auth.MalformedToken")
+		return 0, 0, errors.New("Auth.MalformedToken")
 	}
-	return id, nil
+	return id, p.Tv, nil
 }
 
 // --- HTTP ---
@@ -323,13 +375,31 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(envelope{RequestId: reqID, Code: code, Message: msg})
 }
 
+// decodeJSON caps the request body at maxBodyBytes and decodes it into v.
+// On failure it responds with a stable error (no err.Error() detail leaks to
+// the client — the detail goes to the log) and returns false.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		slog.Info("request body decode failed", "path", r.URL.Path, "err", err)
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "Common.RequestTooLarge", "request body too large")
+			return false
+		}
+		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+		return false
+	}
+	return true
+}
+
 // setRefreshCookie writes the HttpOnly refresh_token cookie. In production the
 // Domain is .starcloud.cn (root, shared across console/billing/ticket); in dev
 // the browser scopes it to localhost.
 func setRefreshCookie(w http.ResponseWriter, token string, exp time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "sc_refresh", Value: token, Expires: exp, HttpOnly: true,
-		Secure: false, SameSite: http.SameSiteLaxMode, Path: "/api/auth",
+		Secure: cookieSecure, SameSite: http.SameSiteLaxMode, Path: "/api/auth",
 	})
 }
 
@@ -344,15 +414,21 @@ type loginRequest struct {
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	mu.RLock()
 	a, ok := accounts[req.Email]
 	mu.RUnlock()
-	// Constant-time-ish: always hash and compare even on miss.
-	if !ok || !verifyPassword(a.PasswordHash, req.Password) || a.Status != 1 {
+	// Constant-time-ish: always perform one hash comparison even when the
+	// account does not exist, so response timing does not reveal whether an
+	// email is registered.
+	if !ok {
+		_ = verifyPassword(dummyPasswordHash, req.Password)
+		writeErr(w, 401, "Auth.InvalidCredentials", "邮箱或密码错误")
+		return
+	}
+	if !verifyPassword(a.PasswordHash, req.Password) || a.Status != 1 {
 		writeErr(w, 401, "Auth.InvalidCredentials", "邮箱或密码错误")
 		return
 	}
@@ -395,7 +471,7 @@ func requireAuth(r *http.Request) (account, error) {
 	if !strings.HasPrefix(auth, "Bearer ") {
 		return account{}, errors.New("Auth.NoToken")
 	}
-	id, err := verifyAccessToken(strings.TrimPrefix(auth, "Bearer "), time.Now())
+	id, tv, err := verifyAccessToken(strings.TrimPrefix(auth, "Bearer "), time.Now())
 	if err != nil {
 		return account{}, err
 	}
@@ -404,6 +480,11 @@ func requireAuth(r *http.Request) (account, error) {
 	mu.RUnlock()
 	if a.AccountID == 0 {
 		return account{}, errors.New("Auth.AccountNotFound")
+	}
+	// Token issued before a credential change (password change bumps
+	// TokenVersion) is no longer accepted.
+	if tv != a.TokenVersion {
+		return account{}, errors.New("Auth.TokenRevoked")
 	}
 	return a, nil
 }
@@ -420,14 +501,13 @@ func maskIDCard(id string) string {
 // handleRegister creates a new account with a real salted password hash.
 // A duplicate email returns 409. The new account starts unverified (实名=0).
 type registerRequest struct {
-	Email     string `json:"email"`
-	Password  string `json:"password"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Email == "" || len(req.Password) < 8 {
@@ -445,7 +525,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	a := account{
 		AccountID: id, AccountName: req.Email, RealName: req.Email,
 		PasswordHash: salt + "$" + sha256Hex(salt+req.Password),
-		Status: 1, RealNameStatus: 0, CreatedAt: time.Now(),
+		Status:       1, RealNameStatus: 0, CreatedAt: time.Now(),
 	}
 	accounts[req.Email] = a
 	byID[id] = a
@@ -472,12 +552,12 @@ func handleRealnameStatus(w http.ResponseWriter, r *http.Request) {
 // hits a third-party ID-verification service; phase-1 does format validation +
 // stores the verified status. Individual: 姓名+身份证号; Enterprise: 企业名+信用代码.
 type realnameRequest struct {
-	Type            string `json:"type"` // "individual" | "enterprise"
-	Name            string `json:"name"`
-	IDCardNo        string `json:"idCardNo"`        // individual
-	EnterpriseName  string `json:"enterpriseName"`  // enterprise
-	CreditCode      string `json:"creditCode"`      // enterprise
-	LegalPerson     string `json:"legalPerson"`     // enterprise
+	Type           string `json:"type"` // "individual" | "enterprise"
+	Name           string `json:"name"`
+	IDCardNo       string `json:"idCardNo"`       // individual
+	EnterpriseName string `json:"enterpriseName"` // enterprise
+	CreditCode     string `json:"creditCode"`     // enterprise
+	LegalPerson    string `json:"legalPerson"`    // enterprise
 }
 
 func handleRealnameVerify(w http.ResponseWriter, r *http.Request) {
@@ -487,40 +567,53 @@ func handleRealnameVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req realnameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
-	status := 0
+	// Validate before taking the lock (no shared state involved).
 	switch req.Type {
 	case "individual":
 		if req.Name == "" || len(req.IDCardNo) < 15 {
 			writeErr(w, 400, "Common.InvalidParameter", "请填写真实姓名与身份证号")
 			return
 		}
-		status = 1
-		a.RealName = req.Name
-		a.IDCardNo = req.IDCardNo
 	case "enterprise":
 		if req.EnterpriseName == "" || len(req.CreditCode) < 15 {
 			writeErr(w, 400, "Common.InvalidParameter", "请填写企业名称与统一社会信用代码")
 			return
 		}
-		status = 2
-		a.EnterpriseName = req.EnterpriseName
-		a.IDCardNo = req.CreditCode
 	default:
 		writeErr(w, 400, "Common.InvalidParameter", "实名类型无效")
 		return
 	}
-	a.RealNameType = req.Type
-	a.RealNameStatus = status
+	// Read-modify-write of the account happens entirely inside one critical
+	// section so a concurrent update (e.g. password change) is not lost.
 	mu.Lock()
-	accounts[a.AccountName] = a
-	byID[a.AccountID] = a
+	cur, ok := byID[a.AccountID]
+	if !ok {
+		mu.Unlock()
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	}
+	status := 0
+	switch req.Type {
+	case "individual":
+		status = 1
+		cur.RealName = req.Name
+		cur.IDCardNo = req.IDCardNo
+	case "enterprise":
+		status = 2
+		cur.EnterpriseName = req.EnterpriseName
+		cur.IDCardNo = req.CreditCode
+	}
+	cur.RealNameType = req.Type
+	cur.RealNameStatus = status
+	accounts[cur.AccountName] = cur
+	byID[cur.AccountID] = cur
+	masked := maskIDCard(cur.IDCardNo)
 	mu.Unlock()
 	writeJSON(w, 200, "OK", map[string]any{
-		"status": status, "type": req.Type, "idCard": maskIDCard(a.IDCardNo),
+		"status": status, "type": req.Type, "idCard": masked,
 	})
 }
 
@@ -544,12 +637,16 @@ func handleAccountProfile(w http.ResponseWriter, r *http.Request) {
 		"email":          a.AccountName,
 		"phoneBound":     false, // phase-1: no phone-binding flow yet (07§2.5)
 		"mfaEnabled":     false, // phase-1: MFA not yet enforced (07§2.4)
+		// Password status for the security settings card: the account always
+		// authenticates by password in phase-1, so the hash presence IS the truth.
+		"passwordSet": a.PasswordHash != "",
 	})
 }
 
 // handleChangePassword verifies the old password and installs a fresh salted
-// hash for the new one. The JWT/access_token is unaffected — prod issues a
-// notice + optional re-login; phase-1 just swaps the hash in place.
+// hash for the new one, atomically. It bumps the account TokenVersion and
+// revokes the account's refresh sessions, so all previously issued tokens and
+// sessions stop working (the client must log in again).
 type changePasswordRequest struct {
 	OldPassword string `json:"oldPassword"`
 	NewPassword string `json:"newPassword"`
@@ -562,23 +659,40 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req changePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
-		return
-	}
-	if !verifyPassword(a.PasswordHash, req.OldPassword) {
-		writeErr(w, 400, "Auth.OldPasswordMismatch", "原密码不正确")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if len(req.NewPassword) < 8 {
 		writeErr(w, 400, "Common.InvalidParameter", "新密码至少 8 位")
 		return
 	}
-	salt := randHex(16)
-	a.PasswordHash = salt + "$" + sha256Hex(salt+req.NewPassword)
+	// Verify-old + install-new is one critical section: the old-password check
+	// runs against the freshest state and a concurrent update is not lost.
 	mu.Lock()
-	accounts[a.AccountName] = a
-	byID[a.AccountID] = a
+	cur, ok := byID[a.AccountID]
+	if !ok {
+		mu.Unlock()
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	}
+	if !verifyPassword(cur.PasswordHash, req.OldPassword) {
+		mu.Unlock()
+		writeErr(w, 400, "Auth.OldPasswordMismatch", "原密码不正确")
+		return
+	}
+	salt := randHex(16)
+	cur.PasswordHash = salt + "$" + sha256Hex(salt+req.NewPassword)
+	// Invalidate everything issued before the change: bump TokenVersion so
+	// outstanding access tokens fail verification, and revoke the account's
+	// refresh sessions so they cannot mint new tokens.
+	cur.TokenVersion++
+	accounts[cur.AccountName] = cur
+	byID[cur.AccountID] = cur
+	for tok, s := range sessions {
+		if s.account.AccountID == cur.AccountID {
+			delete(sessions, tok)
+		}
+	}
 	mu.Unlock()
 	writeJSON(w, 200, "OK", map[string]any{})
 }
@@ -627,8 +741,7 @@ func handleCreateRAMUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createRAMUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Username == "" {
@@ -702,6 +815,50 @@ func handleDeleteRAMUser(w http.ResponseWriter, r *http.Request) {
 // --- AccessKeys (07§2.7) ---
 
 // handleListAccessKeys returns the account's AKs. The secret is never returned.
+// stsIssuer mints temporary credentials (STS, phase-3 D-3; 03§9.2
+// x-cps-security-token). Initialized in main with the default TTL.
+var stsIssuer *sts.Issuer
+
+// handleAssumeRole implements POST /api/sts/assume-role — the phase-3 STS
+// productization (07§10 M1 角色/STS; deferred from phase 2). It issues a
+// temporary AK/SK/SecurityToken triple for the authenticated account; the
+// token rides x-cps-security-token so the gateway verifier can validate it on
+// top of the CPS1 signature (03§9.2). The plaintext secret is returned once.
+func handleAssumeRole(w http.ResponseWriter, r *http.Request) {
+	a, err := requireAuth(r)
+	if err != nil {
+		writeErr(w, 401, err.Error(), "未认证")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "Auth.InvalidParameter", "malformed body")
+		return
+	}
+	if strings.TrimSpace(req.Role) == "" {
+		writeErr(w, 400, "Auth.InvalidParameter", "role is required")
+		return
+	}
+	if stsIssuer == nil {
+		writeErr(w, 503, "Common.InternalError", "STS not initialised")
+		return
+	}
+	cred, err := stsIssuer.AssumeRole(req.Role, strconv.FormatInt(a.AccountID, 10))
+	if err != nil {
+		writeErr(w, 500, "Common.InternalError", err.Error())
+		return
+	}
+	writeJSON(w, 200, "OK", map[string]any{
+		"accessKey":     cred.AccessKey,
+		"secretKey":     cred.SecretKey, // shown once
+		"securityToken": cred.SecurityToken,
+		"expiresAt":     cred.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
 func handleListAccessKeys(w http.ResponseWriter, r *http.Request) {
 	a, err := requireAuth(r)
 	if err != nil {
@@ -746,10 +903,10 @@ func handleCreateAccessKey(w http.ResponseWriter, r *http.Request) {
 	// WARNING: secretKey is shown exactly once — prod stores only the hash and
 	// never re-displays the plaintext. The client must persist it now.
 	writeJSON(w, 201, "OK", map[string]any{
-		"akId":       akID,
-		"secretKey":  secretPlain,
-		"createdAt":  k.CreatedAt.UTC().Format(time.RFC3339),
-		"status":     k.Status,
+		"akId":      akID,
+		"secretKey": secretPlain,
+		"createdAt": k.CreatedAt.UTC().Format(time.RFC3339),
+		"status":    k.Status,
 	})
 }
 
@@ -882,9 +1039,9 @@ func handleRotateAccessKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
 		return
 	}
-	if len(aks) >= 2 {
+	if countEnabled(aks) >= 2 {
 		mu.Unlock()
-		writeErr(w, 409, "Auth.AKLimitExceeded", "已达 2 个 AK 上限,请先删除一个再轮换")
+		writeErr(w, 409, "Auth.AKLimitExceeded", "已达 2 个启用 AK 上限,请先禁用或删除一个再轮换")
 		return
 	}
 	// Mint the replacement and mark the outgoing AK for the grace window.
@@ -893,11 +1050,11 @@ func handleRotateAccessKey(w http.ResponseWriter, r *http.Request) {
 	accessKeys[a.AccountID] = append(aks, k)
 	mu.Unlock()
 	writeJSON(w, 201, "OK", map[string]any{
-		"akId":        newID,
-		"secretKey":   secretPlain,
-		"createdAt":   k.CreatedAt.UTC().Format(time.RFC3339),
-		"status":      k.Status,
-		"oldAkId":     akID,
+		"akId":      newID,
+		"secretKey": secretPlain,
+		"createdAt": k.CreatedAt.UTC().Format(time.RFC3339),
+		"status":    k.Status,
+		"oldAkId":   akID,
 	})
 }
 
@@ -968,8 +1125,7 @@ func handleCreateRAMRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" {
@@ -1038,8 +1194,7 @@ func handleCreateRAMPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createPolicyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" || req.Document == "" {
@@ -1095,8 +1250,7 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req simulateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Action == "" || req.Resource == "" {
@@ -1144,17 +1298,28 @@ func handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "Auth.SessionExpired", "会话已过期,请重新登录")
 		return
 	}
-	// Rotate: revoke the old refresh, issue a new one (02§5.1).
+	// Re-check the live account: a disabled/closed (or deleted) account must
+	// not be able to refresh into a fresh access token.
+	cur, exists := byID[s.account.AccountID]
+	if !exists || cur.Status != 1 {
+		delete(sessions, c.Value)
+		mu.Unlock()
+		writeErr(w, 401, "Auth.AccountUnusable", "账号不可用,请联系管理员")
+		return
+	}
+	// Rotate: revoke the old refresh, issue a new one (02§5.1). The session
+	// carries the fresh account snapshot so the new token reflects current state.
 	delete(sessions, c.Value)
 	newRefresh := randHex(32)
 	now := time.Now()
+	s.account = cur
 	s.refreshToken = newRefresh
 	s.refreshExp = now.Add(refreshTTL)
 	s.accessExp = now.Add(accessTTL)
 	sessions[newRefresh] = s
 	mu.Unlock()
 	setRefreshCookie(w, newRefresh, s.refreshExp)
-	writeJSON(w, 200, "OK", map[string]any{"accessToken": issueAccessToken(s.account, now)})
+	writeJSON(w, 200, "OK", map[string]any{"accessToken": issueAccessToken(cur, now)})
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -1174,7 +1339,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "Auth.NoToken", "缺少 access_token")
 		return
 	}
-	id, err := verifyAccessToken(strings.TrimPrefix(auth, "Bearer "), time.Now())
+	id, tv, err := verifyAccessToken(strings.TrimPrefix(auth, "Bearer "), time.Now())
 	if err != nil {
 		writeErr(w, 401, err.Error(), "token 无效")
 		return
@@ -1186,10 +1351,14 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
 		return
 	}
+	if tv != a.TokenVersion {
+		writeErr(w, 401, "Auth.TokenRevoked", "token 已失效,请重新登录")
+		return
+	}
 	writeJSON(w, 200, "OK", map[string]any{
-		"user": map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
+		"user":           map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
 		"realNameStatus": a.RealNameStatus,
-		"permissions": map[string]any{"actions": []string{"scecs:Read", "scecs:Start", "scoss:Read", "scrds:Read", "scvpc:Read", "scmon:Read"}},
+		"permissions":    map[string]any{"actions": []string{"scecs:Read", "scecs:Start", "scoss:Read", "scrds:Read", "scvpc:Read", "scmon:Read"}},
 	})
 }
 
@@ -1228,6 +1397,10 @@ func main() {
 	// Real seeded account with a real salted password hash (not a mock that
 	// always returns success). Credentials are logged once for dev convenience.
 	seedAccount(100123, "admin@starcloud.cn", "种子管理员", "starcloud123")
+	// STS temporary-credential issuer (phase-3 D-3). Default TTL; a nil issuer
+	// here would leave the endpoint 503ing, which is better than issuing
+	// permanent credentials by accident.
+	stsIssuer, _ = sts.NewIssuer(sts.DefaultTTL, nil)
 	slog.Warn("DEV SEED account provisioned", "email", "admin@starcloud.cn",
 		"account_id", 100123, "note", "salted SHA-256; prod uses argon2id")
 	// Seed demo RAM sub-users + one AccessKey + RAM roles/policies so the
@@ -1252,6 +1425,7 @@ func main() {
 	mux.HandleFunc("GET /api/ram/users", handleListRAMUsers)
 	mux.HandleFunc("POST /api/ram/users", handleCreateRAMUser)
 	mux.HandleFunc("DELETE /api/ram/users/{id}", handleDeleteRAMUser)
+	mux.HandleFunc("POST /api/sts/assume-role", handleAssumeRole)
 	mux.HandleFunc("GET /api/ak", handleListAccessKeys)
 	mux.HandleFunc("POST /api/ak", handleCreateAccessKey)
 	mux.HandleFunc("POST /api/ak/{akId}/disable", handleDisableAccessKey)

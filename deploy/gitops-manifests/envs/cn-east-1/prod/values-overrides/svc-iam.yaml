@@ -1,0 +1,11 @@
+# cn-east-1 prod overrides for svc-iam — remote standby region (00§4.5).
+#
+# svc-iam is a GLOBAL singleton (pkg-go/multiregion.Classify: 00§4.1 账号为全局
+# 域; 09§5.2 M-8 "IAM/计费全局单例"). It runs primary in cn-north-1 and cold
+# primary-standby here: scaled to zero until disaster declaration, then brought
+# hot (管控面冷转热) before the DNS cutover (00§4.5; 09§5.3 C1 全局服务主备自动切换).
+image:
+  tag: v0.1.0
+replicas: 0   # cold standby — the standby takes no writes, control plane is cold
+topology:
+  zoneSpread: false   # the remote site is single-AZ (AZ C 只读/灾备), not dual-AZ

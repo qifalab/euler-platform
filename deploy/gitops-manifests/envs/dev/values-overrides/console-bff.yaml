@@ -1,4 +1,0 @@
-# dev overrides for console-bff (values merge on top of the chart defaults).
-image:
-  tag: latest
-replicas: 1

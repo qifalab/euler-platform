@@ -1,0 +1,11 @@
+# cn-east-1 prod overrides for svc-billing — remote standby region (00§4.5).
+#
+# svc-billing is a GLOBAL singleton (pkg-go/multiregion.Classify: 09§5.2 M-8
+# "计费全局单例"). Primary in cn-north-1, cold primary-standby here; its ledger
+# data arrives via the near-realtime binlog channel (RPO≈0), so the cold
+# control plane can resume billing on failover without losing committed writes.
+image:
+  tag: v0.1.0
+replicas: 0   # cold standby
+topology:
+  zoneSpread: false   # single-AZ remote site

@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package starcloud.marketplace.v1;
+
+option go_package = "github.com/starcloud/sc-platform/proto/starcloud/marketplace/v1;marketplacev1";
+
+// MarketplaceService is svc-marketplace (云市场, 09§5.1 goal 3 / 09§5.2 M-10).
+// Owns the marketplace closed loop: 商品上架审核 (listing review), 交易
+// (purchase of third-party 镜像/SaaS/服务), and 分账/结算 (revenue split with
+// the partner — see pkg-go/settlement). The partner-fulfilled product callback
+// is the partner's own OpenAPI, not an rc-* controller (06 章 口径说明: 三方
+// 产品按回调其 OpenAPI 方式履约).
+service MarketplaceService {
+  // PublishProduct submits a listing for review (上架审核的入口).
+  rpc PublishProduct(PublishProductRequest) returns (Listing);
+  // ApproveProduct is the platform review verdict (审核通过/驳回).
+  rpc ApproveProduct(ApproveProductRequest) returns (Listing);
+  // ListProducts lists approved listings (对客目录).
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
+  // SettleOrder records the revenue split for a marketplace order (分账/结算).
+  rpc SettleOrder(SettleOrderRequest) returns (SettlementRecord);
+}
+
+// Listing is a marketplace product listing (镜像/SaaS/服务).
+message Listing {
+  int64 listing_id = 1;
+  int64 partner_id = 2;          // 第三方 ISV 的账号 (分账对象)
+  string name = 3;
+  ListingCategory category = 4;  // IMAGE / SAAS / SERVICE
+  string openapi_url = 5;        // 履约回调: 合作伙伴自身的 OpenAPI 入口
+  ListingStatus status = 6;      // review lifecycle
+  int64 partner_rate_bps = 7;    // 分账比例 (basis points, 0..10000; 见 pkg-go/settlement)
+  int64 created_at = 8;
+  int64 updated_at = 9;
+}
+
+enum ListingCategory {
+  LISTING_CATEGORY_UNSPECIFIED = 0;
+  LISTING_CATEGORY_IMAGE = 1;    // 镜像
+  LISTING_CATEGORY_SAAS = 2;     // SaaS
+  LISTING_CATEGORY_SERVICE = 3;  // 服务
+}
+
+enum ListingStatus {
+  LISTING_STATUS_UNSPECIFIED = 0;
+  LISTING_STATUS_DRAFT = 1;
+  LISTING_STATUS_PENDING_APPROVAL = 2;  // 待审核
+  LISTING_STATUS_APPROVED = 3;          // 已上架可售
+  LISTING_STATUS_REJECTED = 4;          // 已驳回
+  LISTING_STATUS_OFF_SHELF = 5;         // 已下架
+}
+
+// SettlementRecord is one settled marketplace order split (对账不可变).
+message SettlementRecord {
+  int64 settlement_id = 1;
+  int64 order_id = 2;
+  int64 listing_id = 3;
+  int64 partner_id = 4;
+  int64 gross_micro = 5;         // gross order amount, micro-units (pricing.Amount)
+  int64 partner_rate_bps = 6;
+  int64 partner_micro = 7;       // partner share
+  int64 platform_micro = 8;      // platform share (gross - partner, exactly)
+  int64 settled_at = 9;
+}
+
+// --- Request / response messages ---
+
+message PublishProductRequest {
+  int64 partner_id = 1;
+  string name = 2;
+  ListingCategory category = 3;
+  string openapi_url = 4;
+  int64 partner_rate_bps = 5;    // the partner's proposed split (reviewable)
+}
+
+message ApproveProductRequest {
+  int64 listing_id = 1;
+  bool approved = 2;             // true=上架, false=驳回
+  string review_note = 3;
+}
+
+message ListProductsRequest {
+  int32 page_number = 1;
+  int32 page_size = 2;
+  ListingCategory category = 3;  // optional filter
+}
+
+message ListProductsResponse {
+  repeated Listing listings = 1;
+  int32 total_count = 2;
+}
+
+message SettleOrderRequest {
+  int64 order_id = 1;
+  int64 listing_id = 2;
+  int64 gross_micro = 3;
+}

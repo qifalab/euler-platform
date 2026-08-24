@@ -3,7 +3,7 @@
 # The root Application points at this directory; ArgoCD syncs every child
 # Application below it (dir-as-env, single trunk). Each child points at a
 # per-service Helm chart under apps/<svc>/ with env-specific values from
-# envs/<env>/values-overrides/. This is the single GitOps entry point.
+# envs/<region>/<env>/values-overrides/. This is the single GitOps entry point.
 #
 # Apply once per cluster:
 #   kubectl apply -f deploy/gitops-manifests/app-of-apps.yaml -n argocd
@@ -19,7 +19,15 @@ spec:
   source:
     repoURL: https://gitlab.internal/starcloud/platform-manifests.git
     targetRevision: main
-    path: deploy/gitops-manifests/apps
+    # Points at the directory that holds applicationset.yaml. The include
+    # filter restricts the sync to Argo CD ApplicationSet resources only —
+    # the sibling Helm chart dirs (apps/), env overrides (envs/) and raw
+    # platform manifests (platform/) are NOT synced as plain manifests here;
+    # they are consumed by the ApplicationSet-generated Applications.
+    path: deploy/gitops-manifests
+    directory:
+      recurse: false
+      include: 'applicationset.yaml'
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

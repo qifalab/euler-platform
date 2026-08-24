@@ -116,8 +116,13 @@ type Spec struct {
 	ResourceType string
 	Region       string
 	Zone         string
-	Edition      string // registered enum value only
-	Params       map[string]string
+	// RegionScope is the catalogue's placement scope for the product:
+	// "REGIONAL" (spread across AZs) or "ZONAL" (pinned to one AZ). A ZONAL
+	// spec MUST carry a Zone — a VM with no AZ of residence cannot be placed.
+	// Empty is tolerated for legacy callers and skips the check.
+	RegionScope string
+	Edition     string // registered enum value only
+	Params      map[string]string
 	// Suspend freezes service while retaining data. This is the arrears lock
 	// (01§5.4 D8): a suspended resource must come back intact when the
 	// customer pays.
@@ -153,6 +158,12 @@ func (s Spec) Validate() error {
 	if s.Region == "" {
 		return errors.New("provision: Region required")
 	}
+	if s.RegionScope == "ZONAL" && s.Zone == "" {
+		// A ZONAL resource is pinned to one AZ at create time; dispatching it
+		// without a zone defers the placement decision to the backend, which
+		// has no business making it.
+		return errors.New("provision: Zone required for ZONAL products")
+	}
 	if s.IdempotencyKey == "" {
 		return errors.New("provision: IdempotencyKey required")
 	}
@@ -173,9 +184,9 @@ type Condition struct {
 // first-class status field, not a side channel — 06§4.1 rule 4: 不可计量的产品
 // 不允许上架.
 type UsagePoint struct {
-	MeteringItem string
-	Quantity     string // decimal string; never float
-	WindowStart  time.Time
+	MeteringItem  string
+	Quantity      string // decimal string; never float
+	WindowStart   time.Time
 	WindowSeconds int
 }
 
@@ -209,11 +220,11 @@ func (s Status) ConditionByType(t string) (Condition, bool) {
 
 // Errors.
 var (
-	ErrNotFound        = errors.New("provision: resource not found")
-	ErrDriverNotReady  = errors.New("provision: driver not implemented")
-	ErrInvalidSpec     = errors.New("provision: invalid spec")
-	ErrUnknownDriver   = errors.New("provision: unknown driver type")
-	ErrNotPreemptible  = errors.New("provision: resource is not preemptible")
+	ErrNotFound           = errors.New("provision: resource not found")
+	ErrDriverNotReady     = errors.New("provision: driver not implemented")
+	ErrInvalidSpec        = errors.New("provision: invalid spec")
+	ErrUnknownDriver      = errors.New("provision: unknown driver type")
+	ErrNotPreemptible     = errors.New("provision: resource is not preemptible")
 	ErrNoticeNotDelivered = errors.New("provision: reclaim notice not yet delivered")
 )
 
@@ -354,6 +365,8 @@ func (d *MockDriver) Apply(spec Spec) (Status, error) {
 		}
 	}
 
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	existing, ok := d.resources[spec.ResourceID]
 	if ok && !existing.deleted {
 		// Idempotent: re-applying the same spec is a no-op that returns
@@ -401,6 +414,8 @@ func (d *MockDriver) Delete(resourceID string) error {
 			return err
 		}
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	res, ok := d.resources[resourceID]
 	if !ok {
 		return nil // already gone
@@ -413,6 +428,8 @@ func (d *MockDriver) Delete(resourceID string) error {
 
 // Query returns observed status.
 func (d *MockDriver) Query(resourceID string) (Status, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	res, ok := d.resources[resourceID]
 	if !ok {
 		return Status{}, ErrNotFound
@@ -434,6 +451,8 @@ func (d *MockDriver) Query(resourceID string) (Status, error) {
 // CollectUsage returns metering readings. A suspended or deleted resource
 // reports nothing: billing must stop the moment service stops.
 func (d *MockDriver) CollectUsage(resourceID string) ([]UsagePoint, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	res, ok := d.resources[resourceID]
 	if !ok {
 		return nil, ErrNotFound
@@ -451,6 +470,8 @@ func (d *MockDriver) CollectUsage(resourceID string) ([]UsagePoint, error) {
 
 // Exists reports whether the driver still holds a live resource, for tests.
 func (d *MockDriver) Exists(resourceID string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	res, ok := d.resources[resourceID]
 	return ok && !res.deleted
 }
@@ -531,8 +552,11 @@ func (VMDriver) Query(string) (Status, error) { return Status{}, ErrDriverNotRea
 func (VMDriver) CollectUsage(string) ([]UsagePoint, error) { return nil, ErrDriverNotReady }
 
 // Registry resolves a product to its driver, so the control plane dispatches
-// without knowing which backend a product uses.
+// without knowing which backend a product uses. Safe for concurrent use:
+// registration typically happens at startup, but a hot catalogue rebind may
+// race dispatches, so both maps are guarded.
 type Registry struct {
+	mu      sync.RWMutex
 	drivers map[DriverType]Driver
 	// byProduct maps productCode → driver type, from the catalogue.
 	byProduct map[string]DriverType
@@ -547,16 +571,24 @@ func NewRegistry() *Registry {
 }
 
 // Register adds a driver implementation.
-func (r *Registry) Register(d Driver) { r.drivers[d.Type()] = d }
+func (r *Registry) Register(d Driver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.drivers[d.Type()] = d
+}
 
 // BindProduct declares which driver fulfils a product. Switching a product to a
 // different backend is this one line of catalogue configuration (06§6.2).
 func (r *Registry) BindProduct(productCode string, t DriverType) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.byProduct[productCode] = t
 }
 
 // DriverFor resolves the driver for a product.
 func (r *Registry) DriverFor(productCode string) (Driver, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	t, ok := r.byProduct[productCode]
 	if !ok {
 		return nil, fmt.Errorf("%w: product %q has no driver binding", ErrUnknownDriver, productCode)
@@ -570,6 +602,8 @@ func (r *Registry) DriverFor(productCode string) (Driver, error) {
 
 // BoundProducts lists registered products, sorted, for diagnostics.
 func (r *Registry) BoundProducts() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.byProduct))
 	for p := range r.byProduct {
 		out = append(out, p)

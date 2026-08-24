@@ -15,6 +15,7 @@ import "@sc/tokens/style.css";
 import "@sc/ui/style.css";
 import "@sc/console-kit/style.css";
 import App from "./App.vue";
+import { router } from "./router";
 import { inWujieSandbox, readSharedProps } from "@sc/wujie-bridge";
 
 let app: VueApp | null = null;
@@ -30,6 +31,7 @@ export async function mount(el: HTMLElement | string) {
   // the injected globals in the sandbox (handled by the @sc/* shim layer).
   app = createApp(App);
   app.use(ElementPlus);
+  app.use(router);
 
   // Read region/token the base injected (no-op in standalone).
   const props = readSharedProps();

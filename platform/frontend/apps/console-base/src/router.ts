@@ -4,6 +4,7 @@
  * first-level routing, sub-apps own level 2+ via Wujie URL sync.
  */
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
+import { ElMessage } from "element-plus";
 import { useRegistry } from "./registry";
 import { useAuthStore } from "./stores/auth";
 
@@ -22,6 +23,9 @@ export const router = createRouter({
   routes,
 });
 
+// Account center base URL (dev: local web-account; prod: account.starcloud.cn).
+const ACCOUNT_BASE = "http://localhost:5175";
+
 // Three-level guard (02§5.3): whitelist → silent refresh → permission check.
 router.beforeEach(async (to) => {
   document.title = (to.meta.title as string | undefined) ?? "辰云控制台";
@@ -33,9 +37,10 @@ router.beforeEach(async (to) => {
   if (!auth.accessToken) {
     const refreshed = await auth.silentRefresh();
     if (!refreshed) {
-      // In the scaffold we don't bounce to account.starcloud.cn; real deploy
-      // redirects with `?redirect=<target>` (02§5.3).
-      console.warn("[console-base] not authenticated — redirecting to account in real deploy");
+      // Not authenticated — do NOT let the navigation through. Bounce to the
+      // account login with a redirect back to the intended target (02§5.3).
+      window.location.href = `${ACCOUNT_BASE}/login?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
+      return false;
     }
   }
 
@@ -45,7 +50,8 @@ router.beforeEach(async (to) => {
   if (to.path !== "/" && !auth.isRealNameVerified && auth.isAuthenticated) {
     const app = registry.resolve(to.path);
     if (app && app.productCodes.length > 0) {
-      console.warn("[console-base] real-name verification required for", to.path, "— open http://localhost:5175/realname");
+      ElMessage.warning("请先完成实名认证后再访问产品控制台");
+      window.location.href = `${ACCOUNT_BASE}/realname?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
       return false;
     }
   }

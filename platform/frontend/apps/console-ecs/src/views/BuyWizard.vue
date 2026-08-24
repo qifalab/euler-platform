@@ -15,20 +15,23 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { sdk } from "../sdk";
+import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
 const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
-  region: "cn-north-1", zone: "cn-north-1a",
+  region: "", zone: "",
   spec: "", cpu: 0, memory: 0,
   disk: 40, bandwidth: 5,
-  image: "centos-7", password: "", confirm: "",
+  image: "", password: "", confirm: "",
   period: 1, chargeType: "prepaid",
 });
+
+// --- region / zone / image metadata (catalogue-driven, no hardcoded lists) ---
+const { regions, images, placement, load, zonesOf } = useCatalogMeta("scecs", { withImages: true });
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -94,6 +97,27 @@ onMounted(async () => {
   } catch (e) {
     ElMessage.error(`加载规格目录失败:${(e as Error).message}`);
   }
+  // Region / zone / image metadata: align defaults to the catalogue rows
+  // (load() swallows its own errors and just sets `error`; safe to await).
+  await load();
+  if (!regions.value.some((r) => r.regionId === form.value.region)) {
+    form.value.region = regions.value[0]?.regionId ?? "";
+  }
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
+  }
+  if (!images.value.some((im) => im.imageId === form.value.image)) {
+    form.value.image = images.value[0]?.imageId ?? "";
+  }
+});
+
+// Region switch: keep the zone valid for the newly-chosen region.
+watch(() => form.value.region, () => {
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
+  }
 });
 
 watch(() => form.value.spec, (code) => {
@@ -112,10 +136,12 @@ const quoting = ref(false);
 
 const total = computed(() => {
   if (!quote.value) return null;
-  const per = Number(quote.value.payableAmount);
-  if (!Number.isFinite(per)) return null;
-  // Prepaid: catalogue quotes per-month payable × duration. Postpaid: per-hour.
-  return form.value.chargeType === "prepaid" ? per * form.value.period : per;
+  const payable = Number(quote.value.payableAmount);
+  if (!Number.isFinite(payable)) return null;
+  // The quote request already carries `duration`, so payableAmount is the
+  // FULL payable for the chosen term (or per-hour for postpaid) — the client
+  // never multiplies again (server-authoritative pricing, 01§12.3).
+  return payable;
 });
 
 let quoteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -153,6 +179,41 @@ watch(
 function next() { if (active.value < 3) active.value++; }
 function prev() { if (active.value > 0) active.value--; }
 
+// Order paid but fulfill failed — keep the order so the user can retry the
+// saga without paying again (pay succeeded; only provisioning is pending).
+const pendingFulfill = ref<{ orderId: number; orderNo: string; specCode: string } | null>(null);
+
+async function fulfill(order: { orderId: number; orderNo: string; specCode: string }) {
+  // The orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
+  // resource CREATING→RUNNING) and returns the new resource id.
+  const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
+    "/api/v1/orchestrator/fulfill",
+    {
+      orderId: order.orderId, orderNo: order.orderNo,
+      productCode: "scecs", region: form.value.region,
+      specCode: order.specCode, chargeType: form.value.chargeType.toUpperCase(),
+      zone: form.value.zone, image: form.value.image,
+      disk: form.value.disk, bandwidth: form.value.bandwidth,
+      password: form.value.password,
+    },
+  );
+  pendingFulfill.value = null;
+  ElMessage.success(`实例已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
+  router.push("/instances");
+}
+
+async function retryFulfill() {
+  if (!pendingFulfill.value) return;
+  submitting.value = true;
+  try {
+    await fulfill(pendingFulfill.value);
+  } catch (e) {
+    ElMessage.error(`开通重试失败:${(e as Error).message}`);
+  } finally {
+    submitting.value = false;
+  }
+}
+
 async function submit() {
   if (!form.value.password || form.value.password !== form.value.confirm) {
     ElMessage.warning("请输入并确认登录密码"); active.value = 2; return;
@@ -161,7 +222,8 @@ async function submit() {
   if (!specCode) { ElMessage.error("请选择实例规格"); active.value = 0; return; }
   submitting.value = true;
   try {
-    // 1) Quote — the authoritative payable amount comes from the pricing engine.
+    // 1) Quote — the authoritative payable amount comes from the pricing
+    // engine, already covering the full duration; the client never multiplies.
     const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
       productCode: "scecs", specCode,
       chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
@@ -170,7 +232,7 @@ async function submit() {
     });
     // svc-order treats amountMinor as a yuan integer (store.go:104 parses it as
     // a whole-yuan Amount), so round the catalogue's payableAmount to yuan.
-    const amountMinor = Math.round(Number(q.data.payableAmount) * form.value.period);
+    const amountMinor = Math.round(Number(q.data.payableAmount));
 
     // 2) Create the order — svc-order issues the real orderId/orderNo.
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
@@ -186,20 +248,15 @@ async function submit() {
     // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
     await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`);
 
-    // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-    // resource CREATING→RUNNING) and returns the new resource id.
-    const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-      "/api/v1/orchestrator/fulfill",
-      {
-        orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "scecs", region: form.value.region,
-        specCode, chargeType: form.value.chargeType.toUpperCase(),
-        zone: form.value.zone, image: form.value.image,
-        disk: form.value.disk, bandwidth: form.value.bandwidth,
-      },
-    );
-    ElMessage.success(`实例已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-    router.push("/instances");
+    // 4) Fulfill. If this step fails, the order is already PAID — remember it
+    // and surface a retry entry instead of forcing the user to re-order.
+    const order = { orderId: created.data.orderId, orderNo: created.data.orderNo, specCode };
+    try {
+      await fulfill(order);
+    } catch (e) {
+      pendingFulfill.value = order;
+      ElMessage.error(`订单已支付(${order.orderNo}),但开通失败:${(e as Error).message},可点击"重试开通"`);
+    }
   } catch (e) {
     ElMessage.error((e as Error).message || "创建失败");
   } finally {
@@ -218,8 +275,8 @@ async function submit() {
         </ElSteps>
 
         <ElForm v-show="active === 0" label-position="top" class="buy-form">
-          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption value="cn-north-1" label="华北 1(北京)" /></ElSelect></ElFormItem>
-          <ElFormItem label="可用区"><ElSelect v-model="form.zone"><ElOption value="cn-north-1a" label="华北 1 可用区 A" /><ElOption value="cn-north-1b" label="华北 1 可用区 B" /></ElSelect></ElFormItem>
+          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption v-for="r in regions" :key="r.regionId" :value="r.regionId" :label="r.regionName" /></ElSelect></ElFormItem>
+          <ElFormItem v-if="placement === null || placement.zoneRequired" label="可用区"><ElSelect v-model="form.zone"><ElOption v-for="z in zonesOf(form.region)" :key="z.zoneId" :value="z.zoneId" :label="z.zoneName" /></ElSelect></ElFormItem>
           <ElFormItem label="实例规格">
             <ElSelect v-model="form.spec" :loading="skus.length === 0">
               <ElOption v-for="s in specs" :key="s.code" :value="s.code" :label="s.label" />
@@ -233,7 +290,7 @@ async function submit() {
         </ElForm>
 
         <ElForm v-show="active === 2" label-position="top" class="buy-form">
-          <ElFormItem label="镜像"><ElSelect v-model="form.image"><ElOption value="centos-7" label="CentOS 7.9 64位" /><ElOption value="ubuntu-22" label="Ubuntu 22.04 64位" /></ElSelect></ElFormItem>
+          <ElFormItem label="镜像"><ElSelect v-model="form.image"><ElOption v-for="im in images" :key="im.imageId" :value="im.imageId" :label="im.name" /></ElSelect></ElFormItem>
           <ElFormItem label="登录密码"><ElInput v-model="form.password" type="password" show-password /></ElFormItem>
           <ElFormItem label="确认密码"><ElInput v-model="form.confirm" type="password" show-password /></ElFormItem>
         </ElForm>
@@ -257,7 +314,8 @@ async function submit() {
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 3" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 3" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="active === 3 && !pendingFulfill" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pendingFulfill" type="warning" :loading="submitting" @click="retryFulfill">重试开通(订单 {{ pendingFulfill.orderNo }})</ElButton>
         </div>
       </div>
 

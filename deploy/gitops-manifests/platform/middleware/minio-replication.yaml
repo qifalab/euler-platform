@@ -1,0 +1,50 @@
+# Object-storage cross-region replication channel — standby side (00§4.5;
+# 09§5.2 M-8 "地域级数据复制方案上线").
+#
+# P3's second data channel after the ledger binlog: the remote standby city
+# runs a MinIO Replication TARGET. Buckets replicate one-way, async, from the
+# primary region (cn-north-1) to the standby (cn-east-1). This is NOT a
+# cross-region Kafka mirror — Kafka topics are rebuilt per region by the
+# cloud.* conventions, not replicated (00§4.5 "不做跨城镜像"; see
+# pkg-go/multiregion.ClassifyState, which classifies object-storage as
+# REPLICATED and kafka-topic as REBUILT).
+#
+# The ConfigMap is the declarative replication target; the Job bootstraps the
+# per-bucket rule once, so "one-click second region" (M-8) includes the data
+# channel, not just the control plane. The RPO target here (async, hourly) is
+# the same number pkg-go/multiregion.ObjectStorageChannel carries — one
+# definition, mirrored, not re-decided.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-replication-cfg
+  namespace: mw-storage
+  labels:
+    cloud.platform/region: cn-east-1
+data:
+  source-region: cn-north-1
+  target-region: cn-east-1
+  mode: async
+  rpo: 1h
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-replication-bootstrap
+  namespace: mw-storage
+  labels:
+    cloud.platform/region: cn-east-1
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # One-way async bucket replication: primary -> standby (00§4.5).
+              mc alias set src http://minio.cn-north-1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc alias set dst http://minio.cn-east-1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc replicate add src/"$BUCKET" --remote-bucket "$BUCKET" --region cn-east-1

@@ -100,10 +100,13 @@ spec:
               # node.id = ordinal + 1 (KRaft node ids are 1-based). Derive
               # from the hostname suffix so each pod gets a unique id without
               # a sidecar or a per-pod StatefulSet slice.
+              # Copy the shared base config FIRST, then append the per-pod
+              # node.id (append-after-copy; last occurrence wins for Kafka
+              # properties files, so the appended id is authoritative).
+              cp /etc/kafka/server.properties /config/server.properties
               ORDINAL=${HOSTNAME##*-}
               NODE_ID=$((ORDINAL + 1))
               echo "node.id=${NODE_ID}" >> /config/server.properties
-              cp /etc/kafka/server.properties /config/server.properties
           volumeMounts:
             - name: config-template
               mountPath: /etc/kafka

@@ -1,0 +1,16 @@
+# Runtime env for rc-kafka, projected as a ConfigMap and consumed by the
+# Deployment via envFrom (08-devops §4.3). Keys are env-var names so a single
+# ConfigMap is both the operator-visible config surface and the container env.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  SERVICE_NAME: {{ .Chart.Name | quote }}
+  PORT: {{ .Values.service.port | quote }}
+  NACOS_NAMESPACE: {{ .Values.env.NACOS_NAMESPACE | quote }}
+  SERVICE_GROUP: {{ .Values.env.SERVICE_GROUP | quote }}

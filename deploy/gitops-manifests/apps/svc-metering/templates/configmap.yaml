@@ -1,6 +1,6 @@
-# Runtime config for svc-metering, projected as a ConfigMap. Registration params
-# are supplied as env vars by the Deployment; the ConfigMap holds the static
-# service description for operators (08-devops §4.3).
+# Runtime env for svc-metering, projected as a ConfigMap and consumed by the
+# Deployment via envFrom (08-devops §4.3). Keys are env-var names so a single
+# ConfigMap is both the operator-visible config surface and the container env.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,11 +10,7 @@ metadata:
     app.kubernetes.io/name: {{ .Chart.Name }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 data:
-  service.yaml: |
-    service:
-      name: svc-metering
-    nacos:
-      namespace: {{ .Values.env.NACOS_NAMESPACE }}
-      group: {{ .Values.env.SERVICE_GROUP }}
-    server:
-      port: {{ .Values.service.port }}
+  SERVICE_NAME: {{ .Chart.Name | quote }}
+  PORT: {{ .Values.service.port | quote }}
+  NACOS_NAMESPACE: {{ .Values.env.NACOS_NAMESPACE | quote }}
+  SERVICE_GROUP: {{ .Values.env.SERVICE_GROUP | quote }}

@@ -9,6 +9,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"time"
 
@@ -18,6 +19,25 @@ import (
 type ctxKey string
 
 const requestIDKey ctxKey = "request_id"
+
+// internalTokenMiddleware optionally enforces an internal shared secret: when
+// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Sc-Account-Id trust). Unset (dev default) = no check.
+func internalTokenMiddleware(next http.Handler) http.Handler {
+	token := os.Getenv("SC_INTERNAL_TOKEN")
+	if token == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sc-Internal-Token") != token {
+			rid, _ := r.Context().Value(requestIDKey).(string)
+			http.Error(w, `{"RequestId":"`+rid+`","Code":"Common.Forbidden","Message":"invalid internal token"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // requestIDMiddleware generates a request id (≡ trace_id for the platform),
 // injects it into the context and the X-Sc-TraceId response header.
@@ -60,7 +80,8 @@ func recoverMiddleware(next http.Handler) http.Handler {
 					"recover", rec,
 					"stack", string(debug.Stack()),
 				)
-				http.Error(w, `{"RequestId":"`+r.Context().Value(requestIDKey).(string)+`","Code":"Common.InternalError","Message":"internal error"}`, http.StatusInternalServerError)
+				rid, _ := r.Context().Value(requestIDKey).(string)
+				http.Error(w, `{"RequestId":"`+rid+`","Code":"Common.InternalError","Message":"internal error"}`, http.StatusInternalServerError)
 			}
 		}()
 		next.ServeHTTP(w, r)

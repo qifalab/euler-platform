@@ -21,6 +21,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElSwitch, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
 import { createSDK } from "@sc/sdk";
+import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -28,13 +29,20 @@ const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
-  region: "cn-north-1", zone: "cn-north-1-a",
+  region: "", zone: "",
   spec: "",
   brokerCount: 3, partitionCount: 12, retentionHours: 72,
-  vpcId: "scvpc-cn-north-1-01-11223344", subnetId: "subnet-01",
+  vpcId: "", subnetId: "",
   crossAz: true,
   chargeType: "prepaid", period: 1,
 });
+
+// --- region / zone metadata (catalogue-driven, no hardcoded lists) ---
+const { regions, placement, load, zonesOf } = useCatalogMeta("sckafka");
+
+// --- VPC options: the account's real scvpc resources (console-bff) ---
+interface ConsoleResource { ResourceId: string; ProductCode: string; Region: string; State: string }
+const vpcs = ref<ConsoleResource[]>([]);
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -96,6 +104,41 @@ onMounted(async () => {
   } catch (e) {
     ElMessage.error(`加载规格目录失败:${(e as Error).message}`);
   }
+  // Region / zone metadata: align defaults to the catalogue rows (load()
+  // swallows its own errors and just sets `error`; safe to await).
+  await load();
+  if (!regions.value.some((r) => r.regionId === form.value.region)) {
+    form.value.region = regions.value[0]?.regionId ?? "";
+  }
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
+  }
+  // VPC options: live scvpc resources of this account (never a fake id).
+  try {
+    const res = await sdk.get<ConsoleResource[]>("/console/resources");
+    vpcs.value = (res.data ?? []).filter((r) => r.ProductCode === "scvpc" && r.State !== "RELEASED");
+  } catch {
+    vpcs.value = [];
+  }
+  alignVpcToRegion();
+});
+
+function alignVpcToRegion() {
+  const inRegion = vpcs.value.filter((v) => v.Region === form.value.region);
+  const pool = inRegion.length ? inRegion : vpcs.value;
+  if (!pool.some((v) => v.ResourceId === form.value.vpcId)) {
+    form.value.vpcId = pool[0]?.ResourceId ?? "";
+  }
+}
+
+// Region switch: keep the zone and VPC valid for the newly-chosen region.
+watch(() => form.value.region, () => {
+  const zones = zonesOf(form.value.region);
+  if (!zones.some((z) => z.zoneId === form.value.zone)) {
+    form.value.zone = zones[0]?.zoneId ?? "";
+  }
+  alignVpcToRegion();
 });
 
 watch(() => form.value.spec, (code) => {
@@ -221,11 +264,10 @@ async function submit() {
         </ElSteps>
 
         <ElForm v-show="active === 0" label-position="top" class="buy-form">
-          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption value="cn-north-1" label="华北 1(北京)" /></ElSelect></ElFormItem>
-          <ElFormItem label="可用区">
+          <ElFormItem label="地域"><ElSelect v-model="form.region"><ElOption v-for="r in regions" :key="r.regionId" :value="r.regionId" :label="r.regionName" /></ElSelect></ElFormItem>
+          <ElFormItem v-if="placement === null || placement.zoneRequired" label="可用区">
             <ElSelect v-model="form.zone">
-              <ElOption value="cn-north-1-a" label="华北 1 可用区 A" />
-              <ElOption value="cn-north-1-b" label="华北 1 可用区 B" />
+              <ElOption v-for="z in zonesOf(form.region)" :key="z.zoneId" :value="z.zoneId" :label="z.zoneName" />
             </ElSelect>
             <p class="form-hint">托管 Kafka 为 ZONAL 产品:引导 broker 落所选可用区,跨 AZ 副本落对侧可用区。</p>
           </ElFormItem>
@@ -240,8 +282,12 @@ async function submit() {
         </ElForm>
 
         <ElForm v-show="active === 1" label-position="top" class="buy-form">
-          <ElFormItem label="专有网络"><ElInput v-model="form.vpcId" placeholder="scvpc-cn-north-1-01-..." /></ElFormItem>
-          <ElFormItem label="交换机子网"><ElInput v-model="form.subnetId" placeholder="subnet-01" /></ElFormItem>
+          <ElFormItem label="专有网络">
+            <ElSelect v-model="form.vpcId" :loading="vpcs.length === 0" placeholder="该账号暂无 VPC，请先创建">
+              <ElOption v-for="v in vpcs" :key="v.ResourceId" :value="v.ResourceId" :label="v.ResourceId" />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="交换机子网"><ElInput v-model="form.subnetId" placeholder="请输入子网 ID，如 subnet-xxx" /></ElFormItem>
           <ElFormItem label="跨可用区高可用">
             <ElSwitch v-model="form.crossAz" />
             <p class="form-hint">开启后 broker 跨可用区部署,min.insync.replicas=2,单 AZ 故障时写入不中断(M-6.2a 拓扑复用)。</p>

@@ -13,6 +13,7 @@ const sandboxed = inWujieSandbox();
       <template #nav>
         <router-link to="/explorer">在线调试</router-link>
         <router-link to="/actions">API 目录</router-link>
+        <router-link to="/community">开发者社区</router-link>
       </template>
       <template #actions>
         <a class="explorer-console" href="https://console.starcloud.cn">返回控制台</a>

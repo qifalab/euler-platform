@@ -80,6 +80,11 @@ func ParseQuantity(s string) (Quantity, error) {
 		neg, s = true, s[1:]
 	}
 	intPart, fracPart, _ := strings.Cut(s, ".")
+	if intPart == "" && fracPart == "" {
+		// "." or "-" carry no digits at all; parsing them as 0 would silently
+		// turn a malformed reading into a free hour.
+		return 0, fmt.Errorf("metering: malformed quantity %q", s)
+	}
 	if len(fracPart) > 6 {
 		return 0, fmt.Errorf("metering: quantity %q exceeds 6 decimal places", s)
 	}
@@ -89,7 +94,11 @@ func ParseQuantity(s string) (Quantity, error) {
 		if c < '0' || c > '9' {
 			return 0, fmt.Errorf("metering: malformed quantity %q", s)
 		}
-		units = units*10 + int64(c-'0')
+		next := units*10 + int64(c-'0')
+		if next < units {
+			return 0, fmt.Errorf("metering: quantity %q overflows", s)
+		}
+		units = next
 	}
 	frac := int64(0)
 	for i := 0; i < 6; i++ {
@@ -101,6 +110,10 @@ func ParseQuantity(s string) (Quantity, error) {
 			}
 			frac += int64(c - '0')
 		}
+	}
+	const maxInt64 = 1<<63 - 1
+	if units > (maxInt64-frac)/quantityScale {
+		return 0, fmt.Errorf("metering: quantity %q overflows", s)
 	}
 	total := units*quantityScale + frac
 	if neg {
@@ -205,10 +218,11 @@ func (h HourlyUsage) Complete() bool { return h.CoveredRatio >= 100 }
 
 // Errors.
 var (
-	ErrEmptyWindow     = errors.New("metering: no records in window")
-	ErrMixedResource   = errors.New("metering: records span multiple resources or items")
-	ErrWindowMisaligned = errors.New("metering: window start is not minute-aligned")
-	ErrFrozenPeriod    = errors.New("metering: billing period is frozen, backfill rejected")
+	ErrEmptyWindow       = errors.New("metering: no records in window")
+	ErrMixedResource     = errors.New("metering: records span multiple resources or items")
+	ErrWindowMisaligned  = errors.New("metering: window start is not minute-aligned")
+	ErrWindowOutsideHour = errors.New("metering: record window falls outside the aggregation hour")
+	ErrFrozenPeriod      = errors.New("metering: billing period is frozen, backfill rejected")
 )
 
 // HourOf truncates a time to its hour boundary.
@@ -247,6 +261,7 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 	resourceID := records[0].ResourceID
 	item := records[0].MeteringItem
 	seen := make(map[string]UsageRecord, len(records))
+	hour := HourOf(hourStart)
 
 	for _, r := range records {
 		if r.ResourceID != resourceID || r.MeteringItem != item {
@@ -255,6 +270,13 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 		}
 		if r.WindowStart.Second() != 0 || r.WindowStart.Nanosecond() != 0 {
 			return HourlyUsage{}, fmt.Errorf("%w: %v", ErrWindowMisaligned, r.WindowStart)
+		}
+		// A record whose window falls outside [hourStart, hourStart+1h) belongs
+		// to a different aggregate; summing it here would double-charge one hour
+		// and undercount another.
+		ws := r.WindowStart.UTC()
+		if ws.Before(hour) || !ws.Before(hour.Add(time.Hour)) {
+			return HourlyUsage{}, fmt.Errorf("%w: window %v vs hour %v", ErrWindowOutsideHour, r.WindowStart, hour)
 		}
 		id := r.RecordID
 		if id == "" {
@@ -276,7 +298,14 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 		}
 	}
 
-	expected := 3600 / a.ExpectedWindowSeconds
+	// Guard the divisor BEFORE dividing: a zero-value Aggregator (or a
+	// misconfigured negative period) must fall back to the standard 60-second
+	// period rather than panicking with an integer divide by zero.
+	windowSeconds := a.ExpectedWindowSeconds
+	if windowSeconds <= 0 {
+		windowSeconds = 60
+	}
+	expected := 3600 / windowSeconds
 	if expected <= 0 {
 		expected = 60
 	}
@@ -380,12 +409,12 @@ func Frozen(hourStart time.Time, now time.Time) bool {
 // metered — the silent revenue leak that no amount of within-pipeline checking
 // would find, because the pipeline never saw the data at all.
 type ReconcileL2 struct {
-	ResourceID     string
-	ExpectedHours  int
-	ActualHours    int
-	DiffRatio      float64 // |expected-actual| / expected
-	NeedsBackfill  bool    // >0.1%
-	NeedsAlert     bool    // >0.5%
+	ResourceID    string
+	ExpectedHours int
+	ActualHours   int
+	DiffRatio     float64 // |expected-actual| / expected
+	NeedsBackfill bool    // >0.1%
+	NeedsAlert    bool    // >0.5%
 }
 
 // Reconcile compares expected vs actual metered hours.

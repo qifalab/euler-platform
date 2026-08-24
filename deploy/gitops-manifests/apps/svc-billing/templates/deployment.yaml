@@ -20,6 +20,9 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Chart.Name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        # Roll pods when the projected env ConfigMap changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       # Business workloads land on the general services pool (04§2.1); the
@@ -53,14 +56,22 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.args }}
+          # Listen address injected via CLI args — the Go services take the
+          # port from the -http flag, so the chart is the single source of
+          # truth for containerPort / Service port / probe port / listen port.
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.service.port }}
               name: http
-          env:
-            - name: NACOS_NAMESPACE
-              value: {{ .Values.env.NACOS_NAMESPACE | quote }}
-            - name: SERVICE_GROUP
-              value: {{ .Values.env.SERVICE_GROUP | quote }}
+          # All runtime env comes from the <release>-config ConfigMap
+          # (configmap.yaml) so the operator-visible config and the container
+          # env can never drift apart.
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:

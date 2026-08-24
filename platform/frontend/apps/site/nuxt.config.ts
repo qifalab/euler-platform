@@ -22,5 +22,13 @@ export default defineNuxtConfig({
   },
   nitro: {
     compressPublicAssets: true,
+    // Dev-only proxy: the SSR server and the browser fetch site content
+    // (announcements from svc-notify :9211, catalogue from svc-catalog :9207)
+    // through these paths. In production APISIX fronts the site and routes
+    // /api/v1/* to the services on the same origin — no proxy needed there.
+    devProxy: {
+      "/api/v1/announcements": { target: "http://localhost:9211", changeOrigin: true },
+      "/api/v1/catalog": { target: "http://localhost:9207", changeOrigin: true },
+    },
   },
 });

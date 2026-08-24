@@ -59,8 +59,14 @@ def check_route(route, path, problems):
             problems.append("{}: sc-auth signature mode missing region".format(where))
         if not auth.get("service"):
             problems.append("{}: sc-auth signature mode missing service".format(where))
-    if auth.get("mode") == "jwt" and not auth.get("jwt_public_key"):
-        problems.append("{}: sc-auth jwt mode missing jwt_public_key".format(where))
+    # jwt_public_key_file is the K8s form: the sc-auth plugin reads the
+    # mounted sc-jwt-public-key Secret (route files cannot interpolate env).
+    if auth.get("mode") == "jwt" and not (
+        auth.get("jwt_public_key") or auth.get("jwt_public_key_file")
+    ):
+        problems.append(
+            "{}: sc-auth jwt mode missing jwt_public_key/jwt_public_key_file".format(where)
+        )
 
     # 3. action_prefix must match the product this route serves, or a caller
     #    could name an action belonging to a different product.

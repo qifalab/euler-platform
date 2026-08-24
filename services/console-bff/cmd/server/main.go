@@ -70,6 +70,10 @@ func main() {
 	mux.HandleFunc("POST /console/invoices/void", store.handleInvoiceVoid)
 	mux.HandleFunc("GET /console/cost-analysis", store.handleCostAnalysis)
 
+	// Global search for the console ⌘K palette: aggregates live resources
+	// (svc-orchestrator) and product catalogue entries (svc-catalog).
+	mux.HandleFunc("GET /console/search", store.handleSearch)
+
 	srv := &http.Server{
 		Addr:              *httpAddr,
 		Handler:           withMiddleware(mux),
@@ -104,7 +108,7 @@ func main() {
 // service must apply: request-id injection (→ trace_id), structured access
 // logging, recover (03§2.3.4).
 func withMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(h)))
+	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(internalTokenMiddleware(h))))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

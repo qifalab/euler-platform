@@ -1,27 +1,57 @@
 # ArgoCD ApplicationSet — one Application per service chart under apps/ (08§4.3).
 #
 # The App-of-Apps root (app-of-apps.yaml) syncs this ApplicationSet, which fans
-# out to one Application per sub-directory in apps/. Each deploys the service's
-# Helm chart to the target namespace, with env-specific values layered from
-# envs/<env>/values-overrides/<svc>.yaml (dir-as-env, single trunk 08§4.3).
+# out to one Application per (sub-directory in apps/) × (region) × (environment).
+# Each deploys the service's Helm chart to the target namespace, with
+# region/env-specific values layered from
+# envs/<region>/<env>/values-overrides/<svc>.yaml (dir-as-env, single trunk
+# 08§4.2/§4.3; the region level is the M-8 multi-region extension — 08§12 P3
+# "App of Apps 分地域"). Missing override files are tolerated via
+# ignoreMissingValueFiles, so a service without region-specific tuning falls
+# back to the chart defaults.
 #
 # Adding a new service = adding a directory under apps/; no Application edit.
+# Adding a region/environment = editing the list generator elements below
+# (each (region, env) pair can point at its own destination cluster).
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: starcloud-services
   namespace: argocd
 spec:
+  goTemplate: false
   generators:
-    - git:
-        repoURL: https://gitlab.internal/starcloud/platform-manifests.git
-        targetRevision: main
-        directories:
-          - path: deploy/gitops-manifests/apps/*
+    # matrix = (every chart dir under apps/) × (every region/env element).
+    - matrix:
+        generators:
+          - git:
+              repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+              targetRevision: main
+              directories:
+                - path: deploy/gitops-manifests/apps/*
+          - list:
+              elements:
+                # One element per (region, environment). The primary region
+                # cn-north-1 carries dev/staging/prod; the remote standby
+                # cn-east-1 (两地三中心, 00§4.5) carries prod only — it is the
+                # disaster-recovery site, not a dev/staging surface. Replace
+                # the server URLs when those clusters are registered in Argo CD.
+                - env: dev
+                  region: cn-north-1
+                  server: https://kubernetes.default.svc
+                - env: staging
+                  region: cn-north-1
+                  server: https://kubernetes.default.svc   # TODO: staging cluster API URL
+                - env: prod
+                  region: cn-north-1
+                  server: https://kubernetes.default.svc   # TODO: prod cluster API URL
+                - env: prod
+                  region: cn-east-1
+                  server: https://kubernetes.default.svc   # TODO: standby prod cluster API URL
   template:
     metadata:
-      # e.g. starcloud-svc-iam-dev
-      name: 'starcloud-{{path.basename}}-{{branch}}'
+      # e.g. starcloud-svc-iam-cn-north-1-dev
+      name: 'starcloud-{{path.basename}}-{{region}}-{{env}}'
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
@@ -31,11 +61,13 @@ spec:
         targetRevision: main
         path: '{{path}}'
         helm:
-          # Env differences live ONLY here (08§4.3 single trunk).
+          # Region/env differences live ONLY here (08§4.2 single trunk). A
+          # missing override file is fine — the chart defaults then apply as-is.
+          ignoreMissingValueFiles: true
           valueFiles:
-            - ../../envs/dev/values-overrides/{{path.basename}}.yaml
+            - '../../envs/{{region}}/{{env}}/values-overrides/{{path.basename}}.yaml'
       destination:
-        server: https://kubernetes.default.svc
+        server: '{{server}}'
         namespace: starcloud-{{path.basename}}
       syncPolicy:
         automated:

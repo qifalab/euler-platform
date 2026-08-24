@@ -12,9 +12,9 @@
 //
 // # Every transition produces exactly two things
 //
-//	1. a resource_instance row update, guarded by (status, version)
-//	2. a cloud.resource.lifecycle.event, written to the outbox in the SAME
-//	   transaction (03§8.2)
+//  1. a resource_instance row update, guarded by (status, version)
+//  2. a cloud.resource.lifecycle.event, written to the outbox in the SAME
+//     transaction (03§8.2)
 //
 // Metering, billing, notification, audit, org counters and console search all
 // consume that event. If the row moved without the event, billing silently
@@ -57,14 +57,18 @@ const (
 	StatePreempting   State = "PREEMPTING"    // 抢占式回收中(已发5分钟通知,等待窗口结束)
 	StateExpired      State = "EXPIRED"       // 包年包月到期
 	StateReleasing    State = "RELEASING"     // 回收中
-	StateReleased     State = "RELEASED"     // 已释放(终态)
-	StateCreateFailed State = "CREATE_FAILED" // 创建失败(终态,已回滚)
+	StateReleased     State = "RELEASED"      // 已释放(终态)
+	StateCreateFailed State = "CREATE_FAILED" // 创建失败(已回滚,仅可转 RELEASING 清理)
 )
 
 // Terminal reports whether no further transition is possible. Terminal rows are
 // retained for audit and cost traceability, not deleted (03§5.2 rule 3).
+//
+// The transition table is authoritative: CREATE_FAILED still transitions to
+// RELEASING (rollback cleanup), so it is NOT terminal — only RELEASED has no
+// outgoing edges.
 func (s State) Terminal() bool {
-	return s == StateReleased || s == StateCreateFailed
+	return s == StateReleased
 }
 
 // Billable reports whether the resource accrues charges in this state.
@@ -191,17 +195,17 @@ func DefaultPolicy() LifecyclePolicy {
 // struct holds only what every product shares, which is what lets the console,
 // billing, audit and quota systems work without per-product special cases.
 type Instance struct {
-	ResourceID  string // {productCode}-{regionId}-{shard2}-{random8}
-	AccountID   int64  // shard key
-	ProjectID   int64
-	ProductCode string
+	ResourceID   string // {productCode}-{regionId}-{shard2}-{random8}
+	AccountID    int64  // shard key
+	ProjectID    int64
+	ProductCode  string
 	ResourceType string
-	Region      string
-	Zone        string
-	ChargeType  ChargeType
-	State       State
-	SpecCode    string
-	OrderID     int64
+	Region       string
+	Zone         string
+	ChargeType   ChargeType
+	State        State
+	SpecCode     string
+	OrderID      int64
 
 	// BillingStart is the moment the resource reached RUNNING — the billing
 	// clock origin (03§5.3).
@@ -292,7 +296,12 @@ func (m *Machine) Transition(inst *Instance, to State, expectedVersion int, reas
 	inst.Version++
 	inst.UpdatedAt = now
 
-	// Stamp the moments that later stages depend on.
+	// Stamp the moments that later stages depend on. The event is built with
+	// the PRE-transition lock marker for an unlock: consumers of the unlock
+	// event (billing pause accounting, audit) need to know WHEN the resource
+	// had been locked, so the field is cleared on the instance only after the
+	// event captured it.
+	eventLockedAt := inst.LockedAt
 	switch to {
 	case StateRunning:
 		// The billing clock starts on the FIRST arrival at RUNNING and is never
@@ -301,10 +310,12 @@ func (m *Machine) Transition(inst *Instance, to State, expectedVersion int, reas
 		if inst.BillingStart.IsZero() {
 			inst.BillingStart = now
 		}
-		// Recovering from arrears or expiry clears those markers.
+		// Recovering from arrears or expiry clears those markers (after the
+		// event above has captured the original lock time).
 		inst.LockedAt = time.Time{}
 	case StateLocked:
 		inst.LockedAt = now
+		eventLockedAt = now
 	case StateReleased:
 		inst.ReleasedAt = now
 	}
@@ -318,7 +329,7 @@ func (m *Machine) Transition(inst *Instance, to State, expectedVersion int, reas
 		ChargeType:   inst.ChargeType,
 		BillingStart: inst.BillingStart,
 		ExpiredAt:    inst.ExpiredAt,
-		LockedAt:     inst.LockedAt,
+		LockedAt:     eventLockedAt,
 		ReleasedAt:   inst.ReleasedAt,
 		Reason:       reason,
 		OccurredAt:   now,

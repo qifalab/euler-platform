@@ -8,13 +8,16 @@
 // pkg-go/pricing against rules this service supplies, so the calculation order
 // (目录价 → 促销折扣 → 代金券, 01§12.3) is defined once and cannot drift.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes:
 //
-//	POST  /api/v1/catalog/quote    — 询价: runs the real pricing engine, returns pricing.Result
-//	GET   /api/v1/catalog/products — list seeded products (scecs/scoss/scvpc/scrds/scmon/sceip/scbs)
-//	GET   /api/v1/catalog/skus     — list SKUs, filter by ?productCode=
-//	GET   /api/v1/catalog/placement — placement contract (scope/crossAz/zoneRequired), M-6
-//	GET   /healthz, /readyz
+//	POST  /api/v1/catalog/quote    — 询价: runs the real pricing engine, returns pricing.Result (account required)
+//	GET   /api/v1/catalog/products — list seeded products (anonymous-safe: public marketing data)
+//	GET   /api/v1/catalog/skus     — list SKUs, filter by ?productCode= (anonymous-safe)
+//	GET   /api/v1/catalog/placement — placement contract (scope/crossAz/zoneRequired), M-6 (anonymous-safe)
+//	GET   /api/v1/catalog/regions  — region/zone metadata for console region pickers (anonymous-safe)
+//	GET   /api/v1/catalog/region-topology — M-8 两地三中心 plan + replication RPO verdicts (anonymous-safe)
+//	GET   /api/v1/catalog/images   — public image list, filter by ?productCode= (anonymous-safe)
+//	/healthz, /readyz
 //
 // stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
 // (MySQL t_product/t_sku/t_pricing_rule/t_promo_policy in production). The seed
@@ -37,6 +40,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/starcloud/sc-platform/multiregion"
 	"github.com/starcloud/sc-platform/pricing"
 	"github.com/starcloud/sc-platform/topology"
 )
@@ -69,16 +73,64 @@ type sku struct {
 	Status      string            `json:"status"`
 }
 
+// zone is one availability zone inside a region (00§4.1). The zone id follows
+// the {region}-{letter} convention (identifier.AZName); ZoneName is the
+// display label the console renders.
+type zone struct {
+	ZoneID   string `json:"zoneId"`
+	ZoneName string `json:"zoneName"`
+}
+
+// region is the sellable region metadata the console's region pickers render
+// (console-base top bar, every BuyWizard's 地域/可用区 dropdown). The catalogue
+// is the authority for "which regions can a resource be placed in" — the
+// placement contract (M-6) is per-product, but the region/zone inventory is
+// global, so it lives here alongside it. P2 shape: dual-AZ per region
+// (topology.NewTopology validates the same convention).
+type region struct {
+	RegionID   string `json:"regionId"`
+	RegionName string `json:"regionName"`
+	Zones      []zone `json:"zones"`
+}
+
+// image is a public OS image a compute product (SCECS) can boot from. The
+// catalogue owns it for the same reason it owns SKUs: the console must not
+// invent bootable images client-side — an image id that provisioning does not
+// know would fail at fulfilment time, which is the most expensive place to
+// learn the console was guessing.
+type image struct {
+	ImageID     string `json:"imageId"`
+	Name        string `json:"name"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	ProductCode string `json:"productCode"`
+	Status      int    `json:"status"`
+}
+
+// category is the marketing taxonomy row (t_category): it groups products on
+// the site's category grid and the console's product nav. Display names and
+// doc links live server-side so re-branding a category is a data edit, never a
+// frontend release. Code matches product.Category.
+type category struct {
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Link        string `json:"link"`
+}
+
 // catalogStore is the in-memory stand-in for the four catalogue tables. It is
 // the single source of rules/promos handed to the pricing engine per request,
 // mirroring how the production repository loads candidates for a quote.
 type catalogStore struct {
-	mu      sync.RWMutex
-	products []product
-	skus     []sku
-	rules    []pricing.PricingRule
-	promos   []pricing.Promotion
-	engine   pricing.Engine
+	mu         sync.RWMutex
+	products   []product
+	skus       []sku
+	regions    []region
+	images     []image
+	categories []category
+	rules      []pricing.PricingRule
+	promos     []pricing.Promotion
+	engine     pricing.Engine
 }
 
 func newCatalogStore() *catalogStore {
@@ -245,6 +297,46 @@ func (s *catalogStore) seed() {
 		{PromoID: "promo-newuser-2026", PromoType: pricing.PromoDiscountRate, ScopeType: "ORDER", RateBasisPoints: 3000, UserTag: "new", StartAt: from, EndAt: to},
 		{PromoID: "promo-ecs-annual", PromoType: pricing.PromoDiscountRate, ScopeType: "PRODUCT", ScopeRef: "scecs", RateBasisPoints: 8500, StartAt: from, EndAt: to},
 	}
+
+	// Sellable region/zone inventory (00§4.1, P2 dual-AZ shape). The seed is the
+	// MySQL t_region/t_zone tables in production; the zone ids are validated by
+	// the same identifier.AZName convention the quote path enforces (M-6).
+	s.regions = []region{
+		{RegionID: "cn-north-1", RegionName: "华北 1（北京）", Zones: []zone{
+			{ZoneID: "cn-north-1-a", ZoneName: "华北 1 可用区 A"},
+			{ZoneID: "cn-north-1-b", ZoneName: "华北 1 可用区 B"},
+		}},
+		{RegionID: "cn-east-1", RegionName: "华东 1（杭州）", Zones: []zone{
+			{ZoneID: "cn-east-1-a", ZoneName: "华东 1 可用区 A"},
+			{ZoneID: "cn-east-1-b", ZoneName: "华东 1 可用区 B"},
+		}},
+		{RegionID: "cn-south-1", RegionName: "华南 1（深圳）", Zones: []zone{
+			{ZoneID: "cn-south-1-a", ZoneName: "华南 1 可用区 A"},
+			{ZoneID: "cn-south-1-b", ZoneName: "华南 1 可用区 B"},
+		}},
+	}
+
+	// Public image inventory for compute products (t_image in production).
+	// Status 2 = on-sale, mirroring the product convention.
+	s.images = []image{
+		{ImageID: "centos-7.9", Name: "CentOS 7.9 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
+		{ImageID: "ubuntu-22.04", Name: "Ubuntu 22.04 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
+		{ImageID: "debian-12", Name: "Debian 12 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
+		{ImageID: "rocky-9", Name: "Rocky Linux 9 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
+		{ImageID: "windows-2022", Name: "Windows Server 2022 数据中心版 64位", OS: "windows", Arch: "x86_64", ProductCode: "scecs", Status: 2},
+	}
+
+	// Marketing taxonomy (t_category in production, edited by the marketing
+	// back-office). Codes cover every Category value used by the product seed.
+	s.categories = []category{
+		{Code: "compute", Name: "计算", Description: "云服务器、容器实例等基础算力", Link: "https://docs.eulercloud.cn/compute"},
+		{Code: "storage", Name: "存储", Description: "对象存储、块存储与备份", Link: "https://docs.eulercloud.cn/storage"},
+		{Code: "database", Name: "数据库", Description: "托管关系型与缓存数据库", Link: "https://docs.eulercloud.cn/database"},
+		{Code: "network", Name: "网络", Description: "专有网络、负载均衡与公网接入", Link: "https://docs.eulercloud.cn/network"},
+		{Code: "middleware", Name: "中间件", Description: "消息队列与日志服务", Link: "https://docs.eulercloud.cn/middleware"},
+		{Code: "monitor", Name: "监控运维", Description: "指标监控与告警", Link: "https://docs.eulercloud.cn/monitor"},
+		{Code: "management", Name: "管理与治理", Description: "弹性伸缩等资源编排能力", Link: "https://docs.eulercloud.cn/management"},
+	}
 }
 
 // quoteRequest is the 询价 API body. productCode + chargeType + duration are
@@ -269,6 +361,7 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req quoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
@@ -396,7 +489,9 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "OK", resultToMap(res, ct, dur, durUnit, req.Quantity))}
 
 func (s *catalogStore) handleProducts(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountIDFrom(w, r); !ok {
+	// Anonymous-safe: the product catalogue is public marketing data — the
+	// marketing site SSRs it without a gateway-injected identity.
+	if _, ok := accountIDOptional(w, r); !ok {
 		return
 	}
 	s.mu.RLock()
@@ -409,7 +504,7 @@ func (s *catalogStore) handleProducts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *catalogStore) handleSKUs(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountIDFrom(w, r); !ok {
+	if _, ok := accountIDOptional(w, r); !ok {
 		return
 	}
 	productCode := r.URL.Query().Get("productCode")
@@ -425,6 +520,178 @@ func (s *catalogStore) handleSKUs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "OK", out)
 }
 
+// handleRegions returns the sellable region/zone inventory. The console's
+// region pickers (top bar + every BuyWizard) render this — the client never
+// hardcodes a region list, so opening a new region is a catalogue row, not a
+// frontend release.
+func (s *catalogStore) handleRegions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDOptional(w, r); !ok {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]map[string]any, 0, len(s.regions))
+	for _, rg := range s.regions {
+		zones := make([]map[string]any, 0, len(rg.Zones))
+		for _, z := range rg.Zones {
+			zones = append(zones, map[string]any{"zoneId": z.ZoneID, "zoneName": z.ZoneName})
+		}
+		out = append(out, map[string]any{
+			"regionId": rg.RegionID, "regionName": rg.RegionName, "zones": zones,
+		})
+	}
+	writeJSON(w, "OK", out)
+}
+
+// --- M-8 multi-region topology (09-roadmap §5.2 M-8, 00§4.2/§4.5) --------------
+
+// phase3Plan is the 两地三中心 topology: one in-city dual-active primary
+// (cn-north-1, the P2 dual-AZ shape) plus one remote standby (cn-east-1,
+// >300km, read-only/DR — Role.Writable() is false, P3 does not promise
+// 异地多活写). The classification math lives in pkg-go/multiregion; this seed
+// is the plan the cross-region DR drill (tools/cross-region-failover-drill.md)
+// executes, matching the GitOps env split (primary carries dev/staging/prod,
+// standby carries prod only, 08§4.2).
+var phase3Plan = multiregion.Plan{
+	Primary: multiregion.Region{Name: "cn-north-1", Role: multiregion.RolePrimary, ZoneLetters: []string{"a", "b"}},
+	Standby: multiregion.Region{Name: "cn-east-1", Role: multiregion.RoleStandby, DistanceKm: 1100, ZoneLetters: []string{"a"}},
+	Channels: []multiregion.ReplicationChannel{
+		multiregion.CoreLedgerChannel(),
+		multiregion.ObjectStorageChannel(),
+	},
+}
+
+// replicationLag is the in-memory stand-in for the region_replication_status
+// rows (orchestrator sql/V3): the latest observed lag per cross-region channel.
+// Production is written by the replication monitor; the RPO verdict below is
+// still computed by the pkg (MeetsRPO), never hand-labelled.
+var replicationLag = map[string]time.Duration{
+	"ledger-binlog":  2100 * time.Millisecond, // vs 5s RPO
+	"object-storage": 8 * time.Minute,         // vs 1h RPO
+}
+
+// phase3Services is the core commercial-loop slice classified for the console
+// view. The authority is multiregion.Classify — unknown names error loudly, so
+// this list can only reference services the pkg knows (IAM/计费 are the two
+// GLOBAL singletons, 09§5.2 M-8).
+var phase3Services = []string{
+	"svc-iam", "svc-billing", "svc-order", "svc-payment", "svc-metering",
+	"svc-orchestrator", "svc-quota", "svc-catalog", "svc-monitor",
+}
+
+// phase3States is the cross-region state taxonomy the pkg declares
+// (ClassifyState's four legal names: account/ledger/object-storage/kafka-topic).
+var phase3States = []string{"account", "ledger", "object-storage", "kafka-topic"}
+
+func regionTopologyView(r multiregion.Region) map[string]any {
+	zones := make([]string, 0, len(r.ZoneLetters))
+	for _, z := range r.ZoneLetters {
+		zones = append(zones, r.Name+"-"+z)
+	}
+	return map[string]any{
+		"name": r.Name, "role": string(r.Role), "writable": r.Role.Writable(),
+		"distanceKm": r.DistanceKm, "zones": zones,
+	}
+}
+
+// handleRegionTopology returns the M-8 topology for the console's 地域与容灾
+// view: region roles (who writes), the replication channels with live RPO
+// verdicts, the canonical 灾备接管 sequence, and the global/regional
+// classification. Everything computed comes from pkg-go/multiregion — this
+// handler only assembles, it never re-derives.
+func (s *catalogStore) handleRegionTopology(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDOptional(w, r); !ok {
+		return
+	}
+	if err := phase3Plan.Validate(); err != nil {
+		writeErr(w, "Common.InternalError", 500, "region topology plan invalid: "+err.Error())
+		return
+	}
+
+	channels := make([]map[string]any, 0, len(phase3Plan.Channels))
+	for _, c := range phase3Plan.Channels {
+		lag := replicationLag[c.Name]
+		channels = append(channels, map[string]any{
+			"name": c.Name, "mode": c.Mode,
+			"rpoMs": c.RPO.Milliseconds(), "lagMs": lag.Milliseconds(),
+			"rpoMet": c.MeetsRPO(lag),
+		})
+	}
+
+	steps := make([]map[string]any, 0, 2)
+	for _, st := range phase3Plan.FailoverSteps() {
+		steps = append(steps, map[string]any{"name": st.Name, "detail": st.Detail})
+	}
+
+	scopes := make([]map[string]any, 0, len(phase3Services))
+	for _, svc := range phase3Services {
+		scope, err := multiregion.Classify(svc)
+		if err != nil {
+			writeErr(w, "Common.InternalError", 500, err.Error())
+			return
+		}
+		scopes = append(scopes, map[string]any{"service": svc, "scope": string(scope)})
+	}
+
+	states := make([]map[string]any, 0, len(phase3States))
+	for _, st := range phase3States {
+		class, err := multiregion.ClassifyState(st)
+		if err != nil {
+			writeErr(w, "Common.InternalError", 500, err.Error())
+			return
+		}
+		states = append(states, map[string]any{"state": st, "class": string(class)})
+	}
+
+	writeJSON(w, "OK", map[string]any{
+		"plan": map[string]any{
+			"primary":  regionTopologyView(phase3Plan.Primary),
+			"standby":  regionTopologyView(phase3Plan.Standby),
+			"maxRtoMs": multiregion.MaxRTO.Milliseconds(),
+		},
+		"channels":      channels,
+		"failoverSteps": steps,
+		"serviceScopes": scopes,
+		"stateClasses":  states,
+	})
+}
+
+// handleImages returns the public image inventory, optionally filtered by
+// productCode. The purchase wizard renders it as the 镜像 dropdown so a boot
+// request can only carry an image provisioning actually knows.
+func (s *catalogStore) handleImages(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDOptional(w, r); !ok {
+		return
+	}
+	productCode := r.URL.Query().Get("productCode")
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]map[string]any, 0)
+	for _, im := range s.images {
+		if productCode != "" && im.ProductCode != productCode {
+			continue
+		}
+		out = append(out, map[string]any{
+			"imageId": im.ImageID, "name": im.Name, "os": im.OS,
+			"arch": im.Arch, "productCode": im.ProductCode, "status": im.Status,
+		})
+	}
+	writeJSON(w, "OK", out)
+}
+
+// handleCategories returns the marketing taxonomy. The site's category grid
+// and the console's product nav render it; product rows join on product.Category.
+func (s *catalogStore) handleCategories(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDOptional(w, r); !ok {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]category, 0, len(s.categories))
+	out = append(out, s.categories...)
+	writeJSON(w, "OK", out)
+}
+
 // handlePlacement returns the placement contract for a product: its scope
 // (REGIONAL/ZONAL), whether it carries cross-AZ replicas, and whether a zoneId
 // is required at create time. The console uses this to render the AZ picker in
@@ -432,7 +699,7 @@ func (s *catalogStore) handleSKUs(w http.ResponseWriter, r *http.Request) {
 // does not), and the quote path enforces the same contract server-side.
 // (M-6, 00§4.4.)
 func (s *catalogStore) handlePlacement(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountIDFrom(w, r); !ok {
+	if _, ok := accountIDOptional(w, r); !ok {
 		return
 	}
 	productCode := r.URL.Query().Get("productCode")
@@ -544,6 +811,23 @@ func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
+// accountIDOptional is accountIDFrom for the public catalogue reads (products/
+// skus/placement/regions/images): an absent header is fine (anonymous browse /
+// marketing-site SSR), but a present-but-malformed one is still rejected — a
+// gateway that forwards garbage is a bug worth surfacing, not swallowing.
+func accountIDOptional(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.Header.Get(accountIDHeader)
+	if raw == "" {
+		return 0, true
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		return 0, false
+	}
+	return id, true
+}
+
 func writeJSON(w http.ResponseWriter, code string, data any) {
 	rid := w.Header().Get("X-Sc-TraceId")
 	w.Header().Set("Content-Type", "application/json")
@@ -593,6 +877,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/catalog/products", store.handleProducts)
 	mux.HandleFunc("GET /api/v1/catalog/skus", store.handleSKUs)
 	mux.HandleFunc("GET /api/v1/catalog/placement", store.handlePlacement)
+	mux.HandleFunc("GET /api/v1/catalog/regions", store.handleRegions)
+	mux.HandleFunc("GET /api/v1/catalog/region-topology", store.handleRegionTopology)
+mux.HandleFunc("GET /api/v1/catalog/images", store.handleImages)
+mux.HandleFunc("GET /api/v1/catalog/categories", store.handleCategories)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

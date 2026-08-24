@@ -61,10 +61,10 @@ message BillingAccountEvent {
 }
 
 enum BillingAccountState {
-  BILLING_ACCOUNT_UNSPECIFIED = 0;
-  BILLING_ACCOUNT_NORMAL = 1;
-  BILLING_ACCOUNT_OVERDUE = 2;   // 宽限期中
-  BILLING_ACCOUNT_FROZEN = 3;    // 停服锁定
+  BILLING_ACCOUNT_STATE_UNSPECIFIED = 0;
+  BILLING_ACCOUNT_STATE_NORMAL = 1;
+  BILLING_ACCOUNT_STATE_OVERDUE = 2;   // 宽限期中
+  BILLING_ACCOUNT_STATE_FROZEN = 3;    // 停服锁定
 }
 
 // --- Resource domain (svc-orchestrator) ---
@@ -144,15 +144,15 @@ message UserEvent {
 }
 
 enum UserEventType {
-  USER_EVENT_UNSPECIFIED = 0;
-  USER_EVENT_REGISTERED = 1;
-  USER_EVENT_REAL_NAME_INDIVIDUAL = 2;
-  USER_EVENT_REAL_NAME_ENTERPRISE = 3;
-  USER_EVENT_AK_CREATED = 4;
-  USER_EVENT_AK_DISABLED = 5;
-  USER_EVENT_AK_DELETED = 6;
-  USER_EVENT_PASSWORD_CHANGED = 7;
-  USER_EVENT_CANCELLATION = 8;
+  USER_EVENT_TYPE_UNSPECIFIED = 0;
+  USER_EVENT_TYPE_REGISTERED = 1;
+  USER_EVENT_TYPE_REAL_NAME_INDIVIDUAL = 2;
+  USER_EVENT_TYPE_REAL_NAME_ENTERPRISE = 3;
+  USER_EVENT_TYPE_AK_CREATED = 4;
+  USER_EVENT_TYPE_AK_DISABLED = 5;
+  USER_EVENT_TYPE_AK_DELETED = 6;
+  USER_EVENT_TYPE_PASSWORD_CHANGED = 7;
+  USER_EVENT_TYPE_CANCELLATION = 8;
 }
 
 message UserLoginEvent {
@@ -188,7 +188,7 @@ message AuditAction {
 }
 
 message IdentitySnapshot {
-  string type = 1;              // ram-user | root
+  string type = 1;              // "ram-user" | "root" | "role" (canonical spelling: ram-user)
   int64 account_id = 2;
   string principal = 3;
   string ak_id = 4;

@@ -1,0 +1,11 @@
+# cn-east-1 prod overrides for svc-catalog — remote standby region (00§4.5).
+#
+# svc-catalog is REGIONAL (pkg-go/multiregion.Classify): one instance per
+# region. Its catalogue data is replicated from the primary (cross-region binlog
+# channel); the control plane here is cold and is brought hot on failover. The
+# standby serves read traffic sharing (只读流量分担) before and after cutover.
+image:
+  tag: v0.1.0
+replicas: 0   # cold control plane; data arrives via replication, not by serving writes
+topology:
+  zoneSpread: false   # single-AZ remote site

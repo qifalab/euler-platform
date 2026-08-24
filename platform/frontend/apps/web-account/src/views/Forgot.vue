@@ -4,7 +4,8 @@
  *
  * 实现《02-frontend-architecture.md》「账号中心视图 — 找回密码流程」一节：
  * 邮箱校验 → 验证码校验 → 重置密码 → 回到登录。
- * 当前为前端 Mock 实现，不接入真实后端（验证码固定为 123456）。
+ * 验证码由后端下发并在后端比对（前端绝不比对验证码）；后端接口未上线时,
+ * 提交会得到「暂未开放」提示。
  */
 import { reactive, ref, computed } from "vue";
 import { useRouter } from "vue-router";
@@ -44,15 +45,8 @@ const emailForm = reactive<EmailForm>({ email: "" });
 const resetFormRef = ref<FormInstance>();
 const resetForm = reactive<ResetForm>({ code: "", password: "", confirm: "" });
 
-// 演示数据（Mock）：已注册邮箱
-const demoAccounts = [
-  { id: "1001", name: "zhangwei", email: "zhangwei@starcloud.com" },
-  { id: "1002", name: "lijing", email: "lijing@starcloud.com" },
-  { id: "1003", name: "wangfang", email: "wangfang@starcloud.com" },
-];
-
-// 模拟后端下发的验证码
-const sentCode = ref("");
+const sending = ref(false);
+const resetting = ref(false);
 
 const canResend = computed(() => countdown.value === 0);
 
@@ -101,42 +95,77 @@ function startCountdown() {
   }, 1000);
 }
 
-function handleSendCode() {
-  emailFormRef.value?.validate((valid: boolean) => {
-    if (!valid) return;
-    const exists = demoAccounts.some((a) => a.email === emailForm.email);
-    if (!exists) {
-      ElMessage.error("该邮箱尚未注册");
-      return;
-    }
-    sentCode.value = "123456";
+/** 统一调用找回密码后端接口；接口尚未实现时抛出「暂未开放」。 */
+async function forgotApi(path: string, body: Record<string, unknown>): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("网络异常，请稍后再试");
+  }
+  if (res.status === 404 || res.status === 405 || res.status === 501) {
+    throw new Error("找回密码功能暂未开放，请联系管理员重置密码");
+  }
+  const payload = await res.json().catch(() => ({} as { Code?: string; Message?: string }));
+  if (!res.ok || (payload.Code && payload.Code !== "OK")) {
+    throw new Error(payload.Message ?? "请求失败，请稍后再试");
+  }
+}
+
+async function handleSendCode() {
+  const valid = await emailFormRef.value?.validate().catch(() => false);
+  if (!valid) return;
+  sending.value = true;
+  try {
+    // 验证码由 svc-iam 下发到注册邮箱；是否已注册也由后端判断。
+    await forgotApi("/api/auth/forgot/send-code", { email: emailForm.email });
     startCountdown();
     active.value = 1;
-    ElMessage.success("验证码已发送");
-  });
+    ElMessage.success("验证码已发送至邮箱");
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  } finally {
+    sending.value = false;
+  }
 }
 
-function handleResend() {
+async function handleResend() {
   if (!canResend.value) return;
-  sentCode.value = "123456";
-  startCountdown();
-  ElMessage.success("验证码已发送");
+  try {
+    await forgotApi("/api/auth/forgot/send-code", { email: emailForm.email });
+    startCountdown();
+    ElMessage.success("验证码已发送至邮箱");
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
 }
 
-function handleReset() {
-  resetFormRef.value?.validate((valid: boolean) => {
-    if (!valid) return;
-    if (resetForm.code !== sentCode.value) {
-      ElMessage.error("验证码不正确");
-      return;
-    }
-    // 模拟重置请求
+async function handleReset() {
+  const valid = await resetFormRef.value?.validate().catch(() => false);
+  if (!valid) return;
+  resetting.value = true;
+  try {
+    // 验证码校验在后端完成；前端只透传。
+    await forgotApi("/api/auth/forgot/reset", {
+      email: emailForm.email,
+      code: resetForm.code,
+      password: resetForm.password,
+    });
     active.value = 2;
     ElMessage.success("密码已重置");
     setTimeout(() => {
       router.push("/login");
     }, 800);
-  });
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  } finally {
+    resetting.value = false;
+  }
 }
 
 function goLogin() {
@@ -181,6 +210,7 @@ function goLogin() {
           type="primary"
           size="large"
           class="forgot-submit"
+          :loading="sending"
           @click="handleSendCode"
         >
           发送验证码
@@ -238,6 +268,7 @@ function goLogin() {
             type="primary"
             size="large"
             class="forgot-submit"
+            :loading="resetting"
             @click="handleReset"
           >
             重置密码

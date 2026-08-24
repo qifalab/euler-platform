@@ -66,10 +66,11 @@ const (
 
 // Errors.
 var (
-	ErrTooManyKeys    = fmt.Errorf("accesskey: identity already holds %d keys (max)", MaxKeysPerIdentity)
-	ErrNotFound       = errors.New("accesskey: not found")
-	ErrAlreadyDeleted = errors.New("accesskey: already deleted")
-	ErrDisabled       = errors.New("accesskey: key is disabled")
+	ErrTooManyKeys        = fmt.Errorf("accesskey: identity already holds %d keys (max)", MaxKeysPerIdentity)
+	ErrNotFound           = errors.New("accesskey: not found")
+	ErrAlreadyDeleted     = errors.New("accesskey: already deleted")
+	ErrDisabled           = errors.New("accesskey: key is disabled")
+	ErrRotationInProgress = errors.New("accesskey: a rotation is already in progress for this identity")
 )
 
 // Record is the persisted AK row (maps to the access_key table). Note there is
@@ -246,10 +247,39 @@ func (m *Manager) Rotate(ak string, grace time.Duration) (Created, error) {
 		grace = 0
 	}
 
+	// A rotation temporarily holds cap+1 live keys (the superseded key stays
+	// usable through its grace window). Without a bound, rotating repeatedly —
+	// especially rotating a key that is itself mid-grace — grows the live-key
+	// set without limit, defeating the 2-key cap (07§2.2 rule 2).
+	nowCheck := m.now()
+	if !old.GraceUntil.IsZero() && nowCheck.Before(old.GraceUntil) {
+		// The key being rotated is already the superseded half of a rotation.
+		return Created{}, ErrRotationInProgress
+	}
+	siblings, err := m.store.ListByOwner(old.AccountID, old.OwnerType, old.OwnerID)
+	if err != nil {
+		return Created{}, err
+	}
+	live := 0
+	for _, r := range siblings {
+		if r.Status == StatusDeleted {
+			continue
+		}
+		if !r.GraceUntil.IsZero() && nowCheck.After(r.GraceUntil) {
+			continue // effectively disabled; the sweeper just has not flipped it yet
+		}
+		live++
+	}
+	// After this rotation the identity holds live+1 keys; allow at most one
+	// key beyond the cap (the single in-grace superseded key).
+	if live >= MaxKeysPerIdentity+1 {
+		return Created{}, ErrTooManyKeys
+	}
+
 	// The replacement is created first so a failure leaves the old key intact.
-	// This temporarily exceeds the 2-key cap, which is why the cap check is
-	// skipped here — the sweeper restores the invariant when the old key
-	// leaves the grace window.
+	// This temporarily exceeds the 2-key cap by exactly one (bounded above);
+	// the sweeper restores the invariant when the old key leaves the grace
+	// window.
 	newAK, err := generateAK()
 	if err != nil {
 		return Created{}, err

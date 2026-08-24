@@ -1,0 +1,10 @@
+# cn-east-1 prod overrides for svc-marketplace — remote standby region (00§4.5).
+#
+# svc-marketplace is REGIONAL (pkg-go/multiregion.Classify): one instance per
+# region, control plane cold in the standby, brought hot on failover. Its
+# listing/settlement data arrives via the cross-region replication channels.
+image:
+  tag: v0.1.0
+replicas: 0   # cold control plane
+topology:
+  zoneSpread: false   # single-AZ remote site

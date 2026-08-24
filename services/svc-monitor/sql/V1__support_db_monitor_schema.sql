@@ -39,7 +39,7 @@ CREATE TABLE `alert_rule` (
   `resource_type`            VARCHAR(32) NOT NULL COMMENT '资源类型: instance 等',
   `metric`                   VARCHAR(64) NOT NULL COMMENT '指标: cpu_utilization 等',
   `threshold`                DECIMAL(18,4) NOT NULL COMMENT '阈值;评估值≥/≤阈值触发',
-  `comparison_operator`      TINYINT NOT NULL DEFAULT 1 COMMENT '1≥ 2> 3≤ 4< 5==',
+  `comparison_operator`      TINYINT NOT NULL DEFAULT 2 COMMENT '按 monitor.proto ComparisonOperator: 1> 2≥ 3< 4≤',
   `period`                   INT NOT NULL DEFAULT 60 COMMENT '采样周期(秒)',
   `eval_periods`             INT NOT NULL DEFAULT 1 COMMENT '连续 N 个周期满足才触发;防抖',
   `notification_channels_json` JSON NOT NULL COMMENT '通知渠道: ["IN_APP","SMS","EMAIL","WEBHOOK"]',

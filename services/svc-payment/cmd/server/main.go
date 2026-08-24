@@ -33,6 +33,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -43,7 +44,6 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -51,7 +51,18 @@ import (
 	"github.com/starcloud/sc-platform/pricing"
 )
 
+// accountIDHeader carries the caller's account id. TRUST NOTE: this header is
+// injected by the API gateway after authentication; this service trusts it and
+// must never be exposed directly to the public network. Deployments that want
+// defense-in-depth set SC_INTERNAL_TOKEN, which makes the service additionally
+// require a matching X-Sc-Internal-Token shared-secret header (dev default:
+// unset, check disabled).
 const accountIDHeader = "X-Sc-Account-Id"
+
+const internalTokenHeader = "X-Sc-Internal-Token"
+
+// maxBodyBytes bounds request bodies before JSON decoding (~1MB).
+const maxBodyBytes = 1 << 20
 
 // minorToAmount converts a minor-units (分) integer into a pricing.Amount
 // (micro-units of a yuan). 1 分 = 1/100 元 = 10_000/1_000_000 元.
@@ -125,19 +136,22 @@ func (m *inMemStore) ListEntries(accountID int64) ([]ledger.Entry, error) {
 	return out, nil
 }
 
-// paymentServer wires the ledger to HTTP handlers. The idempotencySeq mints a
-// unique idempotency key per request when the client does not supply one; in a
-// real deployment the channel transaction number is the key for recharge, and
-// the order id is the key for consume/freeze.
+// paymentServer wires the ledger to HTTP handlers. Idempotency keys are always
+// client-supplied (channel outTradeNo for recharge, order id for
+// freeze/consume) — the server never fabricates one.
 type paymentServer struct {
-	ledger      *ledger.Ledger
-	idemCounter atomic.Int64
+	ledger *ledger.Ledger
 }
 
 func newPaymentServer() *paymentServer {
 	store := newInMemStore()
-	var seq int64
+	var (
+		seqMu sync.Mutex
+		seq   int64
+	)
 	l := ledger.New(store, time.Now, func() int64 {
+		seqMu.Lock()
+		defer seqMu.Unlock()
 		seq++
 		return seq
 	})
@@ -161,12 +175,50 @@ func (ps *paymentServer) seed() {
 		"availableMinor", amountToMinor(bal.Available))
 }
 
-// amountRequest is the body for recharge / freeze / consume.
+// amountRequest is the body for recharge / freeze / consume. The idempotency
+// key MUST be supplied by the client: idempotencyKey directly, or outTradeNo
+// (the payment-channel transaction number, used for recharge).
 type amountRequest struct {
 	AmountMinor int64  `json:"amountMinor"` // 分; must be positive
 	Reason      string `json:"reason"`      // biz remark for the journal entry
-	BizKey      string `json:"bizKey"`      // optional, e.g. order id; generated if absent
-	IdemKey     string `json:"idempotencyKey"` // optional; generated if absent
+	BizKey      string `json:"bizKey"`      // optional, e.g. order id
+	IdemKey     string `json:"idempotencyKey"` // required unless outTradeNo is set
+	OutTradeNo  string `json:"outTradeNo"`     // channel transaction no; fallback idempotency key
+}
+
+// decodeAmountRequest parses and validates the shared body. Returns false if a
+// 4xx response was already written.
+func decodeAmountRequest(w http.ResponseWriter, r *http.Request) (amountRequest, bool) {
+	var req amountRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return req, false
+	}
+	if req.AmountMinor <= 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "amountMinor must be positive")
+		return req, false
+	}
+	if req.IdemKey == "" {
+		req.IdemKey = req.OutTradeNo
+	}
+	if req.IdemKey == "" {
+		writeErr(w, "Common.InvalidParameter", 400, "idempotencyKey or outTradeNo is required")
+		return req, false
+	}
+	return req, true
+}
+
+// writeEntryResult writes the 200 envelope for a ledger operation, marking
+// idempotent replays (ErrDuplicateEntry returns the prior entry + balance).
+func writeEntryResult(w http.ResponseWriter, entry ledger.Entry, bal ledger.Balance, idempotent bool) {
+	writeJSON(w, "OK", map[string]any{
+		"entryId":     entry.EntryID,
+		"type":        string(entry.Type),
+		"amountMinor": amountToMinor(entry.Amount),
+		"balance":     balanceToMap(bal),
+		"idempotent":  idempotent,
+	})
 }
 
 func (ps *paymentServer) handleRecharge(w http.ResponseWriter, r *http.Request) {
@@ -174,36 +226,21 @@ func (ps *paymentServer) handleRecharge(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	var req amountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
-		return
-	}
-	if req.AmountMinor <= 0 {
-		writeErr(w, "Common.InvalidParameter", 400, "amountMinor must be positive")
+	req, ok := decodeAmountRequest(w, r)
+	if !ok {
 		return
 	}
 	bizKey := req.BizKey
 	if bizKey == "" {
 		bizKey = "recharge"
 	}
-	idem := req.IdemKey
-	if idem == "" {
-		idem = fmt.Sprintf("recharge-%d-%d", acct, ps.idemCounter.Add(1))
-	}
 	entry, bal, err := ps.ledger.Recharge(acct, minorToAmount(req.AmountMinor),
-		bizKey, idem, req.Reason)
-	if err != nil {
+		bizKey, req.IdemKey, req.Reason)
+	if err != nil && !errors.Is(err, ledger.ErrDuplicateEntry) {
 		writeLedgerErr(w, err)
 		return
 	}
-	writeJSON(w, "OK", map[string]any{
-		"entryId":    entry.EntryID,
-		"type":       string(entry.Type),
-		"amountMinor": amountToMinor(entry.Amount),
-		"balance":    balanceToMap(bal),
-		"idempotent": errors.Is(err, ledger.ErrDuplicateEntry),
-	})
+	writeEntryResult(w, entry, bal, errors.Is(err, ledger.ErrDuplicateEntry))
 }
 
 func (ps *paymentServer) handleBalance(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +250,8 @@ func (ps *paymentServer) handleBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	bal, err := ps.ledger.Balance(acct)
 	if err != nil {
-		writeErr(w, "Payment.BalanceQueryFailed", 500, err.Error())
+		slog.Error("balance query failed", "account", acct, "err", err)
+		writeErr(w, "Payment.BalanceQueryFailed", 500, "balance query failed")
 		return
 	}
 	writeJSON(w, "OK", balanceToMap(bal))
@@ -224,35 +262,20 @@ func (ps *paymentServer) handleFreeze(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req amountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
-		return
-	}
-	if req.AmountMinor <= 0 {
-		writeErr(w, "Common.InvalidParameter", 400, "amountMinor must be positive")
+	req, ok := decodeAmountRequest(w, r)
+	if !ok {
 		return
 	}
 	bizKey := req.BizKey
 	if bizKey == "" {
-		bizKey = fmt.Sprintf("freeze-%d", ps.idemCounter.Add(1))
+		bizKey = req.IdemKey
 	}
-	idem := req.IdemKey
-	if idem == "" {
-		idem = fmt.Sprintf("freeze-%d-%s", acct, bizKey)
-	}
-	entry, bal, err := ps.ledger.Freeze(acct, minorToAmount(req.AmountMinor), bizKey, idem)
-	if err != nil {
+	entry, bal, err := ps.ledger.Freeze(acct, minorToAmount(req.AmountMinor), bizKey, req.IdemKey)
+	if err != nil && !errors.Is(err, ledger.ErrDuplicateEntry) {
 		writeLedgerErr(w, err)
 		return
 	}
-	writeJSON(w, "OK", map[string]any{
-		"entryId":     entry.EntryID,
-		"type":        string(entry.Type),
-		"amountMinor":  amountToMinor(entry.Amount),
-		"balance":     balanceToMap(bal),
-		"idempotent":  errors.Is(err, ledger.ErrDuplicateEntry),
-	})
+	writeEntryResult(w, entry, bal, errors.Is(err, ledger.ErrDuplicateEntry))
 }
 
 func (ps *paymentServer) handleConsume(w http.ResponseWriter, r *http.Request) {
@@ -260,36 +283,21 @@ func (ps *paymentServer) handleConsume(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req amountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
-		return
-	}
-	if req.AmountMinor <= 0 {
-		writeErr(w, "Common.InvalidParameter", 400, "amountMinor must be positive")
+	req, ok := decodeAmountRequest(w, r)
+	if !ok {
 		return
 	}
 	bizKey := req.BizKey
 	if bizKey == "" {
-		bizKey = fmt.Sprintf("consume-%d", ps.idemCounter.Add(1))
-	}
-	idem := req.IdemKey
-	if idem == "" {
-		idem = fmt.Sprintf("consume-%d-%s", acct, bizKey)
+		bizKey = req.IdemKey
 	}
 	entry, bal, err := ps.ledger.Consume(acct, minorToAmount(req.AmountMinor),
-		"order", bizKey, idem, req.Reason)
-	if err != nil {
+		"order", bizKey, req.IdemKey, req.Reason)
+	if err != nil && !errors.Is(err, ledger.ErrDuplicateEntry) {
 		writeLedgerErr(w, err)
 		return
 	}
-	writeJSON(w, "OK", map[string]any{
-		"entryId":     entry.EntryID,
-		"type":        string(entry.Type),
-		"amountMinor":  amountToMinor(entry.Amount),
-		"balance":     balanceToMap(bal),
-		"idempotent":  errors.Is(err, ledger.ErrDuplicateEntry),
-	})
+	writeEntryResult(w, entry, bal, errors.Is(err, ledger.ErrDuplicateEntry))
 }
 
 func balanceToMap(b ledger.Balance) map[string]any {
@@ -318,27 +326,27 @@ func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 // writeLedgerErr maps a ledger error to the right envelope code + HTTP status.
-// ErrDuplicateEntry is surfaced as 200 OK with idempotent=true (the entry was
-// already applied; the client gets back the same result). Everything else is a
-// 4xx/5xx with a precise code so the caller can distinguish insufficient funds
-// from a version conflict from a malformed request.
+// ErrDuplicateEntry is handled by callers as an idempotent 200 before reaching
+// here. Clients receive only stable codes/messages; err.Error() details go to
+// the log.
 func writeLedgerErr(w http.ResponseWriter, err error) {
+	slog.Warn("ledger operation rejected", "err", err)
 	switch {
 	case errors.Is(err, ledger.ErrInsufficientBalance):
-		writeErr(w, "Payment.InsufficientBalance", 422, err.Error())
+		writeErr(w, "Payment.InsufficientBalance", 422, "insufficient balance")
 	case errors.Is(err, ledger.ErrInsufficientFrozen):
-		writeErr(w, "Payment.InsufficientFrozen", 422, err.Error())
+		writeErr(w, "Payment.InsufficientFrozen", 422, "insufficient frozen funds")
 	case errors.Is(err, ledger.ErrVersionConflict):
-		writeErr(w, "Payment.VersionConflict", 409, err.Error())
+		writeErr(w, "Payment.VersionConflict", 409, "concurrent balance update, please retry")
 	case errors.Is(err, ledger.ErrNonPositiveAmount):
-		writeErr(w, "Common.InvalidParameter", 400, err.Error())
+		writeErr(w, "Common.InvalidParameter", 400, "amount must be positive")
 	case errors.Is(err, ledger.ErrMissingIdempotency):
-		writeErr(w, "Common.InvalidParameter", 400, err.Error())
+		writeErr(w, "Common.InvalidParameter", 400, "idempotency key required")
 	case errors.Is(err, ledger.ErrDuplicateEntry):
 		// Handled by callers via the idempotent flag; reaching here is a bug.
-		writeErr(w, "Payment.DuplicateEntry", 409, err.Error())
+		writeErr(w, "Payment.DuplicateEntry", 409, "duplicate entry")
 	default:
-		writeErr(w, "Payment.InternalError", 500, err.Error())
+		writeErr(w, "Payment.InternalError", 500, "internal error")
 	}
 }
 
@@ -362,6 +370,24 @@ func requestIDMiddleware(h http.Handler) http.Handler {
 			id = fmt.Sprintf("pay-%d", time.Now().UnixNano())
 		}
 		w.Header().Set("X-Sc-TraceId", id)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// internalTokenMiddleware optionally enforces a shared-secret header for
+// service-to-service calls. When SC_INTERNAL_TOKEN is set, every request must
+// carry a matching X-Sc-Internal-Token; unset (dev default) the check is off.
+// This complements — not replaces — the gateway trust on X-Sc-Account-Id.
+func internalTokenMiddleware(h http.Handler) http.Handler {
+	token := os.Getenv("SC_INTERNAL_TOKEN")
+	if token == "" {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get(internalTokenHeader)), []byte(token)) != 1 {
+			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
+			return
+		}
 		h.ServeHTTP(w, r)
 	})
 }
@@ -392,7 +418,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/payment/freeze", srv.handleFreeze)
 	mux.HandleFunc("POST /api/v1/payment/consume", srv.handleConsume)
 
-	httpSrv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	httpSrv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("svc-payment listening", "addr", *addr)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

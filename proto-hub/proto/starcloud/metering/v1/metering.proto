@@ -4,6 +4,8 @@ package starcloud.metering.v1;
 
 option go_package = "github.com/starcloud/sc-platform/proto/starcloud/metering/v1;meteringv1";
 
+import "starcloud/event/v1/event.proto";
+
 // MeteringService is the metering collection & aggregation pipeline
 // (03§4.2.5 / 05§5.5). Owns collection of raw usage from each rc-* controller
 // (event push + scheduled pull dual-channel), cleaning & dedup, hourly
@@ -14,31 +16,15 @@ service MeteringService {
   // PushMeteringData is a client-streaming RPC for rc-* controllers / host
   // agents to push raw usage points in batch. Each record carries a
   // deterministic record_id idempotency key; retries dedup on it.
-  rpc PushMeteringData(stream UsageRecord) returns (PushMeteringDataResponse);
+  rpc PushMeteringData(stream starcloud.event.v1.UsageRecord) returns (PushMeteringDataResponse);
   // DescribeMeteringData queries raw or aggregated usage for a resource over a
   // time range (Billing.DescribeMeteringData).
   rpc DescribeMeteringData(DescribeMeteringDataRequest) returns (DescribeMeteringDataResponse);
 }
 
-// UsageRecord is a raw usage point pushed by a product controller / host agent
-// (event.proto UsageRecord, 05§5.5.1). The idempotency key is deterministic:
-// record_id = sha1(resource_id|item|window_start)[0:24], so a re-pushed point
-// with the same key is deduped rather than double-counted.
-message UsageRecord {
-  string record_id = 1;           // deterministic idempotency key sha1(resource|item|window)[0:24]
-  int64 account_id = 2;
-  string region = 3;
-  string resource_type = 4;       // ecs | oss | rds | ...
-  string resource_id = 5;
-  string metering_item = 6;       // cpu_seconds | storage_gb_hour | ...
-  string quantity = 7;            // decimal string; never float for units (03§6)
-  int64 window_start = 8;         // unix seconds, minute-aligned
-  int32 window_seconds = 9;       // usually 60
-  int64 collect_ts = 10;          // collection timestamp
-  string collector_id = 11;
-  string batch_id = 12;           // "rt" | "late"
-  string trace_id = 13;
-}
+// The raw usage point type is the canonical starcloud.event.v1.UsageRecord
+// (single definition, imported above) — the wire schema on the Kafka topic
+// and the RPC ingest path must never drift apart.
 
 // HourlyUsage is the hourly aggregate produced by svc-metering and consumed by
 // svc-billing for deduction. Idempotency key agg_id = sha1(resource|item|hour)[0:24].
@@ -72,6 +58,6 @@ message DescribeMeteringDataRequest {
 }
 
 message DescribeMeteringDataResponse {
-  repeated UsageRecord raw = 1;       // when aggregated=false
+  repeated starcloud.event.v1.UsageRecord raw = 1;       // when aggregated=false
   repeated HourlyUsage hourly = 2;    // when aggregated=true
 }

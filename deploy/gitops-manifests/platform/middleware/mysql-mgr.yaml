@@ -105,9 +105,12 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
+              # Copy the shared base config FIRST, then append the per-pod
+              # server_id (append-after-copy; MySQL takes the last occurrence,
+              # overriding the server_id=0 placeholder in the template).
+              cp /etc/mysql/my.cnf /config/my.cnf
               ORDINAL=${HOSTNAME##*-}
               echo "server_id=$((ORDINAL + 100))" >> /config/my.cnf
-              cp /etc/mysql/my.cnf /config/my.cnf
           volumeMounts:
             - name: config-template
               mountPath: /etc/mysql

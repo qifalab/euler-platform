@@ -39,12 +39,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/starcloud/sc-platform/anomaly"
 	"github.com/starcloud/sc-platform/billing"
 	"github.com/starcloud/sc-platform/metering"
 	"github.com/starcloud/sc-platform/pricing"
 )
 
 const accountIDHeader = "X-Sc-Account-Id"
+
+// maxBodyBytes caps request bodies before JSON decoding (defense against
+// oversized payloads).
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// internalToken is the optional shared secret for service-to-service calls.
+// When SC_INTERNAL_TOKEN is set, every request must carry a matching
+// X-Sc-Internal-Token header. Unset (dev default) disables the check.
+var internalToken = os.Getenv("SC_INTERNAL_TOKEN")
 
 // seededResourceID matches the demo + console-bff seed for account 100123.
 const seededResourceID = "scecs-cn-north-1-01-a1b2c3d4"
@@ -181,6 +191,7 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req ingestRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
 		return
@@ -191,13 +202,25 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	qty, err := metering.ParseQuantity(req.Value)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "value: "+err.Error())
+		slog.Warn("ingest value rejected", "resource", req.ResourceID, "err", err)
+		writeErr(w, "Common.InvalidParameter", 400, "invalid value")
 		return
 	}
 	// Window = current minute, aligned. The collector writes one reading per
 	// minute window per (resource, item); the deterministic RecordID makes a
 	// retransmit collapse rather than double-charge.
 	ws := s.now().UTC().Truncate(time.Minute)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// The account that owns the resource must match the caller. For a new
+	// resource (first ingest), adopt the caller's account.
+	if owner, exists := s.accounts[req.ResourceID]; exists && owner != acct {
+		writeErr(w, "Metering.ResourceNotOwned", 403, "resource belongs to another account")
+		return
+	}
+	// s.regions / s.types are shared maps; they must only be read while
+	// holding s.mu, so the record is built inside the lock.
 	rec := metering.UsageRecord{
 		RecordID:      metering.RecordID(req.ResourceID, req.Metric, ws),
 		AccountID:     acct,
@@ -211,15 +234,6 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 		CollectTS:      s.now(),
 		CollectorID:    "http-ingest",
 		BatchID:        metering.BatchRealtime,
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// The account that owns the resource must match the caller. For a new
-	// resource (first ingest), adopt the caller's account.
-	if owner, exists := s.accounts[req.ResourceID]; exists && owner != acct {
-		writeErr(w, "Metering.ResourceNotOwned", 403, "resource belongs to another account")
-		return
 	}
 	if req.ProductCode != "" {
 		s.products[req.ResourceID] = req.ProductCode
@@ -457,7 +471,70 @@ func inPeriod(h time.Time, period string, newest time.Time) bool {
 	}
 }
 
+// handleAnomalyScan implements GET /api/v1/metering/anomaly-scan — phase-3
+// D-2 异常用量检测 (deferred from phase 2, 09§4.4 B7): runs the pkg-go/anomaly
+// z-score detector over a resource's stored usage series and returns the
+// verdict (SPIKE/DROP/NONE) plus the trailing baseline. The verdict is a SIGNAL
+// for alert-center, never a billing decision — metering does not drop or
+// relabel a usage record on an anomaly verdict (03§4.2.5 宁可重采不可漏采).
+func (s *meteringStore) handleAnomalyScan(w http.ResponseWriter, r *http.Request) {
+	if _, ok := accountIDFrom(w, r); !ok {
+		return
+	}
+	resourceID := r.URL.Query().Get("resourceId")
+	metric := r.URL.Query().Get("metric")
+	if resourceID == "" || metric == "" {
+		writeErr(w, "Metering.InvalidParameter", 400, "resourceId and metric are required")
+		return
+	}
+	key := resourceID + "|" + metric
+	s.mu.RLock()
+	records := make([]metering.UsageRecord, len(s.records[key]))
+	copy(records, s.records[key])
+	s.mu.RUnlock()
+
+	sort.Slice(records, func(i, j int) bool { return records[i].WindowStart.Before(records[j].WindowStart) })
+	series := make([]float64, 0, len(records))
+	for _, rec := range records {
+		series = append(series, float64(rec.Quantity))
+	}
+	if len(series) < 2 {
+		writeJSON(w, "OK", map[string]any{
+			"resourceId": resourceID, "metric": metric,
+			"anomalous": false, "kind": "NONE", "reason": "insufficient samples",
+		})
+		return
+	}
+	// Baseline over the trailing window (all but the latest), verdict on the
+	// latest point — the baseline never includes the point under test.
+	var b anomaly.Baseline
+	for _, x := range series[:len(series)-1] {
+		b.Add(x)
+	}
+	result := anomaly.Detect(series[len(series)-1], b.Mean, b.StdDev())
+	writeJSON(w, "OK", map[string]any{
+		"resourceId":     resourceID,
+		"metric":         metric,
+		"anomalous":      result.Anomalous,
+		"kind":           string(result.Kind),
+		"score":          result.Score,
+		"baselineMean":   b.Mean,
+		"baselineStdDev": b.StdDev(),
+	})
+}
+
+// accountIDFrom extracts the caller's account id.
+//
+// TRUST BOUNDARY: X-Sc-Account-Id is trusted only because these routes are
+// reachable exclusively via the APISIX gateway, which strips any
+// client-supplied copy and injects the authenticated account. Deployments that
+// cannot guarantee that network isolation should set SC_INTERNAL_TOKEN so
+// callers must also present the shared X-Sc-Internal-Token secret.
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	if internalToken != "" && r.Header.Get("X-Sc-Internal-Token") != internalToken {
+		writeErr(w, "Common.Forbidden", 403, "invalid internal token")
+		return 0, false
+	}
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
 		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
@@ -519,6 +596,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/metering/ingest", store.handleIngest)
 	mux.HandleFunc("GET /api/v1/metering/aggregate", store.handleAggregate)
 	mux.HandleFunc("GET /api/v1/metering/bills", store.handleBills)
+	mux.HandleFunc("GET /api/v1/metering/anomaly-scan", store.handleAnomalyScan)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

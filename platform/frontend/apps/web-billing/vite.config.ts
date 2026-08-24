@@ -12,6 +12,8 @@ export default defineConfig({
     proxy: { "/console": { target: "http://localhost:9200", changeOrigin: true,
       configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")) },
       "/api/v1/orders": { target: "http://localhost:9204", changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")) },
+      "/api/v1/catalog": { target: "http://localhost:9207", changeOrigin: true,
         configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")) } },
   },
   build: {

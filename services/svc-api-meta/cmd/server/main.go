@@ -33,7 +33,9 @@ import (
 
 func main() {
 	var (
-		httpAddr = flag.String("http", ":8080", "HTTP listen address")
+		// Dev port allocation :9201 — the console-base vite proxy forwards
+		// /api/v1/meta here; production overrides via -http / Helm values.
+		httpAddr = flag.String("http", ":9201", "HTTP listen address")
 	)
 	flag.Parse()
 
@@ -98,7 +100,7 @@ func main() {
 // service must apply: request-id injection (→ trace_id), structured access
 // logging, recover (03§2.3.4).
 func withMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(h)))
+	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(internalTokenMiddleware(h))))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

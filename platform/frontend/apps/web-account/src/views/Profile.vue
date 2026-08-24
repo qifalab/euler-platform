@@ -19,6 +19,7 @@ interface AccountProfile {
   email?: string;
   emailBound?: boolean;
   mfaEnabled?: boolean;
+  passwordSet?: boolean;
   realNameStatus?: "verified" | "unverified";
 }
 const profile = ref<AccountProfile>({});
@@ -78,8 +79,8 @@ const securityItems = computed<SecurityItem[]>(() => [
     key: "password",
     label: "登录密码",
     desc: "建议每 90 天更换一次",
-    status: "已设置",
-    tag: "success",
+    status: profile.value.passwordSet ? "已设置" : "未设置",
+    tag: profile.value.passwordSet ? "success" : "danger",
   },
   {
     key: "phone",

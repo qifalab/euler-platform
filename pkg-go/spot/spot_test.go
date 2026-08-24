@@ -24,7 +24,7 @@ func yuan(s string) pricing.Amount { return pricing.MustParseAmount(s) }
 func TestPublishOpensRecordAndPriceAtReturnsIt(t *testing.T) {
 	c := t0
 	eng := newEngine(&c)
-	p := eng.Publish("scecs", "cn-north-1", yuan("0.50"))
+	p, _ := eng.Publish("scecs", "cn-north-1", yuan("0.50"))
 	if p.PricePerHour != yuan("0.50") {
 		t.Fatalf("price = %s, want 0.50", p.PricePerHour)
 	}
@@ -44,9 +44,9 @@ func TestPublishOpensRecordAndPriceAtReturnsIt(t *testing.T) {
 func TestPublishClosesPreviousRecord(t *testing.T) {
 	c := t0
 	eng := newEngine(&c)
-	eng.Publish("scecs", "cn-north-1", yuan("0.50"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.50"))
 	c = t0.Add(10 * time.Minute)
-	eng.Publish("scecs", "cn-north-1", yuan("0.40"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.40"))
 
 	hist, err := eng.History("scecs", "cn-north-1")
 	if err != nil {
@@ -68,11 +68,11 @@ func TestPublishClosesPreviousRecord(t *testing.T) {
 func TestAppendOnlyDoesNotRewriteHistory(t *testing.T) {
 	c := t0
 	eng := newEngine(&c)
-	eng.Publish("scecs", "cn-north-1", yuan("0.50"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.50"))
 	c = t0.Add(10 * time.Minute)
-	eng.Publish("scecs", "cn-north-1", yuan("0.40"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.40"))
 	c = t0.Add(20 * time.Minute)
-	eng.Publish("scecs", "cn-north-1", yuan("0.30"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.30"))
 
 	// A cycle billed at t0+5min must ALWAYS resolve to 0.50, no matter how
 	// many later publishes occur. This is the reproducibility invariant.
@@ -96,7 +96,7 @@ func TestAppendOnlyDoesNotRewriteHistory(t *testing.T) {
 func TestPriceAtRejectsFutureCycle(t *testing.T) {
 	c := t0
 	eng := newEngine(&c)
-	eng.Publish("scecs", "cn-north-1", yuan("0.50"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.50"))
 	// A cycle one hour in the future must not bill against a price that has
 	// not been set yet.
 	if _, err := eng.PriceAt("scecs", "cn-north-1", t0.Add(time.Hour)); err == nil {
@@ -115,9 +115,9 @@ func TestPriceAtRejectsUnknownProduct(t *testing.T) {
 func TestCurrentReturnsLatestPrice(t *testing.T) {
 	c := t0
 	eng := newEngine(&c)
-	eng.Publish("scecs", "cn-north-1", yuan("0.50"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.50"))
 	c = t0.Add(10 * time.Minute)
-	eng.Publish("scecs", "cn-north-1", yuan("0.40"))
+	_, _ = eng.Publish("scecs", "cn-north-1", yuan("0.40"))
 	p, err := eng.Current("scecs", "cn-north-1")
 	if err != nil {
 		t.Fatalf("current: %v", err)

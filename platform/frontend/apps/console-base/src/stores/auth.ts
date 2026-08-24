@@ -7,6 +7,7 @@
  * resource-level checks are always backend-decided, this is UI gating (02§5.3).
  */
 import { defineStore } from "pinia";
+import { bus } from "wujie";
 
 export interface PermissionSnapshot {
   actions: string[];
@@ -68,6 +69,8 @@ export const useAuthStore = defineStore("auth", {
             const body = await res.json();
             if (body.Code === "OK" && body.Data?.accessToken) {
               this.accessToken = body.Data.accessToken;
+              // Broadcast the fresh token to every active sub-app (02§5.4).
+              bus.$emit("auth:token-refreshed", { token: this.accessToken });
               await this.fetchSession();
               return this.accessToken;
             }

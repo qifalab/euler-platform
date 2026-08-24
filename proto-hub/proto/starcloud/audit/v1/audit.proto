@@ -4,6 +4,8 @@ package starcloud.audit.v1;
 
 option go_package = "github.com/starcloud/sc-platform/proto/starcloud/audit/v1;auditv1";
 
+import "starcloud/event/v1/event.proto";
+
 // AuditService is svc-audit (审计, 03§4.4.3), the全平台操作审计采集与查询 service
 // (对标 ActionTrail). Owns high-throughput ingest from APISIX + service
 // instrumentation, tamper-evident storage, and per-account query/export.
@@ -35,7 +37,7 @@ message AuditEvent {
   string event_name = 4;         // e.g. StopInstance (OpenAPI Action / console op)
   string source_ip = 5;
   string user_agent = 6;
-  IdentitySnapshot identity = 7; // ram-user | root snapshot
+  starcloud.event.v1.IdentitySnapshot identity = 7; // ram-user | root | role snapshot
   repeated string resources = 8; // ARNs
   string decision = 9;           // "allow" | "deny" (IAM evaluation result)
   string request_params_json = 10; // sanitized request params (no secrets)
@@ -48,15 +50,8 @@ message AuditEvent {
   int64 sequence = 15;           // per-account monotonic chain index
 }
 
-// IdentitySnapshot is the actor identity at audit time (03§7 event envelope /
-// 07§3.3 identity headers). Matches starcloud.event.v1.IdentitySnapshot.
-message IdentitySnapshot {
-  string type = 1;               // "ram_user" | "root" | "role"
-  int64 account_id = 2;
-  string principal = 3;          // e.g. "user/alice"
-  string ak_id = 4;
-  bool mfa_present = 5;
-}
+// The actor identity type is the canonical starcloud.event.v1.IdentitySnapshot
+// (single definition, imported above); type values: "ram-user" | "root" | "role".
 
 // --- Request / response messages ---
 

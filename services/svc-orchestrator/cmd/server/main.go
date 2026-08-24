@@ -18,6 +18,7 @@
 //	GET  /api/v1/orchestrator/resources         — list the account's resources
 //	GET  /api/v1/orchestrator/resources/{id}    — resource detail + lifecycle
 //	POST /api/v1/orchestrator/resources/{id}/release — release a resource
+//	POST /api/v1/orchestrator/resources/{id}/actions — user lifecycle actions (stop/start/restart/upgrade)
 //
 // stdlib-HTTP service (repo convention). Envelope {RequestId,Code,Data} (03§9.3).
 package main
@@ -43,7 +44,14 @@ import (
 	"github.com/starcloud/sc-platform/resource"
 )
 
+// accountIDHeader is injected by the API gateway after authentication. The
+// service TRUSTS this header: it must only be reachable from the gateway /
+// internal network (see internalTokenMiddleware for the optional shared-secret
+// check), never exposed directly to the public internet.
 const accountIDHeader = "X-Sc-Account-Id"
+
+// maxBodyBytes caps JSON request bodies (defense against oversized payloads).
+const maxBodyBytes = 1 << 20 // 1 MiB
 
 // lifecycleStore is the in-memory resource lifecycle ledger + order mirror.
 // In production this is MySQL (sharded by account_id) + the order service.
@@ -51,13 +59,20 @@ type lifecycleStore struct {
 	mu        sync.RWMutex
 	resources map[string]*resource.Instance // ResourceID → instance
 	orders    map[int64]*order.Order        // OrderID → order (mirror for fulfilment)
+	orderRes  map[int64]string              // OrderID → ResourceID (fulfilment idempotency)
 	resSeq    int
+	// driver is the service-level provision driver singleton (created once at
+	// startup; MockDriver is internally synchronized, so it is shared safely
+	// across requests without the store lock).
+	driver provision.Driver
 }
 
 func newStore() *lifecycleStore {
 	s := &lifecycleStore{
 		resources: make(map[string]*resource.Instance),
 		orders:    make(map[int64]*order.Order),
+		orderRes:  make(map[int64]string),
+		driver:    provision.NewMockDriver(time.Now),
 	}
 	s.seed()
 	return s
@@ -73,6 +88,16 @@ func (s *lifecycleStore) seed() {
 		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
 	}
 	s.resources[inst.ResourceID] = inst
+
+	// Seed one VPC (scvpc) so network-dependent wizards (scredis / sckafka
+	// VPC dropdowns) list a real, placeable network from day one in dev.
+	vpc := &resource.Instance{
+		ResourceID: "scvpc-cn-north-1-01-vpc0a1b2c", AccountID: 100123,
+		ProductCode: "scvpc", Region: "cn-north-1", ChargeType: resource.ChargePostpaid,
+		State: resource.StateRunning, SpecCode: "scvpc.standard",
+		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
+	}
+	s.resources[vpc.ResourceID] = vpc
 }
 
 // --- fulfilment saga (03§4.3.3) ---
@@ -100,6 +125,7 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req fulfillRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
 		return
@@ -109,10 +135,11 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase A (under lock): validate the order, transition PAID → FULFILLING,
+	// register the resource row (CREATING). The driver call happens OUTSIDE the
+	// lock — a slow driver must not block every other request on the ledger.
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	// 1. Order must be PAID (the only provisioning trigger, D8 invariant).
 	om := order.NewMachine(time.Now)
 	o, exists := s.orders[req.OrderID]
 	if !exists {
@@ -126,17 +153,37 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		}
 		s.orders[req.OrderID] = o
 	}
+
+	// Fulfilment idempotency: a retry for an order that already produced a
+	// resource returns the existing resourceId (200), not a 409.
+	if resID, dup := s.orderRes[req.OrderID]; dup {
+		if inst, ok := s.resources[resID]; ok && inst.AccountID == acct {
+			resp := map[string]any{
+				"resourceId": resID, "state": string(inst.State),
+				"orderId": o.OrderID, "orderState": string(o.State),
+				"billingStart": inst.BillingStart.Format(time.RFC3339),
+			}
+			s.mu.Unlock()
+			writeJSON(w, "OK", resp)
+			return
+		}
+	}
+
+	// 1. Order must be PAID (the only provisioning trigger, D8 invariant).
 	if o.State != order.StatePaid {
-		writeErr(w, "Order.NotPaid", 409, fmt.Sprintf("订单状态 %s,仅 PAID 可履约", o.State))
+		st := o.State
+		s.mu.Unlock()
+		writeErr(w, "Order.NotPaid", 409, fmt.Sprintf("订单状态 %s,仅 PAID 可履约", st))
 		return
 	}
 
-	// 2. Transition order PAID → FULFILLING.
+	// 2. Transition order PAID → FULFILLING (Transition bumps Version itself).
 	if _, err := om.Transition(o, order.StateFulfilling, o.Version); err != nil {
-		writeErr(w, "Order.StateTransitionFailed", 409, err.Error())
+		s.mu.Unlock()
+		slog.Error("order transition to FULFILLING failed", "orderId", req.OrderID, "err", err)
+		writeErr(w, "Order.StateTransitionFailed", 409, "订单状态流转失败")
 		return
 	}
-	o.Version++
 
 	// 3. Create resource instance (CREATING).
 	s.resSeq++
@@ -151,34 +198,46 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		SpecCode: req.SpecCode, CreatedAt: time.Now(), UpdatedAt: time.Now(), Version: 1,
 	}
 	s.resources[resID] = inst
+	s.orderRes[req.OrderID] = resID
+	s.mu.Unlock()
 
-	// 4. Fan out to the ProvisionDriver. Phase-1 uses the in-process MockDriver
-	// (rc-compute in production, via gRPC ApplyResource). The driver transitions
-	// the instance CREATING → RUNNING on success.
-	driver := provision.NewMockDriver(time.Now)
+	// 4. Fan out to the ProvisionDriver (service-level singleton; MockDriver in
+	// dev, rc-compute via gRPC in production). Runs outside the ledger lock.
 	spec := provision.Spec{
 		ResourceID: resID, AccountID: acct, ProductCode: req.ProductCode,
 		ResourceType: "instance", Region: req.Region, IdempotencyKey: strconv.FormatInt(req.OrderID, 10),
 	}
-	status, err := driver.Apply(spec)
+	status, err := s.driver.Apply(spec)
+
+	// Phase B (re-lock): write the outcome back to the ledger.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rm := resource.NewMachine(time.Now)
 	if err != nil || !status.Ready() {
 		// Compensation (reverse order): mark resource failed, order → REFUNDING.
-		inst.State = resource.StateCreateFailed
-		om.Transition(o, order.StateRefunding, o.Version)
-		o.Version++
-		reason := "driver not ready"
-		if err != nil {
-			reason = err.Error()
+		if _, terr := rm.Transition(inst, resource.StateCreateFailed, inst.Version, "provision failed"); terr != nil {
+			slog.Error("resource transition to CREATE_FAILED failed", "resourceId", resID, "err", terr)
 		}
-		writeErr(w, "Provision.Failed", 500, fmt.Sprintf("开通失败,已进入退款: %s", reason))
+		if _, terr := om.Transition(o, order.StateRefunding, o.Version); terr != nil {
+			slog.Error("order transition to REFUNDING failed", "orderId", req.OrderID, "err", terr)
+		}
+		slog.Error("provision failed, compensation started", "orderId", req.OrderID, "resourceId", resID, "err", err)
+		writeErr(w, "Provision.Failed", 500, "开通失败,已进入退款")
 		return
 	}
-	inst.State = resource.StateRunning
+	if _, terr := rm.Transition(inst, resource.StateRunning, inst.Version, "provisioned"); terr != nil {
+		slog.Error("resource transition to RUNNING failed", "resourceId", resID, "err", terr)
+		writeErr(w, "Resource.StateTransitionFailed", 409, "资源状态流转失败")
+		return
+	}
 	inst.BillingStart = time.Now() // billing starts at RUNNING, never resets (D8)
 
 	// 5. Transition order FULFILLING → COMPLETED.
-	om.Transition(o, order.StateCompleted, o.Version)
-	o.Version++
+	if _, terr := om.Transition(o, order.StateCompleted, o.Version); terr != nil {
+		slog.Error("order transition to COMPLETED failed", "orderId", req.OrderID, "err", terr)
+		writeErr(w, "Order.StateTransitionFailed", 409, "订单状态流转失败")
+		return
+	}
 
 	writeJSON(w, "OK", map[string]any{
 		"resourceId": resID, "state": string(inst.State),
@@ -224,6 +283,67 @@ func (s *lifecycleStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Phase A (under lock): legal transition into RELEASING.
+	s.mu.Lock()
+	resID := r.PathValue("id")
+	inst, exists := s.resources[resID]
+	if !exists || inst.AccountID != acct {
+		s.mu.Unlock()
+		writeErr(w, "Resource.NotFound", 404, "资源不存在")
+		return
+	}
+	m := resource.NewMachine(time.Now)
+	if _, err := m.Transition(inst, resource.StateReleasing, inst.Version, "user release"); err != nil {
+		s.mu.Unlock()
+		slog.Error("resource transition to RELEASING failed", "resourceId", resID, "err", err)
+		writeErr(w, "Resource.StateTransitionFailed", 409, "资源状态流转失败")
+		return
+	}
+	s.mu.Unlock()
+
+	// Reclaim via the driver outside the ledger lock (Delete is idempotent).
+	if err := s.driver.Delete(resID); err != nil {
+		slog.Error("driver delete failed", "resourceId", resID, "err", err)
+		writeErr(w, "Resource.ReleaseFailed", 500, "资源回收失败,请重试")
+		return
+	}
+
+	// Phase B: legal transition RELEASING → RELEASED.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := m.Transition(inst, resource.StateReleased, inst.Version, "released"); err != nil {
+		slog.Error("resource transition to RELEASED failed", "resourceId", resID, "err", err)
+		writeErr(w, "Resource.StateTransitionFailed", 409, "资源状态流转失败")
+		return
+	}
+	writeJSON(w, "OK", map[string]any{"resourceId": resID, "state": string(inst.State)})
+}
+
+// actionRequest is the body of POST /api/v1/orchestrator/resources/{id}/actions.
+type actionRequest struct {
+	Action   string `json:"action"`             // stop | start | restart | upgrade
+	SpecCode string `json:"specCode,omitempty"` // upgrade only: target SKU
+}
+
+// handleResourceAction applies a user-initiated lifecycle action through the
+// SAME state machine the saga uses (pkg-go/resource transition table) — there
+// is no second, looser path for console buttons. stop/start/restart map onto
+// the RUNNING↔STOPPED edges; upgrade rides the UPGRADING intermediate state
+// (RUNNING → UPGRADING → RUNNING) and rewrites SpecCode. The MockDriver is
+// fire-and-forget for power actions in phase-2 (the ledger is the authority);
+// production fans out to rc-compute the same way Apply/Delete do.
+func (s *lifecycleStore) handleResourceAction(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	var req actionRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	resID := r.PathValue("id")
@@ -232,15 +352,49 @@ func (s *lifecycleStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Resource.NotFound", 404, "资源不存在")
 		return
 	}
+
 	m := resource.NewMachine(time.Now)
-	if _, err := m.Transition(inst, resource.StateReleasing, inst.Version, "user release"); err != nil {
-		writeErr(w, "Resource.StateTransitionFailed", 409, err.Error())
+	transition := func(to resource.State, reason string) bool {
+		if _, err := m.Transition(inst, to, inst.Version, reason); err != nil {
+			slog.Error("resource action transition failed", "resourceId", resID, "to", to, "err", err)
+			writeErr(w, "Resource.StateTransitionFailed", 409,
+				fmt.Sprintf("资源状态 %s 不允许 %s", inst.State, req.Action))
+			return false
+		}
+		return true
+	}
+
+	switch req.Action {
+	case "stop":
+		if !transition(resource.StateStopped, "user stop") {
+			return
+		}
+	case "start":
+		if !transition(resource.StateRunning, "user start") {
+			return
+		}
+	case "restart":
+		// Two legal edges in sequence; the state machine guards each.
+		if !transition(resource.StateStopped, "user restart: stop") || !transition(resource.StateRunning, "user restart: start") {
+			return
+		}
+	case "upgrade":
+		if req.SpecCode == "" {
+			writeErr(w, "Common.InvalidParameter", 400, "upgrade requires specCode")
+			return
+		}
+		if !transition(resource.StateUpgrading, "user upgrade") || !transition(resource.StateRunning, "upgrade applied") {
+			return
+		}
+		inst.SpecCode = req.SpecCode
+	default:
+		writeErr(w, "Common.InvalidParameter", 400, "action must be stop/start/restart/upgrade")
 		return
 	}
-	inst.Version++
-	inst.State = resource.StateReleased
-	inst.UpdatedAt = time.Now()
-	writeJSON(w, "OK", map[string]any{"resourceId": resID, "state": string(inst.State)})
+
+	writeJSON(w, "OK", map[string]any{
+		"resourceId": resID, "state": string(inst.State), "specCode": inst.SpecCode,
+	})
 }
 
 // --- helpers ---
@@ -255,6 +409,9 @@ func instanceToMap(i *resource.Instance) map[string]any {
 }
 
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+	// authentication; this service relies on network isolation (and optionally
+	// internalTokenMiddleware) rather than re-authenticating.
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
 		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
@@ -292,6 +449,24 @@ func requestIDMiddleware(h http.Handler) http.Handler {
 	})
 }
 
+// internalTokenMiddleware optionally enforces an internal shared secret: when
+// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Sc-Account-Id trust). Unset (dev default) = no check.
+func internalTokenMiddleware(h http.Handler) http.Handler {
+	token := os.Getenv("SC_INTERNAL_TOKEN")
+	if token == "" {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sc-Internal-Token") != token {
+			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func recoverMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -317,8 +492,9 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orchestrator/resources", store.handleListResources)
 	mux.HandleFunc("GET /api/v1/orchestrator/resources/{id}", store.handleResourceDetail)
 	mux.HandleFunc("POST /api/v1/orchestrator/resources/{id}/release", store.handleRelease)
+	mux.HandleFunc("POST /api/v1/orchestrator/resources/{id}/actions", store.handleResourceAction)
 
-	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("svc-orchestrator listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

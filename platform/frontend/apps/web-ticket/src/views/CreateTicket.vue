@@ -1,24 +1,32 @@
 <script setup lang="ts">
-/** Create ticket form (02§1.2). Posts to svc-ticket POST /api/v1/tickets. */
+/** Create ticket form (02§1.2). Posts to svc-ticket POST /api/v1/tickets.
+ *  下拉枚举来自 GET /api/v1/tickets/meta,option.value 即后端枚举值。 */
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { createSDK } from "@sc/sdk";
+import { useTicketMeta } from "@/useTicketMeta";
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
-const form = ref({ type: "故障", priority: "普通", title: "", desc: "", contact: "" });
+const { categories, priorities, ready } = useTicketMeta();
+
+const form = ref({ type: "", priority: "", title: "", desc: "", contact: "" });
 const submitting = ref(false);
 
-// Map the form's Chinese option labels to the backend enum values.
-const PRIORITY_MAP: Record<string, string> = { 普通: "NORMAL", 紧急: "HIGH" };
+// 枚举就绪后对齐表单初值,防止提交空值(meta 失败则留空由提交校验兜底)。
+ready.then(() => {
+  if (!form.value.type && categories.value.length) form.value.type = categories.value[0].value;
+  if (!form.value.priority && priorities.value.length) form.value.priority = priorities.value[0].value;
+});
 
 async function submit() {
+  if (!form.value.type || !form.value.priority) { ElMessage.warning("请选择工单类型与优先级"); return; }
   if (!form.value.title || !form.value.desc) { ElMessage.warning("请填写标题和描述"); return; }
   submitting.value = true;
   try {
     const res = await sdk.post<{ ticket_id: string }>("/api/v1/tickets", {
       category: form.value.type,
-      priority: PRIORITY_MAP[form.value.priority] ?? "NORMAL",
+      priority: form.value.priority,
       title: form.value.title,
       message: form.value.desc,
     });
@@ -39,11 +47,13 @@ async function submit() {
     <form class="ct-form" @submit.prevent="submit">
       <label class="ct-field"><span>工单类型</span>
         <select v-model="form.type">
-          <option>故障</option><option>咨询</option><option>账单</option><option>需求</option>
+          <option v-for="opt in categories" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
       </label>
       <label class="ct-field"><span>优先级</span>
-        <select v-model="form.priority"><option>普通</option><option>紧急</option></select>
+        <select v-model="form.priority">
+          <option v-for="opt in priorities" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
       </label>
       <label class="ct-field"><span>标题</span>
         <input v-model="form.title" placeholder="简要描述问题" />

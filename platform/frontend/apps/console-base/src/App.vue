@@ -5,17 +5,24 @@
  * area. The top bar and content containers are owned by the shell; sub-apps
  * register their menu/breadcrumb via the bridge but never touch this DOM.
  */
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { RouterView } from "vue-router";
 import { RegionSelector } from "@sc/console-kit";
 import { useRegistry } from "./registry";
+import { useRegionStore } from "./stores/region";
 import { useRouter } from "vue-router";
 import GlobalSearch from "./GlobalSearch.vue";
 import Breadcrumb from "./Breadcrumb.vue";
 
 const registry = useRegistry();
 const router = useRouter();
-const regionId = ref("cn-north-1");
+const regionStore = useRegionStore();
+// v-model proxy: reads from the global region store, writes via setRegion
+// (which broadcasts region:changed on the Wujie bus).
+const regionId = computed({
+  get: () => regionStore.regionId,
+  set: (id: string) => regionStore.setRegion(id),
+});
 const menuOpen = ref(false);
 const dark = ref(false);
 const searchOpen = ref(false);
@@ -91,6 +98,7 @@ function toggleDark() {
       </button>
 
       <a class="shell-nav-link" href="#" @click.prevent="router.push('/billing')">费用</a>
+      <a class="shell-nav-link" href="#" @click.prevent="router.push('/marketplace')">市场</a>
       <a class="shell-nav-link" href="#" @click.prevent="router.push('/explorer')">API 调试</a>
       <a class="shell-nav-link" href="#" @click.prevent="router.push('/ticket')">工单</a>
       <span class="shell-account">账号 ▾</span>

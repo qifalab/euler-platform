@@ -38,9 +38,27 @@ export default defineConfig({
           r.setHeader("X-Sc-TraceId", `monitor-${Date.now().toString(36)}`);
         }),
       },
-      // Real alert rules + metrics → svc-monitor (03§4.4.1).
+      // Real alert rules + metrics + M-9 SLO/chaos → svc-monitor (03§4.4.1).
       "/api/v1/monitor": {
         target: "http://localhost:9202",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+      },
+      // 告警中心 (phase-3 D-1) → alert-center.
+      "/api/v1/alertcenter": {
+        target: "http://localhost:9213",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+      },
+      // 异常检测 (phase-3 D-2) → svc-metering.
+      "/api/v1/metering": {
+        target: "http://localhost:9206",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+      },
+      // 地域与容灾 (phase-3 M-8) → svc-catalog.
+      "/api/v1/catalog": {
+        target: "http://localhost:9207",
         changeOrigin: true,
         configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
       },

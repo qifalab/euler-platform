@@ -70,12 +70,13 @@ const NonceTTL = cps1.MaxClockSkew + time.Minute
 
 // Failure reasons map to the 403 error codes in 03§9.3 / 07§4.1.
 var (
-	ErrRequestTimeTooSkewed = errors.New("RequestTimeTooSkewed")
-	ErrInvalidAccessKeyID   = errors.New("InvalidAccessKeyId")
-	ErrSecurityTokenExpired = errors.New("SecurityTokenExpired")
+	ErrRequestTimeTooSkewed  = errors.New("RequestTimeTooSkewed")
+	ErrInvalidAccessKeyID    = errors.New("InvalidAccessKeyId")
+	ErrSecurityTokenExpired  = errors.New("SecurityTokenExpired")
 	ErrSignatureDoesNotMatch = errors.New("SignatureDoesNotMatch")
-	ErrSignatureNonceUsed   = errors.New("SignatureNonceUsed")
-	ErrAccountUnusable      = errors.New("AccountUnusable")
+	ErrSignatureNonceUsed    = errors.New("SignatureNonceUsed")
+	ErrSignatureNonceMissing = errors.New("SignatureNonceMissing")
+	ErrAccountUnusable       = errors.New("AccountUnusable")
 )
 
 // Request is what the gateway forwards for verification.
@@ -96,10 +97,10 @@ type Request struct {
 
 // Identity is the verified caller, injected downstream as request headers.
 type Identity struct {
-	AccountID int64
-	AKID      string
-	Principal string // e.g. "user/alice"; empty for master-account keys
-	OwnerType accesskey.OwnerType
+	AccountID  int64
+	AKID       string
+	Principal  string // e.g. "user/alice"; empty for master-account keys
+	OwnerType  accesskey.OwnerType
 	MFAPresent bool
 }
 
@@ -184,8 +185,14 @@ func (v *Verifier) Verify(req Request, now time.Time) (Identity, error) {
 
 	// ⑤ Nonce dedup. Deliberately after signature verification: an attacker
 	// must forge a valid signature before they can burn nonce-store capacity.
-	nonce := header(req.Headers, cps1.NonceHeader)
-	if nonce != "" && v.Nonces != nil {
+	// When a nonce store is configured, the nonce header is MANDATORY: letting
+	// a request omit it would let any replayer bypass the dedup entirely by
+	// stripping the header, which makes the whole store decorative.
+	if v.Nonces != nil {
+		nonce := header(req.Headers, cps1.NonceHeader)
+		if nonce == "" {
+			return Identity{}, ErrSignatureNonceMissing
+		}
 		fresh, err := v.Nonces.SetNX("sec:nonce:"+ak+":"+nonce, NonceTTL)
 		if err != nil {
 			// Fail closed: if the replay store is unavailable we cannot prove

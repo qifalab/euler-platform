@@ -505,6 +505,30 @@ importers:
         specifier: ^4.3.0
         version: 4.6.4(vue@3.5.41(typescript@5.9.3))
 
+  apps/web-marketplace:
+    dependencies:
+      '@sc/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@sc/tokens':
+        specifier: workspace:*
+        version: link:../../packages/tokens
+      '@sc/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@sc/wujie-bridge':
+        specifier: workspace:*
+        version: link:../../packages/wujie-bridge
+      element-plus:
+        specifier: ^2.7.0
+        version: 2.14.4(vue@3.5.41(typescript@5.9.3))
+      vue:
+        specifier: ^3.4.0
+        version: 3.5.41(typescript@5.9.3)
+      vue-router:
+        specifier: ^4.3.0
+        version: 4.6.4(vue@3.5.41(typescript@5.9.3))
+
   apps/web-ticket:
     dependencies:
       '@sc/sdk':

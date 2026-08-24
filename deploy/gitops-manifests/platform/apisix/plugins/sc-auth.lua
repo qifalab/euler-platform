@@ -56,8 +56,12 @@ local schema = {
         -- metadata); a generous ceiling still fails fast under trouble.
         timeout_ms = { type = "integer", minimum = 50, maximum = 2000, default = 500 },
         -- Nacos-published public key for JWT verification; rotation is by kid
-        -- (04§3.4).
+        -- (04§3.4). Either inline (jwt_public_key) or, preferred in K8s, a
+        -- file path to the mounted sc-jwt-public-key Secret
+        -- (jwt_public_key_file) — route files must not rely on ${VAR}
+        -- interpolation, which APISIX does not perform in route config.
         jwt_public_key = { type = "string" },
+        jwt_public_key_file = { type = "string" },
     },
     required = { "mode" },
 }
@@ -77,10 +81,36 @@ function _M.check_schema(conf)
     if conf.mode == "signature" and (not conf.region or not conf.service) then
         return false, "signature mode requires region and service"
     end
-    if conf.mode == "jwt" and not conf.jwt_public_key then
-        return false, "jwt mode requires jwt_public_key"
+    if conf.mode == "jwt" and not (conf.jwt_public_key or conf.jwt_public_key_file) then
+        return false, "jwt mode requires jwt_public_key or jwt_public_key_file"
     end
     return true
+end
+
+-- jwt_public_key_cache memoises Secret-mounted public keys by path. The
+-- kubelet updates the mounted file on Secret rotation; the cache is refreshed
+-- lazily every 60s so a rotated key is picked up without a reload.
+local jwt_public_key_cache = {}
+
+local function get_jwt_public_key(conf)
+    if conf.jwt_public_key then
+        return conf.jwt_public_key
+    end
+    local path = conf.jwt_public_key_file
+    local cached = jwt_public_key_cache[path]
+    local now = ngx.time()
+    if cached and (now - cached.at) < 60 then
+        return cached.key
+    end
+    local f, err = io.open(path, "r")
+    if not f then
+        core.log.error("sc-auth: cannot read jwt_public_key_file ", path, ": ", err)
+        return cached and cached.key or nil
+    end
+    local key = f:read("*a")
+    f:close()
+    jwt_public_key_cache[path] = { key = key, at = now }
+    return key
 end
 
 -- strip_client_identity_headers removes any X-Sc-* header the client sent.
@@ -201,7 +231,11 @@ local function verify_jwt(conf, ctx)
         return deny(ctx, 401, "IAM.Unauthorized", "malformed authorization header")
     end
 
-    local verified = jwt:verify(conf.jwt_public_key, token)
+    local public_key = get_jwt_public_key(conf)
+    if not public_key then
+        return deny(ctx, 503, "Common.ServiceUnavailable", "jwt public key unavailable")
+    end
+    local verified = jwt:verify(public_key, token)
     if not verified or not verified.verified then
         return deny(ctx, 403, "IAM.InvalidToken", "token verification failed")
     end

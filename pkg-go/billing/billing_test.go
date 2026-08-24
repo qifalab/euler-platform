@@ -20,16 +20,16 @@ func newEngine() *Engine {
 
 func usage(qty string, covered int) metering.HourlyUsage {
 	return metering.HourlyUsage{
-		AggID:         metering.AggID("scecs-cn-north-1-01-a1b2c3d4", "cpu_core_hour", billHour),
-		AccountID:     100123,
-		Region:        "cn-north-1",
-		ResourceType:  "ecs",
-		ResourceID:    "scecs-cn-north-1-01-a1b2c3d4",
-		MeteringItem:  "cpu_core_hour",
-		TotalQuantity: metering.MustParseQuantity(qty),
-		HourStart:     billHour,
-		CoveredRatio:  covered,
-		WindowsSeen:   covered * 60 / 100,
+		AggID:           metering.AggID("scecs-cn-north-1-01-a1b2c3d4", "cpu_core_hour", billHour),
+		AccountID:       100123,
+		Region:          "cn-north-1",
+		ResourceType:    "ecs",
+		ResourceID:      "scecs-cn-north-1-01-a1b2c3d4",
+		MeteringItem:    "cpu_core_hour",
+		TotalQuantity:   metering.MustParseQuantity(qty),
+		HourStart:       billHour,
+		CoveredRatio:    covered,
+		WindowsSeen:     covered * 60 / 100,
 		WindowsExpected: 60,
 	}
 }
@@ -185,10 +185,14 @@ func TestShortfallEntersArrearsNotNegativeBalance(t *testing.T) {
 	if s.Charge.PayAmount.String() != "0.3" {
 		t.Fatalf("cash paid = %s, want 0.3", s.Charge.PayAmount)
 	}
-	// The charge does NOT reconcile, precisely because part of it is unpaid —
-	// that is what the arrears flag exists to explain.
-	if s.Charge.Reconciles() {
-		t.Fatal("a charge with a shortfall must not report as fully deducted")
+	// The charge DOES reconcile: the unpaid part is explained by the recorded
+	// shortfall (deductions + shortfall = pretax), so an arrears line does not
+	// keep the monthly bill unreconcilable forever.
+	if !s.Charge.Reconciles() {
+		t.Fatal("a charge whose shortfall is recorded must reconcile")
+	}
+	if s.Charge.Shortfall.String() != "0.2" {
+		t.Fatalf("charge shortfall = %s, want 0.2", s.Charge.Shortfall)
 	}
 }
 

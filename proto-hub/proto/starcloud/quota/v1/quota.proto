@@ -14,7 +14,7 @@ option go_package = "github.com/starcloud/sc-platform/proto/starcloud/quota/v1;q
 //   ReleaseOccupy   释放回退
 // The occupy token carries a TTL: if it is not committed before expiry it is
 // auto-released, preventing悬挂 (dangling) reservations (03§4.3.2).
-message QuotaService {
+service QuotaService {
   // CheckAndOccupy pre-checks the quota and reserves amount, returning a
   // TTL-bounded occupy token. Called by svc-order (下单预检, 03§5.3 step 7)
   // and svc-orchestrator (履约占用, 03§5.3 step 11). On hard-limit breach

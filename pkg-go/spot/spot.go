@@ -50,7 +50,7 @@ type Price struct {
 	ProductCode string
 	RegionID    string
 	// PricePerHour is the floating unit price for one billing-unit-hour.
-	PricePerHour pricing.Amount
+	PricePerHour  pricing.Amount
 	EffectiveFrom time.Time
 	// EffectiveTo is the open end; zero means the price is current. The next
 	// record's EffectiveFrom bounds it.
@@ -72,6 +72,7 @@ func (p Price) InForce(t time.Time) bool {
 var (
 	ErrNoPriceHistory = errors.New("spot: no price history for product/region")
 	ErrFutureCycle    = errors.New("spot: billing cycle is in the future")
+	ErrNegativePrice  = errors.New("spot: price must not be negative")
 )
 
 // Pricer answers "what was the spot price for this product/region at time t".
@@ -84,9 +85,9 @@ type Pricer interface {
 // Engine is the floating-price engine. It holds an append-only price log per
 // (product, region) and answers historical and current price queries.
 type Engine struct {
-	mu    sync.RWMutex
-	logs  map[string][]Price // key = productCode + "|" + regionID
-	now   func() time.Time
+	mu   sync.RWMutex
+	logs map[string][]Price // key = productCode + "|" + regionID
+	now  func() time.Time
 }
 
 // NewEngine builds an Engine.
@@ -104,9 +105,14 @@ func key(productCode, regionID string) string { return productCode + "|" + regio
 // keeping the log contiguous and append-only. Returns the published Price.
 //
 // A price may not go below zero (a negative spot price is a market error, not
-// a subsidy). Zero is permitted and means the instance is effectively free for
-// the cycle — a floor the platform sets deliberately, never by accident.
-func (e *Engine) Publish(productCode, regionID string, pricePerHour pricing.Amount) Price {
+// a subsidy) — a negative input is rejected with ErrNegativePrice before it
+// can enter the append-only log. Zero is permitted and means the instance is
+// effectively free for the cycle — a floor the platform sets deliberately,
+// never by accident.
+func (e *Engine) Publish(productCode, regionID string, pricePerHour pricing.Amount) (Price, error) {
+	if pricePerHour.IsNegative() {
+		return Price{}, fmt.Errorf("%w: %s", ErrNegativePrice, pricePerHour)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	k := key(productCode, regionID)
@@ -127,7 +133,7 @@ func (e *Engine) Publish(productCode, regionID string, pricePerHour pricing.Amou
 		EffectiveFrom: now,
 	}
 	e.logs[k] = append(hist, p)
-	return p
+	return p, nil
 }
 
 // PriceAt implements Pricer.

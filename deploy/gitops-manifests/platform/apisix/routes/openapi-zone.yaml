@@ -32,6 +32,8 @@ routes:
     # and match the registration side exactly, or discovery silently returns no
     # upstreams (selection pit #2). Group == service name (04§4.3).
     upstream:
+      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
+      # Nacos discovery returns no upstream until the product service ships.
       service_name: svc-scecs@@svc-scecs
       discovery_type: nacos
       type: roundrobin
@@ -56,7 +58,7 @@ routes:
 
       sc-auth:
         mode: signature
-        verify_endpoint: http://svc-iam.business.svc/internal/openapi/verify
+        verify_endpoint: http://svc-iam.starcloud-svc-iam.svc:9101/internal/openapi/verify
         # region/service are bound to the ROUTE. They participate in the
         # derived signing key, so a signature scoped to scecs cannot be
         # replayed against scoss (07§4.1).
@@ -65,7 +67,7 @@ routes:
         timeout_ms: 500
 
       sc-authorize:
-        check_access_endpoint: http://svc-iam.business.svc/internal/authz/check
+        check_access_endpoint: http://svc-iam.starcloud-svc-iam.svc:9101/internal/authz/check
         # Action is multiplexed via the RPC-style Action parameter. The prefix
         # is pinned to this product so a caller cannot name another product's
         # action (04§3.2).
@@ -83,7 +85,9 @@ routes:
         key: http_x_sc_ak_id
         policy: redis-cluster
         redis_cluster_nodes:
-          - redis-cluster.mw-data.svc:6379
+          - redis-shard-0-headless.mw-cache.svc:6379
+          - redis-shard-1-headless.mw-cache.svc:6379
+          - redis-shard-2-headless.mw-cache.svc:6379
         redis_cluster_name: sc-redis-cluster
         rejected_code: 429
         rejected_msg: '{"Code":"Common.Throttling","Message":"AK quota exceeded"}'
@@ -91,11 +95,11 @@ routes:
       sc-audit:
         topic: cloud.sys.audit.action
         brokers:
-          - host: kafka-0.kafka-headless.mw-core.svc
+          - host: kafka-0.kafka-headless.mw-mq.svc
             port: 9092
-          - host: kafka-1.kafka-headless.mw-core.svc
+          - host: kafka-1.kafka-headless.mw-mq.svc
             port: 9092
-          - host: kafka-2.kafka-headless.mw-core.svc
+          - host: kafka-2.kafka-headless.mw-mq.svc
             port: 9092
 
   # ---------------------------------------------------------------------------
@@ -119,6 +123,8 @@ routes:
     vars:
       - ["arg_Action", "~~", ".+"]
     upstream:
+      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
+      # Nacos discovery returns no upstream until the product service ships.
       service_name: svc-scoss@@svc-scoss
       discovery_type: nacos
       type: roundrobin
@@ -144,11 +150,11 @@ routes:
         key_type: var
         key: http_x_sc_ak_id
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
       sc-audit:
         brokers:
-          - { host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }
+          - { host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }
 
   - id: openapi-scoss-data
     name: openapi-storage-scoss-data
@@ -188,6 +194,8 @@ routes:
     hosts: [scrds.api.starcloud.cn]
     uris: [/*]
     upstream:
+      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
+      # Nacos discovery returns no upstream until the product service ships.
       service_name: svc-scrds@@svc-scrds
       discovery_type: nacos
       type: roundrobin
@@ -201,16 +209,18 @@ routes:
         key_type: var
         key: http_x_sc_ak_id
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   - id: openapi-scvpc
     name: openapi-network-scvpc
     hosts: [scvpc.api.starcloud.cn]
     uris: [/*]
     upstream:
+      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
+      # Nacos discovery returns no upstream until the product service ships.
       service_name: svc-scvpc@@svc-scvpc
       discovery_type: nacos
       type: roundrobin
@@ -224,16 +234,18 @@ routes:
         key_type: var
         key: http_x_sc_ak_id
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   - id: openapi-scbs
     name: openapi-storage-scbs
     hosts: [scbs.api.starcloud.cn]
     uris: [/*]
     upstream:
+      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
+      # Nacos discovery returns no upstream until the product service ships.
       service_name: svc-scbs@@svc-scbs
       discovery_type: nacos
       type: roundrobin
@@ -247,16 +259,18 @@ routes:
         key_type: var
         key: http_x_sc_ak_id
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   - id: openapi-sceip
     name: openapi-network-sceip
     hosts: [sceip.api.starcloud.cn]
     uris: [/*]
     upstream:
+      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
+      # Nacos discovery returns no upstream until the product service ships.
       service_name: svc-sceip@@svc-sceip
       discovery_type: nacos
       type: roundrobin
@@ -270,18 +284,20 @@ routes:
         key_type: var
         key: http_x_sc_ak_id
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   - id: openapi-scmon
     name: openapi-monitor-scmon
     hosts: [scmon.api.starcloud.cn]
     uris: [/*]
     upstream:
-      service_name: svc-monitor@@svc-monitor
-      discovery_type: nacos
+      # Real cluster Service (svc-monitor listens :9202; namespace from the
+      # ApplicationSet: starcloud-svc-monitor).
+      nodes:
+        "svc-monitor.starcloud-svc-monitor.svc:9202": 1
       type: roundrobin
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
@@ -293,10 +309,10 @@ routes:
         key_type: var
         key: http_x_sc_ak_id
         policy: redis-cluster
-        redis_cluster_nodes: ["redis-cluster.mw-data.svc:6379"]
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: sc-redis-cluster
       sc-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-core.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
 # Global rules applied to every route in this zone (04§3.1).
 global_rules:

@@ -20,6 +20,7 @@ const sandboxed = inWujieSandbox();
         <router-link v-if="auth.isAuthenticated" to="/profile">账号信息</router-link>
         <router-link v-if="auth.isAuthenticated" to="/ram/users">RAM 用户</router-link>
         <router-link v-if="auth.isAuthenticated" to="/ak">AccessKey</router-link>
+        <router-link v-if="auth.isAuthenticated" to="/sts">STS 临时凭证</router-link>
       </template>
       <template #actions>
         <a class="account-console" href="https://console.starcloud.cn">返回控制台</a>

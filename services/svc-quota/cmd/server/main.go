@@ -37,7 +37,12 @@ import (
 	"github.com/starcloud/sc-platform/quota"
 )
 
+// accountIDHeader is injected by the API gateway after authentication (see
+// TRUST NOTE in accountIDFrom).
 const accountIDHeader = "X-Sc-Account-Id"
+
+// maxBodyBytes caps JSON request bodies.
+const maxBodyBytes = 1 << 20 // 1 MiB
 
 // quotaStore is an in-memory quota.Store. Production uses MySQL (sharded by
 // account_id, version column for the optimistic lock) with Redis as a read
@@ -47,6 +52,10 @@ type quotaStore struct {
 	defs   map[string]quota.Definition
 	usage  map[string]quota.Usage
 	tokens map[string]quota.Token
+	// idem maps a client idempotency key (scoped by account) to the token id it
+	// produced, so a retried occupy with the same key does not double-count
+	// Occupying. Production: unique index on (account_id, idempotency_key).
+	idem map[string]string
 }
 
 func newQuotaStore() *quotaStore {
@@ -54,6 +63,7 @@ func newQuotaStore() *quotaStore {
 		defs:   make(map[string]quota.Definition),
 		usage:  make(map[string]quota.Usage),
 		tokens: make(map[string]quota.Token),
+		idem:   make(map[string]string),
 	}
 	s.seed()
 	return s
@@ -186,6 +196,34 @@ type occupyRequest struct {
 	Region       string `json:"region"`
 	Count        int    `json:"count"`
 	BizKey       string `json:"bizKey"` // the order/saga this reservation belongs to
+	// IdempotencyKey is a client-supplied retry key: a repeated occupy with the
+	// same key returns the original reservation instead of double-counting
+	// Occupying. Optional (empty = every call reserves anew).
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// idemKey scopes a client idempotency key by account.
+func idemKey(accountID int64, key string) string {
+	return fmt.Sprintf("%d|%s", accountID, key)
+}
+
+// lookupIdem returns the still-live token previously produced for this
+// idempotency key, if any.
+func (s *quotaStore) lookupIdem(accountID int64, key string) (quota.Token, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tokID, ok := s.idem[idemKey(accountID, key)]
+	if !ok {
+		return quota.Token{}, false
+	}
+	tok, ok := s.tokens[tokID]
+	return tok, ok
+}
+
+func (s *quotaStore) recordIdem(accountID int64, key, tokenID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idem[idemKey(accountID, key)] = tokenID
 }
 
 func (s *quotaStore) handleOccupy(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +232,7 @@ func (s *quotaStore) handleOccupy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req occupyRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
 		return
@@ -212,6 +251,14 @@ func (s *quotaStore) handleOccupy(w http.ResponseWriter, r *http.Request) {
 	if req.BizKey == "" {
 		req.BizKey = fmt.Sprintf("acct-%d", acct)
 	}
+	// Idempotent replay: same key → return the existing reservation, no new
+	// Occupying accrual.
+	if req.IdempotencyKey != "" {
+		if tok, hit := s.lookupIdem(acct, req.IdempotencyKey); hit {
+			writeOccupyOK(w, tok)
+			return
+		}
+	}
 	mgr := quota.NewManager(s, time.Now, nil)
 	tok, err := mgr.CheckAndOccupy(acct, quotaCodeFor(req.ProductCode), req.Region, req.Count, req.BizKey)
 	if err != nil {
@@ -225,10 +272,18 @@ func (s *quotaStore) handleOccupy(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, quota.ErrInvalidAmount):
 			writeErr(w, "Common.InvalidParameter", 400, err.Error())
 		default:
-			writeErr(w, "Quota.OccupyFailed", 500, err.Error())
+			slog.Error("quota occupy failed", "account", acct, "err", err)
+			writeErr(w, "Quota.OccupyFailed", 500, "配额预占失败")
 		}
 		return
 	}
+	if req.IdempotencyKey != "" {
+		s.recordIdem(acct, req.IdempotencyKey, tok.TokenID)
+	}
+	writeOccupyOK(w, tok)
+}
+
+func writeOccupyOK(w http.ResponseWriter, tok quota.Token) {
 	writeJSON(w, "OK", map[string]any{
 		"reservationId": tok.TokenID,
 		"quotaCode":     tok.QuotaCode,
@@ -249,6 +304,7 @@ func (s *quotaStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req releaseRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
 		return
@@ -267,7 +323,8 @@ func (s *quotaStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := mgr.ReleaseOccupy(req.ReservationId); err != nil {
-		writeErr(w, "Quota.ReleaseFailed", 500, err.Error())
+		slog.Error("quota release failed", "account", acct, "reservationId", req.ReservationId, "err", err)
+		writeErr(w, "Quota.ReleaseFailed", 500, "配额释放失败")
 		return
 	}
 	writeJSON(w, "OK", map[string]any{"reservationId": req.ReservationId, "released": true})
@@ -310,6 +367,9 @@ func (s *quotaStore) handleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+	// authentication; this service relies on network isolation (and optionally
+	// internalTokenMiddleware) rather than re-authenticating.
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
 		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
@@ -347,6 +407,24 @@ func requestIDMiddleware(h http.Handler) http.Handler {
 	})
 }
 
+// internalTokenMiddleware optionally enforces an internal shared secret: when
+// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Sc-Account-Id trust). Unset (dev default) = no check.
+func internalTokenMiddleware(h http.Handler) http.Handler {
+	token := os.Getenv("SC_INTERNAL_TOKEN")
+	if token == "" {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sc-Internal-Token") != token {
+			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func recoverMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -372,7 +450,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/quota/release", store.handleRelease)
 	mux.HandleFunc("GET /api/v1/quota/usage", store.handleUsage)
 
-	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("svc-quota listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

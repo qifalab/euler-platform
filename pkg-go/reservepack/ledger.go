@@ -49,7 +49,9 @@ func New(store Store, now func() time.Time, nextEntryID func() int64) *Ledger {
 
 // Purchase credits quota for a freshly settled pack order. Idempotent: a
 // replay of the same idempotency key is a no-op. Remaining may not exceed
-// FaceValue (refunds aside, a pack is credited exactly once).
+// FaceValue (refunds aside, a pack is credited exactly once) — which is also
+// why an ALREADY-EXISTING packID under a different order key is rejected:
+// re-purchasing would silently reset a partially consumed pack to full.
 func (l *Ledger) Purchase(packID string, accountID int64, productCode, skuCode string, faceValue pricing.Amount, expireAt time.Time, orderKey string) (Pack, Entry, error) {
 	if orderKey == "" {
 		return Pack{}, Entry{}, ErrMissingIdempotency
@@ -60,6 +62,11 @@ func (l *Ledger) Purchase(packID string, accountID int64, productCode, skuCode s
 		// Idempotent replay: return the pack as it stands.
 		p, _, gerr := l.store.GetPack(packID)
 		return p, existing, gerr
+	}
+	if _, ok, err := l.store.GetPack(packID); err != nil {
+		return Pack{}, Entry{}, err
+	} else if ok {
+		return Pack{}, Entry{}, fmt.Errorf("%w: %s", ErrPackExists, packID)
 	}
 
 	now := l.now()

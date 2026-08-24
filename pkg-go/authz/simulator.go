@@ -35,7 +35,7 @@ type Verdict struct {
 	Allowed           bool
 	DecidingStatement int    // index into the deciding policy's Statements, -1 if default-deny
 	DecidingPolicy    string // deciding NamedPolicy.Name, "" if default-deny
-	Reason             string // "explicit_deny" | "allow" | "default_deny" | "no_policy"
+	Reason            string // "explicit_deny" | "allow" | "default_deny" | "no_policy"
 	Principal         string // echoed for audit/display
 }
 
@@ -74,7 +74,7 @@ func SimulateCtx(policies []NamedPolicy, principal string, req Request) Verdict 
 			if !matchResource(st.Resource, req.Resource) {
 				continue
 			}
-			if !matchConditions(st.Condition, req.Context) {
+			if !matchConditions(st.Condition, req.Context, st.Effect) {
 				continue
 			}
 			if st.Effect == EffectDeny {

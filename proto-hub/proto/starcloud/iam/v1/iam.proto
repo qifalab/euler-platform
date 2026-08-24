@@ -68,10 +68,10 @@ enum AccountStatus {
 }
 
 enum RealNameStatus {
-  REAL_NAME_UNSPECIFIED = 0;
-  REAL_NAME_NOT_VERIFIED = 1;
-  REAL_NAME_INDIVIDUAL = 2;
-  REAL_NAME_ENTERPRISE = 3;
+  REAL_NAME_STATUS_UNSPECIFIED = 0;
+  REAL_NAME_STATUS_NOT_VERIFIED = 1;
+  REAL_NAME_STATUS_INDIVIDUAL = 2;
+  REAL_NAME_STATUS_ENTERPRISE = 3;
 }
 
 enum AccountType {
@@ -112,10 +112,10 @@ message AccessKey {
 }
 
 enum AccessKeyStatus {
-  ACCESS_KEY_UNSPECIFIED = 0;
-  ACCESS_KEY_ENABLED = 1;
-  ACCESS_KEY_DISABLED = 2;
-  ACCESS_KEY_DELETED = 3; // 7-day restorable
+  ACCESS_KEY_STATUS_UNSPECIFIED = 0;
+  ACCESS_KEY_STATUS_ENABLED = 1;
+  ACCESS_KEY_STATUS_DISABLED = 2;
+  ACCESS_KEY_STATUS_DELETED = 3; // 7-day restorable
 }
 
 // --- Auth / session (adjudication S13: access 15min, refresh 7d, Lax) ---

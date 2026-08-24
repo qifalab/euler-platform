@@ -20,6 +20,7 @@ import { i18n } from "./i18n";
 import { useRegistry, type RegistryApp } from "./registry";
 import { useAuthStore } from "./stores/auth";
 import { setupSubApp } from "./wujie-setup";
+import { preloadApp } from "wujie";
 
 async function bootstrap() {
   const app = createApp(App);
@@ -33,14 +34,30 @@ async function bootstrap() {
   const registry = useRegistry();
   await registry.load();
 
+  // Establish the login state BEFORE registering sub-apps: shared props carry
+  // a live getToken(), but registering pre-auth would let a pre-executed
+  // sub-app fire its first requests with no token at all.
+  const auth = useAuthStore();
+  if (!auth.accessToken) await auth.silentRefresh();
+
   // Pre-register every sub-app with Wujie: setupApp wires the sandbox, shared
   // props, and keep-alive. Actual fetch/mount happens on first navigation.
   registry.apps.forEach((entry: RegistryApp) => setupSubApp(entry));
 
   app.mount("#app");
 
-  // Preload high-frequency sub-apps in idle time (02§4.3).
-  requestIdleCallback?.(() => registry.apps.filter((a) => a.preload).forEach((a) => a.preload && void 0));
+  // Preload high-frequency sub-apps in idle time (02§4.3). requestIdleCallback
+  // is missing in Safari — a bare reference would throw ReferenceError, so
+  // guard with typeof and fall back to setTimeout.
+  const idle: (cb: () => void) => void =
+    typeof requestIdleCallback === "function"
+      ? (cb) => requestIdleCallback(cb)
+      : (cb) => setTimeout(cb, 200);
+  idle(() => {
+    registry.apps
+      .filter((a) => a.preload)
+      .forEach((a) => void preloadApp({ name: a.appCode }));
+  });
 }
 
 bootstrap();

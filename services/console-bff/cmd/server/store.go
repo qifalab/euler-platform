@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -38,26 +39,33 @@ import (
 	"github.com/starcloud/sc-platform/errors"
 )
 
-// accountIDHeader is injected by the APISIX gateway on every request.
+// accountIDHeader is injected by the APISIX gateway on every request. The BFF
+// TRUSTS this header (network isolation behind the gateway); services can
+// additionally enable a shared-secret check via SC_INTERNAL_TOKEN.
 const accountIDHeader = "X-Sc-Account-Id"
+
+// maxBodyBytes caps JSON request bodies accepted by the BFF's mutation handlers.
+const maxBodyBytes = 1 << 20 // 1 MiB
 
 // consoleStore is a fan-out client: it holds nothing of its own except the
 // downstream base URLs and a shared HTTP client. In the target architecture
 // the BFF also caches aggregated views in Redis (03§4 console-bff storage);
 // phase-1 fan-out is live, caching is not.
 type consoleStore struct {
-	httpClient    *http.Client
+	httpClient      *http.Client
 	orchestratorURL string // e.g. http://localhost:9203
-	billingURL      string // e.g. http://localhost:9206
+	billingURL      string // e.g. http://localhost:9210 (9206 is svc-metering)
 	orderURL        string // e.g. http://localhost:9204
+	catalogURL      string // e.g. http://localhost:9207
 }
 
 func newConsoleStore() *consoleStore {
 	return &consoleStore{
 		httpClient:      &http.Client{Timeout: 5 * time.Second},
 		orchestratorURL: envOrDefault("SC_SVC_ORCHESTRATOR_URL", "http://localhost:9203"),
-		billingURL:      envOrDefault("SC_SVC_BILLING_URL", "http://localhost:9206"),
+		billingURL:      envOrDefault("SC_SVC_BILLING_URL", "http://localhost:9210"),
 		orderURL:        envOrDefault("SC_SVC_ORDER_URL", "http://localhost:9204"),
+		catalogURL:      envOrDefault("SC_SVC_CATALOG_URL", "http://localhost:9207"),
 	}
 }
 
@@ -231,7 +239,9 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 	for _, e := range []error{balErr, resErr, ordErr} {
 		if e != nil {
-			writeError(w, e.(*errorsx.Error))
+			// comma-ok narrowing: getJSON should only return *errorsx.Error, but a
+			// bad assertion must degrade to a wrapped internal error, not a panic.
+			writeError(w, e2ptr(e))
 			return
 		}
 	}
@@ -340,7 +350,7 @@ func (s *consoleStore) handleBills(w http.ResponseWriter, r *http.Request) {
 		go func(idx int, period string) {
 			defer wg.Done()
 			var row billRow
-			u := s.billingURL + "/internal/bills?period=" + period
+			u := s.billingURL + "/internal/bills?period=" + url.QueryEscape(period)
 			if err := s.getJSON(ctx, u, acct, &row); err != nil {
 				errs[idx] = err
 				return
@@ -468,6 +478,7 @@ func (s *consoleStore) handleReservePackPurchase(w http.ResponseWriter, r *http.
 		return
 	}
 	var req reservePackPurchaseReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -514,6 +525,7 @@ func (s *consoleStore) handleInvoiceDraft(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req invoiceDraftReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -536,6 +548,7 @@ func (s *consoleStore) handleInvoiceIssue(w http.ResponseWriter, r *http.Request
 	var req struct {
 		InvoiceID string `json:"invoiceId"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -559,6 +572,7 @@ func (s *consoleStore) handleInvoiceVoid(w http.ResponseWriter, r *http.Request)
 		OriginalID string `json:"originalId"`
 		ReversalID string `json:"reversalId"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "malformed request"))
 		return
@@ -584,7 +598,7 @@ func (s *consoleStore) handleCostAnalysis(w http.ResponseWriter, r *http.Request
 		period = time.Now().UTC().Format("2006-01")
 	}
 	var raw map[string]any
-	u := s.billingURL + "/internal/cost-analysis?period=" + period
+	u := s.billingURL + "/internal/cost-analysis?period=" + url.QueryEscape(period)
 	if err := s.getJSON(r.Context(), u, acct, &raw); err != nil {
 		writeError(w, e2ptr(err))
 		return
@@ -593,6 +607,100 @@ func (s *consoleStore) handleCostAnalysis(w http.ResponseWriter, r *http.Request
 }
 
 // --- error helpers (original) ------------------------------------------------
+
+// handleSearch implements GET /console/search?q= — the console ⌘K palette's
+// backend (02§7.1). It fans out concurrently to the account's resources
+// (svc-orchestrator) and the product catalogue (svc-catalog) and server-side
+// filters both by the query against the fields a user can see (resource id /
+// spec / state; product code / name / category). Catalogue search is
+// anonymous-grade data, but the resource leg is account-scoped, so the whole
+// endpoint stays behind the account-id gate.
+func (s *consoleStore) handleSearch(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	ctx := r.Context()
+
+	type orchResource struct {
+		ResourceId  string `json:"resourceId"`
+		ProductCode string `json:"productCode"`
+		Region      string `json:"region"`
+		State       string `json:"state"`
+		SpecCode    string `json:"specCode"`
+	}
+	type catalogProduct struct {
+		ProductCode string `json:"productCode"`
+		ProductName string `json:"productName"`
+		Category    string `json:"category"`
+		Description string `json:"description"`
+	}
+
+	var (
+		resources []orchResource
+		products  []catalogProduct
+		resErr    error
+		prodErr   error
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resErr = s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &resources)
+	}()
+	go func() {
+		defer wg.Done()
+		prodErr = s.getJSON(ctx, s.catalogURL+"/api/v1/catalog/products", acct, &products)
+	}()
+	wg.Wait()
+	// The palette degrades per-leg, not all-or-nothing: a down catalogue must
+	// not blank resource hits (and vice versa). Only both-down is an error.
+	if resErr != nil && prodErr != nil {
+		writeError(w, e2ptr(resErr))
+		return
+	}
+
+	matches := func(fields ...string) bool {
+		if q == "" {
+			return true
+		}
+		for _, f := range fields {
+			if strings.Contains(strings.ToLower(f), q) {
+				return true
+			}
+		}
+		return false
+	}
+
+	resHits := make([]map[string]any, 0)
+	if resErr == nil {
+		for _, r0 := range resources {
+			if matches(r0.ResourceId, r0.SpecCode, r0.State, r0.ProductCode) {
+				resHits = append(resHits, map[string]any{
+					"resourceId": r0.ResourceId, "productCode": r0.ProductCode,
+					"region": r0.Region, "state": r0.State, "specCode": r0.SpecCode,
+				})
+			}
+		}
+	}
+	prodHits := make([]map[string]any, 0)
+	if prodErr == nil {
+		for _, p := range products {
+			if matches(p.ProductCode, p.ProductName, p.Category) {
+				prodHits = append(prodHits, map[string]any{
+					"productCode": p.ProductCode, "productName": p.ProductName,
+					"category": p.Category, "description": p.Description,
+				})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"query":     q,
+		"resources": resHits,
+		"products":  prodHits,
+	})
+}
 
 // e2ptr narrows an error returned by getJSON back to the *errorsx.Error it
 // always produces. getJSON only ever returns *errorsx.Error, so this is safe.

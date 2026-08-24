@@ -31,8 +31,10 @@ const actionName = ref("RunInstances");
 const method = ref("POST");
 const path = ref("/");
 const region = ref("cn-north-1");
-const ak = ref("SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-const sk = ref("test-secret-key-0123456789");
+// AK/SK must be supplied by the user each session — never hardcode defaults
+// (even test material) in page source.
+const ak = ref("");
+const sk = ref("");
 const securityToken = ref("");
 const body = ref('{"ImageId":"img-001","InstanceType":"s2.large"}');
 // query rows: editable key/value pairs
@@ -124,6 +126,10 @@ function hintFromDesc(desc: string, key: string): string {
 }
 
 async function sign() {
+  if (!ak.value.trim() || !sk.value.trim()) {
+    error.value = "请先填写 AccessKey ID 与 SecretAccessKey（必填）";
+    return;
+  }
   loading.value = true;
   error.value = null;
   result.value = null;
@@ -237,8 +243,8 @@ function prettyJson(obj: unknown): string {
       <details class="form-creds">
         <summary>凭证 (调试会话 AK/SK)</summary>
         <div class="form-grid">
-          <label>AK <input v-model="ak" placeholder="SC..." /></label>
-          <label>SK <input v-model="sk" type="password" /></label>
+          <label>AK（必填）<input v-model="ak" placeholder="请输入 AccessKey ID（SC 开头）" required /></label>
+          <label>SK（必填）<input v-model="sk" type="password" placeholder="请输入 SecretAccessKey" required /></label>
           <label>Security Token (STS, 可选) <input v-model="securityToken" /></label>
         </div>
         <p class="form-creds-note">仅用于本次调试签名。生产环境 Explorer 应以控制台登录态换取用户自有 AK/SK,而非明文输入。</p>

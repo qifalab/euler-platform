@@ -1,45 +1,58 @@
 <script setup lang="ts">
 /** Renew management (02§7.4 renew). Wired to console-bff /console/resources
- *  filtered to PREPAID resources (no dedicated renew backend yet). */
+ *  filtered to PREPAID resources; autorenew flags from svc-order. */
 import { ref, onMounted } from "vue";
+import { ElSwitch, ElMessage } from "element-plus";
 import { createSDK } from "@sc/sdk";
 import { PageHeader } from "@sc/ui";
+import { useProductLabels } from "@/useProductLabels";
 
 const sdk = createSDK({ baseURL: "" });
+const { label } = useProductLabels();
 
 interface ResourceRow {
   ResourceId: string; ProductCode: string; Region: string; ChargeType: string;
   State: string; SpecCode: string; BillingStart: string; ExpiredAt: string; CreatedAt: string;
 }
+/** svc-order /api/v1/orders/autorenew 条目。 */
+interface AutoRenewItem { resourceId: string; productCode: string; enabled: boolean; }
 interface RenewView {
-  id: string; product: string; spec: string; expired: string;
-  autoRenew: boolean; state: string;
+  id: string; productCode: string; spec: string; expired: string;
+  autoRenew: boolean; state: string; toggling: boolean;
 }
 
 const resources = ref<RenewView[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 
-const productLabels: Record<string, string> = {
-  scecs: "云服务器 ECS", scoss: "对象存储 OSS", scrds: "云数据库 RDS",
-  scvpc: "私有网络 VPC", sceip: "弹性公网 IP", scmon: "云监控",
-};
 const stateLabels: Record<string, string> = {
   RUNNING: "运行中", STOPPED: "已停止", CREATING: "创建中", DELETED: "已删除",
 };
 
+/** 先拉自动续费配置,建 resourceId→enabled 映射;失败降级为空 Map(全部视为未开启)。 */
+async function fetchAutoRenewMap(): Promise<Map<string, boolean>> {
+  try {
+    const res = await sdk.get<AutoRenewItem[]>("/api/v1/orders/autorenew");
+    return new Map((res.data ?? []).map((a) => [a.resourceId, a.enabled] as const));
+  } catch {
+    return new Map();
+  }
+}
+
 onMounted(async () => {
   try {
+    const autoRenewMap = await fetchAutoRenewMap();
     const res = await sdk.get<ResourceRow[]>("/console/resources");
     resources.value = (res.data ?? [])
       .filter((r) => r.ChargeType === "PREPAID")
       .map((r) => ({
         id: r.ResourceId,
-        product: productLabels[r.ProductCode] ?? r.ProductCode,
+        productCode: r.ProductCode,
         spec: r.SpecCode,
         expired: r.ExpiredAt || "—",
-        autoRenew: false,
+        autoRenew: autoRenewMap.get(r.ResourceId) ?? false,
         state: stateLabels[r.State] ?? r.State,
+        toggling: false,
       }));
   } catch (e) {
     error.value = (e as Error).message;
@@ -48,7 +61,21 @@ onMounted(async () => {
   }
 });
 
-function toggle(r: { autoRenew: boolean }) { r.autoRenew = !r.autoRenew; }
+/** ElSwitch change:乐观翻转已由 v-model 完成,此处 PUT 落库,失败回滚并提示。 */
+async function onToggle(r: RenewView) {
+  r.toggling = true;
+  try {
+    await sdk.put<AutoRenewItem>("/api/v1/orders/autorenew", {
+      resourceId: r.id, productCode: r.productCode, enabled: r.autoRenew,
+    });
+    ElMessage.success(r.autoRenew ? "已开启自动续费" : "已关闭自动续费");
+  } catch (e) {
+    r.autoRenew = !r.autoRenew; // 回滚乐观翻转
+    ElMessage.error(`自动续费设置失败:${(e as Error).message}`);
+  } finally {
+    r.toggling = false;
+  }
+}
 </script>
 
 <template>
@@ -58,13 +85,15 @@ function toggle(r: { autoRenew: boolean }) { r.autoRenew = !r.autoRenew; }
     <p v-if="loading" class="renew-loading">加载中…</p>
     <div v-else-if="resources.length" class="renew-table-card">
       <table class="renew-table">
-        <thead><tr><th>资源 ID</th><th>产品</th><th>规格</th><th>到期时间</th><th>自动续费</th><th>操作</th></tr></thead>
+        <thead><tr><th>资源 ID</th><th>产品</th><th>规格</th><th>到期时间</th><th>自动续费</th></tr></thead>
         <tbody>
           <tr v-for="r in resources" :key="r.id">
-            <td>{{ r.id }}</td><td>{{ r.product }}</td><td>{{ r.spec }}</td>
+            <td>{{ r.id }}</td><td>{{ label(r.productCode) }}</td><td>{{ r.spec }}</td>
             <td>{{ r.expired }}</td>
-            <td>{{ r.autoRenew ? "已开启" : "未开启" }}</td>
-            <td><button class="renew-btn" @click="toggle(r)">{{ r.autoRenew ? "关闭自动续费" : "开启自动续费" }}</button></td>
+            <td>
+              <ElSwitch v-model="r.autoRenew" :loading="r.toggling" @change="onToggle(r)" />
+              <span class="renew-ar-text">{{ r.autoRenew ? "已开启" : "未开启" }}</span>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -93,10 +122,5 @@ function toggle(r: { autoRenew: boolean }) { r.autoRenew = !r.autoRenew; }
 .renew-table tbody tr { transition: background var(--sc-transition); }
 .renew-table tbody tr:hover { background: var(--sc-color-brand-soft); }
 .renew-table tbody tr:last-child td { border-bottom: none; }
-.renew-btn {
-  border: 1px solid var(--sc-color-brand); background: none; color: var(--sc-color-brand);
-  border-radius: var(--sc-radius-sm); padding: 4px 12px; cursor: pointer; font-size: 12px;
-  transition: background var(--sc-transition);
-}
-.renew-btn:hover { background: var(--sc-color-brand-soft); }
+.renew-ar-text { margin-left: var(--sc-spacing-3); font-size: 12px; color: var(--sc-text-secondary); }
 </style>

@@ -1,0 +1,8 @@
+# cn-east-1 prod overrides for alert-center — remote standby region (00§4.5).
+# REGIONAL service (pkg-go/multiregion.Classify): cold control plane, brought
+# hot on failover.
+image:
+  tag: v0.1.0
+replicas: 0   # cold standby
+topology:
+  zoneSpread: false

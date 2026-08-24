@@ -84,8 +84,8 @@ type ScalingPolicy struct {
 // mutation (and updates lastActionAt).
 type Decision struct {
 	Action         Action
-	TargetReplicas int  // the replica count the decision aims for; 0 for "none"
-	RuleIndex      int  // which rule fired; -1 for "none"
+	TargetReplicas int // the replica count the decision aims for; 0 for "none"
+	RuleIndex      int // which rule fired; -1 for "none"
 	Reason         string
 }
 
@@ -93,7 +93,6 @@ type Decision struct {
 // policy shape versus runtime state.
 var (
 	ErrInvalidPolicy = errors.New("autoscaling: invalid scaling policy")
-	ErrUnknownMetric  = errors.New("autoscaling: rule references an unknown metric")
 )
 
 // Validate checks the policy shape. Rejecting here keeps a malformed policy
@@ -164,6 +163,11 @@ func Evaluate(policy ScalingPolicy, currentReplicas int, metrics map[string]floa
 		}
 	}
 
+	// A firing rule that cannot move the replica count (already at the bound)
+	// is remembered but does NOT end evaluation: an at_cap scale-up must not
+	// starve a later scale-down rule (or vice versa) that could still act.
+	var atCap *Decision
+
 	for i, rule := range policy.Rules {
 		value, present := metrics[rule.MetricName]
 		if !present {
@@ -173,28 +177,55 @@ func Evaluate(policy ScalingPolicy, currentReplicas int, metrics map[string]floa
 			continue
 		}
 
-		// First matching rule wins.
+		// Compute the step from the CLAMPED current count: a current count that
+		// has drifted outside [Min,Max] (manual edit, shrunk policy) must first
+		// be pulled back into bounds, or a scale_up rule at current>Max would
+		// aim above the ceiling.
+		effective := currentReplicas
+		if effective > policy.MaxReplicas {
+			effective = policy.MaxReplicas
+		}
+		if effective < policy.MinReplicas {
+			effective = policy.MinReplicas
+		}
+
 		var target int
 		switch rule.Action {
 		case ActionScaleUp:
-			target = currentReplicas + rule.Step
+			target = effective + rule.Step
 			if target > policy.MaxReplicas {
 				target = policy.MaxReplicas
 			}
 		case ActionScaleDown:
-			target = currentReplicas - rule.Step
+			target = effective - rule.Step
 			if target < policy.MinReplicas {
 				target = policy.MinReplicas
 			}
 		}
 
-		// If the rule fired but the target is already at the bound, there is
-		// nothing to do — reporting "at_cap" keeps the executor from no-oping
-		// repeatedly and lets monitoring distinguish "scaled" from "capped".
+		// If the rule fired but the target equals the actual current count,
+		// there is nothing to do. Remember the first such decision (so the
+		// executor and monitoring can see "capped") and keep evaluating.
 		if target == currentReplicas {
-			return Decision{Action: ActionNone, TargetReplicas: target, RuleIndex: i, Reason: "at_cap"}, nil
+			if atCap == nil {
+				atCap = &Decision{Action: ActionNone, TargetReplicas: target, RuleIndex: i, Reason: "at_cap"}
+			}
+			continue
 		}
-		return Decision{Action: rule.Action, TargetReplicas: target, RuleIndex: i, Reason: fmt.Sprintf("rule[%d] %s%s %v", i, rule.MetricName, rule.Operator, rule.Threshold)}, nil
+
+		// The reported Action reflects the ACTUAL direction from the current
+		// count to the target: with current=100 and Max=10, a scale_up rule
+		// still yields a downward move to 10, and reporting "scale_up" would
+		// send the executor the wrong way.
+		action := ActionScaleUp
+		if target < currentReplicas {
+			action = ActionScaleDown
+		}
+		return Decision{Action: action, TargetReplicas: target, RuleIndex: i, Reason: fmt.Sprintf("rule[%d] %s%s %v", i, rule.MetricName, rule.Operator, rule.Threshold)}, nil
+	}
+
+	if atCap != nil {
+		return *atCap, nil
 	}
 
 	// Default-deny: no rule matched, so do nothing.

@@ -18,6 +18,7 @@ func newTestServer() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/catalog/quote", store.handleQuote)
 	mux.HandleFunc("GET /api/v1/catalog/placement", store.handlePlacement)
+	mux.HandleFunc("GET /api/v1/catalog/region-topology", store.handleRegionTopology)
 	return recoverMiddleware(requestIDMiddleware(mux))
 }
 
@@ -88,6 +89,104 @@ func TestPlacementNotFound(t *testing.T) {
 	code, out := getPlacement(t, "scnope")
 	if code != 404 {
 		t.Fatalf("unknown product: code %d body %v", code, out)
+	}
+}
+
+// getRegionTopology fetches the M-8 topology view (anonymous-safe like the
+// other public catalogue reads).
+func getRegionTopology(t *testing.T) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/api/v1/catalog/region-topology", nil)
+	req.Header.Set("X-Sc-TraceId", "t")
+	rr := httptest.NewRecorder()
+	newTestServer().ServeHTTP(rr, req)
+	var env map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &env)
+	if data, ok := env["Data"].(map[string]any); ok {
+		return rr.Code, data
+	}
+	return rr.Code, env
+}
+
+func TestRegionTopologyPlan(t *testing.T) {
+	code, out := getRegionTopology(t)
+	if code != 200 {
+		t.Fatalf("region-topology: code %d body %v", code, out)
+	}
+	plan, _ := out["plan"].(map[string]any)
+	if plan == nil {
+		t.Fatalf("region-topology: no plan in %v", out)
+	}
+	primary, _ := plan["primary"].(map[string]any)
+	standby, _ := plan["standby"].(map[string]any)
+	if primary["name"] != "cn-north-1" || primary["role"] != "PRIMARY" {
+		t.Errorf("primary = %v, want cn-north-1/PRIMARY", primary)
+	}
+	// P3 boundary: only the PRIMARY writes — the standby is read-only/DR.
+	if primary["writable"] != true {
+		t.Errorf("primary writable = %v, want true", primary["writable"])
+	}
+	if standby["name"] != "cn-east-1" || standby["role"] != "STANDBY" {
+		t.Errorf("standby = %v, want cn-east-1/STANDBY", standby)
+	}
+	if standby["writable"] != false {
+		t.Errorf("standby writable = %v, want false (不承诺异地多活写)", standby["writable"])
+	}
+	if plan["maxRtoMs"] != float64(30*60*1000) {
+		t.Errorf("maxRtoMs = %v, want 1800000 (RTO ≤ 30min)", plan["maxRtoMs"])
+	}
+}
+
+func TestRegionTopologyChannelsMeetRPO(t *testing.T) {
+	_, out := getRegionTopology(t)
+	channels, _ := out["channels"].([]any)
+	if len(channels) != 2 {
+		t.Fatalf("channels = %v, want 2 (ledger-binlog + object-storage)", channels)
+	}
+	for _, raw := range channels {
+		c, _ := raw.(map[string]any)
+		if c["name"] == "ledger-binlog" {
+			if c["rpoMs"] != float64(5000) {
+				t.Errorf("ledger-binlog rpoMs = %v, want 5000", c["rpoMs"])
+			}
+			if c["rpoMet"] != true {
+				t.Errorf("ledger-binlog rpoMet = %v, want true (2.1s lag vs 5s RPO)", c["rpoMet"])
+			}
+		}
+		if c["name"] == "object-storage" {
+			if c["rpoMet"] != true {
+				t.Errorf("object-storage rpoMet = %v, want true (8min lag vs 1h RPO)", c["rpoMet"])
+			}
+		}
+	}
+}
+
+func TestRegionTopologyClassification(t *testing.T) {
+	_, out := getRegionTopology(t)
+	scopes, _ := out["serviceScopes"].([]any)
+	found := map[string]any{}
+	for _, raw := range scopes {
+		s, _ := raw.(map[string]any)
+		found[s["service"].(string)] = s["scope"]
+	}
+	if found["svc-iam"] != "GLOBAL" || found["svc-billing"] != "GLOBAL" {
+		t.Errorf("iam/billing scope = %v, want GLOBAL (09§5.2 M-8 IAM/计费全局单例)", found)
+	}
+	if found["svc-order"] != "REGIONAL" {
+		t.Errorf("svc-order scope = %v, want REGIONAL", found["svc-order"])
+	}
+	states, _ := out["stateClasses"].([]any)
+	classes := map[string]any{}
+	for _, raw := range states {
+		s, _ := raw.(map[string]any)
+		classes[s["state"].(string)] = s["class"]
+	}
+	if classes["account"] != "SHARED" || classes["ledger"] != "REPLICATED" || classes["kafka-topic"] != "REBUILT" {
+		t.Errorf("state classes = %v, want account=SHARED ledger=REPLICATED kafka-topic=REBUILT", classes)
+	}
+	steps, _ := out["failoverSteps"].([]any)
+	if len(steps) != 2 {
+		t.Errorf("failoverSteps = %v, want 2 (管控面冷转热 + DNS 切换)", steps)
 	}
 }
 
