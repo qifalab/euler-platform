@@ -39,6 +39,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/starcloud/sc-platform/identifier"
 )
 
 // DriverType selects the fulfilment backend for a product.
@@ -102,6 +104,23 @@ const (
 	OpDelete  Op = "DELETE"
 )
 
+// Region scope constants (svc-catalog t_product.region_scope, phase-3 M-6.1).
+// GLOBAL products (domain registration, DNS, CDN, WAF — 01§2.3/§2.7/§2.9) have
+// no region of residence at all: they are served by a single worldwide fleet,
+// so their specs carry the sentinel region "global" and must NOT carry a Zone.
+const (
+	ScopeRegional = "REGIONAL"
+	ScopeZonal    = "ZONAL"
+	ScopeGlobal   = "GLOBAL"
+	// GlobalRegion is the sentinel Region for GLOBAL-scoped products. A domain
+	// name or a DNS zone has no region of residence — but every resource id
+	// embeds a region token (00§4.1 identifier format), so GLOBAL resources use
+	// this literal and stay expressible in the same id grammar. identifier is
+	// the single source of truth for the token; this alias exists so the scope
+	// constants and their sentinel read as one contract.
+	GlobalRegion = identifier.GlobalRegion
+)
+
 // Spec is the declarative desired state dispatched to a controller.
 //
 // Declarative rather than imperative (00§2.2.3): a command-style RPC loses its
@@ -117,8 +136,10 @@ type Spec struct {
 	Region       string
 	Zone         string
 	// RegionScope is the catalogue's placement scope for the product:
-	// "REGIONAL" (spread across AZs) or "ZONAL" (pinned to one AZ). A ZONAL
+	// "REGIONAL" (spread across AZs), "ZONAL" (pinned to one AZ) or "GLOBAL"
+	// (no region of residence — domain/DNS/CDN/WAF products, phase 4). A ZONAL
 	// spec MUST carry a Zone — a VM with no AZ of residence cannot be placed.
+	// A GLOBAL spec must NOT carry a Zone: a worldwide fleet has no AZ to pin.
 	// Empty is tolerated for legacy callers and skips the check.
 	RegionScope string
 	Edition     string // registered enum value only
@@ -158,11 +179,22 @@ func (s Spec) Validate() error {
 	if s.Region == "" {
 		return errors.New("provision: Region required")
 	}
-	if s.RegionScope == "ZONAL" && s.Zone == "" {
+	if s.RegionScope == ScopeZonal && s.Zone == "" {
 		// A ZONAL resource is pinned to one AZ at create time; dispatching it
 		// without a zone defers the placement decision to the backend, which
 		// has no business making it.
 		return errors.New("provision: Zone required for ZONAL products")
+	}
+	if s.RegionScope == ScopeGlobal {
+		// GLOBAL products are served by a single worldwide fleet: the sentinel
+		// region is the only legal region, and pinning a Zone onto a global
+		// fleet is a category error that would silently split it per-AZ.
+		if s.Region != GlobalRegion {
+			return fmt.Errorf("provision: GLOBAL products must use region %q, got %q", GlobalRegion, s.Region)
+		}
+		if s.Zone != "" {
+			return errors.New("provision: GLOBAL products must not carry a Zone")
+		}
 	}
 	if s.IdempotencyKey == "" {
 		return errors.New("provision: IdempotencyKey required")

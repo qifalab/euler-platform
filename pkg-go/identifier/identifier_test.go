@@ -76,8 +76,39 @@ func TestRegionAndAZ(t *testing.T) {
 	if IsValidRegion("cnnorth1") {
 		t.Fatal("cnnorth1 should be invalid")
 	}
+	// The sentinel is expressible in the id grammar but is NOT a region name:
+	// it names no region of residence, so placement must never accept it.
+	if IsValidRegion(GlobalRegion) {
+		t.Fatal("the global sentinel must not be a valid region name")
+	}
 	if got := AZName("cn-north-1", "a"); got != "cn-north-1-a" {
 		t.Fatalf("AZName = %q", got)
+	}
+}
+
+// TestGlobalResourceIDRoundTrip pins the phase-4 GLOBAL contract at the id
+// layer: a GLOBAL product's resource id embeds the sentinel in the region
+// position and must parse like any other resource id (provision.ScopeGlobal
+// specs carry Region=global, and MockDriver ids must survive ParseResourceID).
+func TestGlobalResourceIDRoundTrip(t *testing.T) {
+	const raw = "scdomain-global-01-5e6f7a8b"
+	rid, err := ParseResourceID(raw)
+	if err != nil {
+		t.Fatalf("ParseResourceID(%q): %v", raw, err)
+	}
+	if rid.RegionID != GlobalRegion {
+		t.Fatalf("RegionID = %q, want %q", rid.RegionID, GlobalRegion)
+	}
+	if rid.String() != raw {
+		t.Fatalf("String() round-trip = %q, want %q", rid.String(), raw)
+	}
+
+	rid, err = NewResourceID("scdns", GlobalRegion, 100123, 8, 16)
+	if err != nil {
+		t.Fatalf("NewResourceID with sentinel region: %v", err)
+	}
+	if _, err := ParseResourceID(rid.String()); err != nil {
+		t.Fatalf("generated GLOBAL id failed to parse: %v", err)
 	}
 }
 

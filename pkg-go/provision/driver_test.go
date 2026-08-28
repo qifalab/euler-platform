@@ -490,3 +490,81 @@ func TestReclaimableAtFalseBeforeNotice(t *testing.T) {
 		t.Fatal("ReclaimableAt should be false before any notice is delivered")
 	}
 }
+
+// --- GLOBAL region scope (phase 4, M-12.1) ---
+
+// globalSpec is a valid spec for a GLOBAL-scoped product (DNS zone class):
+// sentinel region "global", no Zone.
+func globalSpec() Spec {
+	return Spec{
+		ResourceID:     "scdns-global-01-a1b2c3d4",
+		AccountID:      100123,
+		ProjectID:      1,
+		ProductCode:    "scdns",
+		ResourceType:   "zone",
+		Region:         GlobalRegion,
+		RegionScope:    ScopeGlobal,
+		Edition:        "standard",
+		Params:         map[string]string{"zoneName": "example.com"},
+		IdempotencyKey: "order-9101",
+	}
+}
+
+// TestGlobalScopeValidate covers the GLOBAL placement contract: the sentinel
+// region is mandatory and a Zone is a category error. Domain/DNS/CDN/WAF
+// resources ride a single worldwide fleet (01§2.3/§2.7/§2.9) — a Zone on such
+// a spec would silently split the fleet per-AZ.
+func TestGlobalScopeValidate(t *testing.T) {
+	if err := globalSpec().Validate(); err != nil {
+		t.Fatalf("valid GLOBAL spec rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Spec){
+		"regional region on a GLOBAL product": func(s *Spec) { s.Region = "cn-north-1" },
+		"Zone pinned onto a GLOBAL product":   func(s *Spec) { s.Zone = "cn-north-1-a" },
+	} {
+		s := globalSpec()
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: spec accepted, want rejection", name)
+		}
+	}
+}
+
+// TestGlobalSpecFlowsThroughMockDriver proves the GLOBAL contract is not
+// decorative: a GLOBAL spec passes the same Apply/Query/CollectUsage evidence
+// loop as a ZONAL one, so the MockDriver gate (06§6.3) can certify phase-4
+// GLOBAL products unchanged.
+func TestGlobalSpecFlowsThroughMockDriver(t *testing.T) {
+	d := newDriver()
+	spec := globalSpec()
+	if _, err := d.Apply(spec); err != nil {
+		t.Fatalf("apply GLOBAL spec: %v", err)
+	}
+	st, err := d.Query(spec.ResourceID)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if !st.Ready() {
+		t.Fatalf("phase = %s, want Ready (ProvisioningDelay=0)", st.Phase)
+	}
+	if _, err := d.CollectUsage(spec.ResourceID); err != nil {
+		t.Fatalf("collect usage: %v", err)
+	}
+}
+
+// TestZonalScopeStillEnforced pins the existing ZONAL contract next to the new
+// GLOBAL one, so a future refactor cannot loosen one while tightening the
+// other.
+func TestZonalScopeStillEnforced(t *testing.T) {
+	s := validSpec()
+	s.RegionScope = ScopeZonal
+	s.Zone = ""
+	if err := s.Validate(); err == nil {
+		t.Fatal("ZONAL spec without Zone accepted")
+	}
+	s.Zone = "cn-north-1-a"
+	if err := s.Validate(); err != nil {
+		t.Fatalf("ZONAL spec with Zone rejected: %v", err)
+	}
+}
