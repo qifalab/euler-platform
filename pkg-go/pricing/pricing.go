@@ -6,7 +6,17 @@
 //
 //	① 目录价   list price, selected by (sku, region, duration tier, customer level)
 //	② 促销折扣  best single promotion — promotions never stack
-//	③ 代金券   voucher pre-deduction, shown at quote time
+//	③ 券抵扣   coupons, in a fixed sub-order (phase 2, 09-roadmap B7):
+//	     ③a 折扣券  best single rate coupon — multiplicative on the post-promo amount
+//	     ③b 满减券  best single threshold coupon (满 X 减 Y) — X measured against
+//	                the post-③a amount
+//	     ③c 代金券  fixed deduction, multiple allowed, consumed by expiry ascending
+//
+// One rate coupon and one threshold coupon per order at most (券不叠加, the
+// coupon counterpart of ②'s no-stacking rule); vouchers stack because each is
+// the account's own prepaid credit. Every stage deducts against the running
+// amount, so the breakdown always reconciles exactly: promo + coupon + payable
+// = list.
 //
 // Deduction order at payment time (01§12.3, §5.3):
 //
@@ -440,13 +450,45 @@ func (p Promotion) discountOn(list Amount) Amount {
 	}
 }
 
-// Coupon is one row of t_coupon — the carrier for 免费试用 (decision D7).
+// CouponKind is the coupon's mechanism. Phase-1 shipped the VOUCHER minimal
+// form only; phase-2 B7 opens the other two (09-roadmap §3.2: 满减/折扣券
+// 后置二期).
+type CouponKind string
+
+const (
+	// KindVoucher 代金券 — fixed-amount deduction against the outstanding
+	// amount; multiple per order, consumed by expiry ascending. The carrier for
+	// 免费试用 (decision D7).
+	KindVoucher CouponKind = "VOUCHER"
+	// KindThreshold 满减券 — deduct FaceValue when the running amount reaches
+	// Threshold (满 X 减 Y). At most one per order.
+	KindThreshold CouponKind = "THRESHOLD"
+	// KindRate 折扣券 — pay RateBasisPoints of the running amount (8500 bp =
+	// 85折), the discount capped at CapAmount. At most one per order.
+	KindRate CouponKind = "RATE"
+)
+
+// Coupon is one row of t_coupon. Kind "" means KindVoucher: the phase-1 rows
+// predate the kind column and stay valid without a data migration.
 type Coupon struct {
-	CouponID    string
-	AccountID   int64
-	FaceValue   Amount
+	CouponID  string
+	AccountID int64
+	Kind      CouponKind
+	// FaceValue: VOUCHER — the per-coupon deduction cap (RemainValue tracks the
+	// unconsumed part); THRESHOLD — the 减 Y amount. Unused for RATE.
+	FaceValue Amount
+	// RemainValue is the unconsumed balance, VOUCHER only.
 	RemainValue Amount
-	ExpireAt    time.Time
+	// Threshold is the 满 X trigger, THRESHOLD only.
+	Threshold Amount
+	// RateBasisPoints is the retained share of the running amount, RATE only
+	// (8500 = pay 85%). Must be in (0, 10000).
+	RateBasisPoints int64
+	// CapAmount bounds the RATE discount (防资损: a "9折" coupon on a huge order
+	// without a cap is an unbounded liability). Zero means uncapped — allowed
+	// for migration but a config smell; the DDL seeds caps.
+	CapAmount Amount
+	ExpireAt  time.Time
 	// Scope restricts what the coupon may offset: product codes, charge types,
 	// or SKUs. An empty slice means unrestricted on that dimension.
 	ProductCodes []string
@@ -454,10 +496,12 @@ type Coupon struct {
 	Status       int // 0未用 1部分使用 2用尽 3过期
 }
 
+// usable reports whether the coupon may participate in this request at t.
+// Scope and expiry checks are common to every kind; the kind-specific field
+// checks are configuration gates: a coupon whose kind fields are malformed is
+// unusable rather than erroring the whole quote (mirroring promotion handling
+// — a bad activity row must not take pricing down).
 func (c Coupon) usable(t time.Time, req Request) bool {
-	if c.RemainValue.IsZero() || c.RemainValue.IsNegative() {
-		return false
-	}
 	if c.Status == 2 || c.Status == 3 {
 		return false
 	}
@@ -470,7 +514,31 @@ func (c Coupon) usable(t time.Time, req Request) bool {
 	if len(c.ChargeTypes) > 0 && !containsCharge(c.ChargeTypes, req.ChargeType) {
 		return false
 	}
-	return true
+	switch c.kind() {
+	case KindVoucher:
+		return !c.RemainValue.IsZero() && !c.RemainValue.IsNegative()
+	case KindThreshold:
+		// A threshold without a positive deduction, or a deduction larger than
+		// the threshold itself (满 100 减 200), is a malformed activity row.
+		return !c.FaceValue.IsNegative() && !c.FaceValue.IsZero() &&
+			!c.Threshold.IsNegative() && !c.Threshold.IsZero() &&
+			c.FaceValue <= c.Threshold
+	case KindRate:
+		// 0 or ≥100% retained is a misconfiguration (free or price-raising
+		// coupon), not a discount.
+		return c.RateBasisPoints > 0 && c.RateBasisPoints < 10000
+	default:
+		return false
+	}
+}
+
+// kind resolves the coupon kind, defaulting the phase-1 rows (no kind) to
+// VOUCHER.
+func (c Coupon) kind() CouponKind {
+	if c.Kind == "" {
+		return KindVoucher
+	}
+	return c.Kind
 }
 
 func contains(list []string, v string) bool {
@@ -578,9 +646,10 @@ func (e Engine) Calculate(req Request, rules []PricingRule, promos []Promotion, 
 		promoAmount = list
 	}
 
-	// ③ 代金券预抵扣 — consumed by expiry ascending so the credit that would
-	// expire soonest is spent first, which is what a user expects and what
-	// minimises silently wasted trial credit.
+	// ③ 券抵扣, fixed sub-order (package doc): 折扣券 (best single, multiplicative)
+	// → 满减券 (best single, threshold against the post-③a amount) → 代金券
+	// (multiple, expiry-ascending). Quoting computes the intent to consume; the
+	// order service commits it transactionally at payment time.
 	couponUses, couponTotal := applyCoupons(coupons, req, afterPromo)
 
 	payable := afterPromo.Sub(couponTotal)
@@ -647,29 +716,106 @@ func bestPromotion(promos []Promotion, req Request, list Amount) (string, Amount
 	return bestID, bestDiscount
 }
 
-// applyCoupons consumes coupons against the outstanding amount, expiry
-// ascending.
+// applyCoupons runs the three coupon sub-stages against the outstanding
+// (post-promo) amount and returns the consumption intent plus its total.
+//
+// The order is fixed so that the same coupon set always yields the same
+// breakdown regardless of input ordering, and each stage deducts against what
+// the previous stage left — the threshold of a 满减券 is therefore measured on
+// the amount AFTER the 折扣券, which is the amount the customer actually pays
+// at that point. Every stage's deduction is capped at the running amount, so
+// the total can never exceed the outstanding and the breakdown reconciles
+// exactly (promo + coupon + payable = list).
+//
+// Quoting never mutates the coupons (TestQuotingDoesNotSpendCoupons): the
+// returned CouponUse list is the intent the order service commits at payment.
 func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUse, Amount) {
 	if outstanding.IsZero() || outstanding.IsNegative() {
 		return nil, 0
 	}
 
-	usable := make([]Coupon, 0, len(coupons))
+	var mine []Coupon
 	for _, c := range coupons {
 		if c.AccountID != req.AccountID {
 			continue
 		}
 		if c.usable(req.At, req) {
-			usable = append(usable, c)
+			mine = append(mine, c)
+		}
+	}
+
+	var uses []CouponUse
+	var total Amount
+	remaining := outstanding
+
+	// ③a 折扣券 — best single rate coupon. Rate coupons never stack with each
+	// other: taking the best one keeps the outcome independent of evaluation
+	// order, exactly as promotions do at ②.
+	var bestRate Coupon
+	var bestRateDiscount Amount
+	for _, c := range mine {
+		if c.kind() != KindRate {
+			continue
+		}
+		d := rateDiscount(c, remaining)
+		// Tie-break on CouponID so the outcome is independent of input order.
+		if d > bestRateDiscount || (d == bestRateDiscount && d > 0 && c.CouponID < bestRate.CouponID) {
+			bestRate, bestRateDiscount = c, d
+		}
+	}
+	if bestRateDiscount > 0 {
+		uses = append(uses, CouponUse{CouponID: bestRate.CouponID, Amount: bestRateDiscount})
+		total = total.Add(bestRateDiscount)
+		remaining = remaining.Sub(bestRateDiscount)
+		if remaining.IsZero() {
+			return uses, total
+		}
+	}
+
+	// ③b 满减券 — best single threshold coupon whose threshold the running
+	// amount reaches. Face ≤ Threshold is enforced at usable(); the deduction is
+	// still capped at the running amount (a near-zero remainder cannot go
+	// negative through a coupon).
+	var bestTh Coupon
+	var bestThFace Amount
+	for _, c := range mine {
+		if c.kind() != KindThreshold {
+			continue
+		}
+		if remaining < c.Threshold {
+			continue
+		}
+		// Tie-break on CouponID so the outcome is independent of input order.
+		if c.FaceValue > bestThFace || (c.FaceValue == bestThFace && c.CouponID < bestTh.CouponID) {
+			bestTh, bestThFace = c, c.FaceValue
+		}
+	}
+	if bestThFace > 0 {
+		take := Min(bestThFace, remaining)
+		uses = append(uses, CouponUse{CouponID: bestTh.CouponID, Amount: take})
+		total = total.Add(take)
+		remaining = remaining.Sub(take)
+		if remaining.IsZero() {
+			return uses, total
+		}
+	}
+
+	// ③c 代金券 — vouchers stack; consumed by expiry ascending so the credit
+	// that would expire soonest is spent first, which is what a user expects
+	// and what minimises silently wasted trial credit.
+	var vouchers []Coupon
+	for _, c := range mine {
+		if c.kind() == KindVoucher {
+			vouchers = append(vouchers, c)
 		}
 	}
 	// Expiry ascending; coupons with no expiry sort last since they are never
 	// at risk of being wasted.
-	sort.SliceStable(usable, func(i, j int) bool {
-		ei, ej := usable[i].ExpireAt, usable[j].ExpireAt
+	sort.SliceStable(vouchers, func(i, j int) bool {
+		ei, ej := vouchers[i].ExpireAt, vouchers[j].ExpireAt
 		switch {
 		case ei.IsZero() && ej.IsZero():
-			return usable[i].CouponID < usable[j].CouponID
+			return vouchers[i].CouponID < vouchers[j].CouponID
 		case ei.IsZero():
 			return false
 		case ej.IsZero():
@@ -678,11 +824,7 @@ func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUs
 			return ei.Before(ej)
 		}
 	})
-
-	var uses []CouponUse
-	var total Amount
-	remaining := outstanding
-	for _, c := range usable {
+	for _, c := range vouchers {
 		if remaining.IsZero() {
 			break
 		}
@@ -695,4 +837,23 @@ func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUs
 		remaining = remaining.Sub(take)
 	}
 	return uses, total
+}
+
+// rateDiscount computes the discount a RATE coupon yields on the outstanding
+// amount: the un-retained share, capped by CapAmount (when set) and by the
+// outstanding itself. Half-up rounding at the last decimal place, consistent
+// with the rest of the money arithmetic (MulRate).
+func rateDiscount(c Coupon, outstanding Amount) Amount {
+	retained := outstanding.MulRate(c.RateBasisPoints)
+	d := outstanding.Sub(retained)
+	if d.IsNegative() {
+		return 0
+	}
+	if c.CapAmount > 0 && d > c.CapAmount {
+		d = c.CapAmount
+	}
+	if d > outstanding {
+		d = outstanding
+	}
+	return d
 }

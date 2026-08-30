@@ -28,6 +28,10 @@ node_modules/
 .output/
 dist/
 
+# Python
+__pycache__/
+*.pyc
+
 # IDE
 .idea/
 .vscode/

@@ -4,7 +4,7 @@
 // package; the domain logic is defined inline here with an in-memory store
 // (read-heavy, write-light metadata — the real store is MySQL + MinIO, but an
 // in-memory struct keeps phase-1 runnable with no DB dependency, matching the
-// _tmpl-go / order-demo / support-demo verify pattern).
+// _tmpl-go / in-server verify pattern).
 //
 // An Action is the atomic unit of the OpenAPI surface: every {product_code}
 // Action (e.g. scecs:CreateInstance) has a parameter schema (JSON Schema-ish),

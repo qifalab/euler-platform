@@ -13,6 +13,8 @@
 //	POST   /api/v1/orders/{id}/cancel — cancel a pending order
 //	GET    /api/v1/orders/autorenew   — list the account's auto-renew settings
 //	PUT    /api/v1/orders/autorenew   — set/clear a resource's auto-renew flag
+//	POST   /api/v1/trial/claim        — 免费试用领取 (B7; gated by pkg-go/trial)
+//	GET    /api/v1/trial/status       — 试用资格预检 + 未消耗试用券
 //
 // stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
 // (MySQL sharded by account_id in production).
@@ -37,6 +39,7 @@ import (
 
 	"github.com/starcloud/sc-platform/order"
 	"github.com/starcloud/sc-platform/pricing"
+	"github.com/starcloud/sc-platform/trial"
 )
 
 // accountIDHeader carries the caller's account id. TRUST NOTE: this header is
@@ -351,6 +354,144 @@ func orderToMap(o *order.Order) map[string]any {
 	}
 }
 
+// --- free trial (B7, 09-roadmap §4.4) ---------------------------------------
+//
+// A trial is a voucher claimed through the standard order flow (decision D7):
+// 领取 mints a TRIAL-sourced VOUCHER coupon; using it goes through the same
+// 询价 → 下单 → 支付 pipeline as any purchase. The claim itself is gated by
+// pkg-go/trial — the anti-薅 engine. This service owns the state the engine
+// reads: per-account claim history (t_trial_record), the cross-account identity
+// registry (t_trial_identity), and the activity budget (t_trial_activity).
+//
+// In production the three counters update in one transaction with the coupon
+// insert; here they are one mutex away from each other, which is the in-memory
+// rendering of the same invariant.
+
+// trialFaceValue is the default activity's voucher face value, matching the
+// t_trial_activity seed (100 元). The real deploy reads it from the activity
+// row selected by activityId.
+var trialFaceValue = pricing.MustParseAmount("100")
+
+type trialStore struct {
+	mu sync.Mutex
+	// policy mirrors t_trial_activity.policy_json for the default activity.
+	policy trial.Policy
+	// accounts is the dev-side account registry: real-name status and identity
+	// key come from svc-iam in production; here they are seeded.
+	accounts map[int64]trial.AccountState
+	// identityCounts is t_trial_identity: identityKey → total claims across
+	// accounts. The one structure that can stop "register N accounts, claim N
+	// vouchers with one ID card".
+	identityCounts map[string]int64
+	// globalActive is t_trial_activity.active_count: platform-wide live
+	// vouchers — the activity budget expressed in vouchers, not yuan.
+	globalActive int64
+	// coupons holds issued trial vouchers per account (t_coupon, source=TRIAL).
+	coupons  map[int64][]pricing.Coupon
+	couponSeq int64
+}
+
+func newTrialStore() *trialStore {
+	s := &trialStore{
+		policy:         trial.DefaultPolicy(),
+		accounts:       make(map[int64]trial.AccountState),
+		identityCounts: make(map[string]int64),
+		coupons:        make(map[int64][]pricing.Coupon),
+	}
+	// Dev seed mirrors web-auth/console-bff: account 100123 is the verified
+	// seed tenant. Identity key is the SHA-256 of the doc number in production;
+	// the raw document never reaches this service.
+	s.accounts[100123] = trial.AccountState{
+		RealNameVerified: true,
+		IdentityKey:      "idn-8f3a1c2d",
+	}
+	return s
+}
+
+// handleTrialClaim implements POST /api/v1/trial/claim. Denials surface the
+// deciding rule as the envelope Code (e.g. TRIAL.IDENTITY_LIMIT) so an operator
+// sees which gate fired, not a bare "rejected" — the same deny-first, rule
+// named convention as pkg-go/authz.
+func (s *trialStore) handleTrialClaim(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	v := trial.Admit(s.policy, trial.State{
+		Account:        s.accounts[acct],
+		GlobalActive:   s.globalActive,
+		IdentityCounts: s.identityCounts,
+	}, now)
+	if !v.Allowed {
+		writeErr(w, string(v.Rule), 409, v.Detail)
+		return
+	}
+
+	// Admitted: mint the voucher and update every counter the engine will read
+	// on the next claim. All four writes are one transaction in production
+	// (t_coupon insert + t_trial_record insert + t_trial_activity.active_count
+	// bump + t_trial_identity upsert).
+	s.couponSeq++
+	couponID := fmt.Sprintf("TC%d", s.couponSeq)
+	face := trialFaceValue
+	expireAt := now.Add(trial.VoucherValidDays * 24 * time.Hour)
+	s.coupons[acct] = append(s.coupons[acct], pricing.Coupon{
+		CouponID: couponID, AccountID: acct, Kind: pricing.KindVoucher,
+		FaceValue: face, RemainValue: face, ExpireAt: expireAt,
+	})
+
+	acctState := s.accounts[acct]
+	acctState.Active++
+	acctState.Lifetime++
+	acctState.LastClaimedAt = now
+	s.accounts[acct] = acctState
+	if k := acctState.IdentityKey; k != "" {
+		s.identityCounts[k]++
+	}
+	s.globalActive++
+
+	slog.Info("trial voucher issued", "account", acct, "coupon", couponID)
+	writeJSON(w, "OK", map[string]any{
+		"couponId": couponID, "kind": string(pricing.KindVoucher),
+		"faceValue": face.String(), "remainValue": face.String(),
+		"expireAt": expireAt.Format(time.RFC3339), "validDays": trial.VoucherValidDays,
+	})
+}
+
+// handleTrialStatus implements GET /api/v1/trial/status — the console's 试用中心
+// page: claim eligibility preview plus the account's outstanding vouchers.
+func (s *trialStore) handleTrialStatus(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	v := trial.Admit(s.policy, trial.State{
+		Account:        s.accounts[acct],
+		GlobalActive:   s.globalActive,
+		IdentityCounts: s.identityCounts,
+	}, now)
+	out := make([]map[string]any, 0, len(s.coupons[acct]))
+	for _, c := range s.coupons[acct] {
+		out = append(out, map[string]any{
+			"couponId": c.CouponID, "faceValue": c.FaceValue.String(),
+			"remainValue": c.RemainValue.String(), "expireAt": c.ExpireAt.Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, "OK", map[string]any{
+		"eligible": v.Allowed,
+		"reason":   string(v.Rule),
+		"reasonDetail": v.Detail,
+		"coupons":  out,
+	})
+}
+
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
@@ -425,6 +566,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	store := newOrderStore()
+	trials := newTrialStore()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })
@@ -437,6 +579,10 @@ func main() {
 	// routed here and not swallowed by the {id} detail route.
 	mux.HandleFunc("GET /api/v1/orders/autorenew", store.handleAutoRenewList)
 	mux.HandleFunc("PUT /api/v1/orders/autorenew", store.handleAutoRenewSet)
+	// B7 免费试用: claim is gated by pkg-go/trial; the voucher itself spends
+	// through the standard order flow above (decision D7).
+	mux.HandleFunc("POST /api/v1/trial/claim", trials.handleTrialClaim)
+	mux.HandleFunc("GET /api/v1/trial/status", trials.handleTrialStatus)
 
 	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

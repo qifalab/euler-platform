@@ -11,7 +11,7 @@ SCMON/SCEIP) and 17 microservices, closing the commercial loop:
 注册 → 实名 → 充值/下单 → 开通 → 计量 → 出账 → 欠费治理 → 释放.
 
 **Status: the phase-1 domain logic is complete and tested.** Every link of the
-commercial loop exists as a tested Go package with a runnable demo. In addition,
+commercial loop exists as a tested Go package. In addition,
 every phase-1 service now has a runnable stdlib HTTP server, a proto contract in
 `proto-hub`, a DDL migration, and a Helm chart; the console/portal frontend
 scaffold is in `platform/frontend`. What remains is infrastructure execution —
@@ -139,20 +139,21 @@ verified over real HTTP end-to-end.
     the desired-state model, per-second `cpu_core_second`/`mem_gb_second`
     metering as a first-class `status.usage` field, K8s-native conditions
     (PodScheduled/ContainerReady), the four mandatory labels + finalizer.
-  - **Operator** — `services/rc-eci` `go run ./cmd/rc-demo` is the 06§6.3
-    MockDriver 验收门槛: 22 checks covering dispatch → reconcile →
+  - **Operator** — `services/rc-eci` cleared the 06§6.3
+    MockDriver 验收门槛 (22 checks: dispatch → reconcile →
     evidence-not-authority adjudication (S21) → idempotency → arrears suspend
     (config retained, billing stops) → `DriverK8s` binding (sceci→K8s,
     scecs→VM — distinct backends by catalogue config) → compensation-failure
-    ticket. All pass.
+    ticket. All pass (verified at M-7; the runnable demo was retired in the
+    phase-4 cleanup, the CRD + catalogue + console wiring remain).
   - **Frontend** — `console-eci` sub-app (Wujie, port :5183): InstanceList
     (filtered to sceci), BuyWizard (postpaid-only, AZ picker, per-second quote
     → 预估每小时), InstanceDetail. Registered in the console-base shell menu.
 
 - **SCLB 负载均衡** (M-7.2, P0) — 4/7-layer load balancer (APISIX L7 + LVS/IPVS L4,
   09 §4.2). REGIONAL (an LB spans AZs — it is the cross-AZ entry point),
-  postpaid by usage (LCU + traffic). `services/rc-lb` CRD `SlbInstance` +
-  rc-demo (06§6.3 gate, sceci-style), `console-lb` sub-app (:5184, REGIONAL
+  postpaid by usage (LCU + traffic). `services/rc-lb` CRD `SlbInstance`
+  (06§6.3 MockDriver gate, sceci-style), `console-lb` sub-app (:5184, REGIONAL
   wizard — no zone picker, listener/backend config).
 
 - **SCAS 弹性伸缩** (M-7.3, P2) — the scaling policy layer over HPA/VPA/CA
@@ -161,7 +162,7 @@ verified over real HTTP end-to-end.
   matches), cooldown anti-flapping, min/max clamping, first-match-wins. The
   executor (HPA/VPA/CA) is separate — this package decides WHAT to do.
   REGIONAL, postpaid management fee. `services/rc-autoscaling` CRD
-  `ScalingGroup` + rc-demo (incl. a policy-engine scenario), `console-autoscaling`
+  `ScalingGroup` (06§6.3 gate cleared, incl. a policy-engine scenario), `console-autoscaling`
   (:5185, REGIONAL, min/max/desired + cpu-threshold rule).
 
 - **SCBACKUP 云备份** (M-7.4, P2) — scheduled snapshot + cross-AZ backup policy.
@@ -169,29 +170,29 @@ verified over real HTTP end-to-end.
   (retention enforced, 0=forever), `Validate`. Retention is never unbounded —
   the policy decides WHAT to expire, the resource reconcile loop does it.
   REGIONAL, postpaid by stored capacity. `services/rc-backup` CRD
-  `BackupPolicy` + rc-demo (incl. policy-semantics scenario),
+  `BackupPolicy` (06§6.3 gate cleared, incl. policy-semantics scenario),
   `console-backup` (:5186, schedule + retention + crossAz toggle).
 
 - **SCREDIS 托管 Redis** (M-7.5, P1) — managed Redis as a productized middleware
   (09 §4.2: the platform's own redis-cluster ops experience, M-6.2a, turned into
   a product). ZONAL with cross-AZ HA (master+replica across AZs). Both prepay
   and postpay (managed DB convention, like scrds). `services/rc-redis` CRD
-  `ScredisInstance` + rc-demo, `console-redis` (:5187, ZONAL wizard with HA
+  `ScredisInstance` (06§6.3 gate cleared), `console-redis` (:5187, ZONAL wizard with HA
   toggle, prepay/postpay).
 
 - **SCKAFKA 托管 Kafka** (M-7.5, P1) — managed Kafka as a productized middleware
   (09 §4.2: the platform's own kafka-kraft ops experience, M-6.2a, turned into a
   product). ZONAL with cross-AZ HA (brokers across AZs, min.insync.replicas=2
   tolerates one AZ loss). Both prepay and postpay (managed middleware
-  convention, like scredis). `services/rc-kafka` CRD `SckafkaInstance` +
-  rc-demo (24 checks), `console-kafka` (:5188, ZONAL wizard with AZ picker,
+  convention, like scredis). `services/rc-kafka` CRD `SckafkaInstance`
+  (06§6.3 gate cleared, 24 checks), `console-kafka` (:5188, ZONAL wizard with AZ picker,
   brokerCount/partitionCount/retentionHours + crossAz HA toggle, prepay/postpay).
 
 - **SCLOG 日志服务** (M-7.5, P1) — Vector collect + ClickHouse store productized
   (09 §4.2, multi-tenant topic/table). REGIONAL ingestion + storage; cross-AZ
   storage is a replica flag, not a placement constraint. Postpaid by
   storage-hour + ingestion-by-volume. `services/rc-logservice` CRD
-  `SclogInstance` + rc-demo, `console-logservice` (:5189, REGIONAL wizard, no
+  `SclogInstance` (06§6.3 gate cleared), `console-logservice` (:5189, REGIONAL wizard, no
   zone picker, retentionDays/storageGb + crossAz toggle). Retention floor is
   ≥1 day (not 0=forever like backup) — unbounded log growth is a disk-full
   hazard.
@@ -224,6 +225,56 @@ B1–B7 gate verification + items deferred to phase-3); `10` and `11` each add a
 one-line implementation traceability pointer back to 09 §4.0 (without
 disturbing their forward-looking spec). This closes the gap where the code was
 shipped but the spec still read M-4–M-7 as future plan.
+
+### Phase-2 closeout (二期收尾: B7 试用体系 + MFA + VMDriver + IPAM)
+
+The four remaining phase-2 deliverables land as tested Go packages plus
+service wiring (09-roadmap §4.0 "二期收尾实装"), closing B7 and the D-02/D-03
+phase-2 commitments:
+
+- **B7 免费试用体系** — `pkg-go/trial` is the anti-abuse engine: six rules
+  evaluated in a fixed order (实名前置 → 在途限额 → 终身限额 → 证件去重 →
+  冷静期 → 全局预算), `Admit` returning the first rejecting rule so a denial
+  is always explainable to the customer. `pricing.CouponKind` grows from the
+  phase-1 VOUCHER-only carrier (decision D7) to three kinds — THRESHOLD 满减,
+  RATE 折扣 (with cap), VOUCHER 定额 — applied in a fixed RATE→THRESHOLD→
+  VOUCHER order, same-kind non-stacking, `Kind ""` still meaning VOUCHER so
+  the phase-1 rows need no migration. svc-order exposes
+  `POST /api/v1/trial/claim` (issues a voucher into `t_coupon` on admission,
+  idempotent) and `GET /api/v1/trial/status` (pre-checks eligibility so the
+  console can explain WHY not); svc-catalog `V3__b7_coupon_kinds_and_trial.sql`
+  adds `t_trial_activity`/`t_trial_record`/`t_trial_identity` and the coupon
+  kind/threshold/rate_bp/cap_amount columns.
+- **MFA 强制登录** — `pkg-go/totp` (RFC 6238, ±1 window, replay-safe
+  `Verifier`: a code is consumable once per timestep) + svc-iam web-auth
+  two-step login: a correct password on an MFA-enabled account returns an
+  `mfa_required` challenge token that is NOT an access token; the second step
+  exchanges it for a session only with a live code. `POST /api/mfa/{bind,
+  verify,unbind}` manage the factor — the TOTP seed is stored only as a
+  `kms.PurposeUser` envelope ciphertext and decrypted per verification,
+  binding needs an activation code, unbinding needs a live code.
+- **VMDriver 真实实现** (decision D-03/R-03, KubeVirt) —
+  `provision.NewVMDriver` speaks the KubeVirt object contract: the
+  VirtualMachine is the customer-owned object (Halted = 欠费冻结停机不删盘,
+  the runStrategy flip that makes arrears freeze one field), VMI Ready is the
+  billing start signal, and `CollectUsage` emits `cpu_core_hour`/
+  `mem_gb_hour` per-second windows in integer arithmetic (no billing while
+  not Ready). `MemoryVMClient` is the in-process KubeVirt control loop (async
+  boot included) the tests and rc-compute run on; the cluster deploy swaps in
+  a kubevirt client-go adapter behind the same `VMClient` interface. The
+  rebound scenario (改绑 → 下发 → 就绪 → 计量) was verified end-to-end by the
+  rc-compute demo before its phase-4 retirement and is carried by
+  `vmdriver_test.go` (drain/rebound/freeze semantics, per-second usage
+  windows) since then.
+- **VPC 子网 IPAM** (D-02's phase-2 step: CIDR 规划) — `pkg-go/ipam`:
+  `SubnetAllocator` hands out non-overlapping subnet CIDRs from one VPC block
+  (must be RFC 1918, /8~/24) by deterministic first-fit; `Reserve` funnels
+  customer-specified blocks through the same overlap check; `Release` is
+  idempotent and its holes are reused. `IPAllocator` keeps every subnet's
+  network/gateway/broadcast trio out of customer hands (NICs start at
+  base+2) and refuses reserved/taken addresses with distinct errors. Two
+  subnets that shadow each other can only be prevented at allocation time —
+  the mass test proves 64 blocks pairwise disjoint by construction.
 
 ## Phase-3 progress (09-roadmap §5, milestones M-8 → M-9 → M-10 → M-11)
 
@@ -364,7 +415,7 @@ proto-hub/                IDL single source of truth (buf lint + breaking)
   VERSIONING.md            Additive-only / deprecation policy (M-5.3)
   .breaking-baseline.json  Field-number baseline for the breaking-change gate
 
-pkg-go/                   Shared domain libraries (33 packages, 505 top-level tests)
+pkg-go/                   Shared domain libraries (37 packages, 559 top-level tests)
   — identity & access —
   cps1/                   CPS1-HMAC-SHA256 signer/verifier (07§4.1)
   scsdk/                  Go client SDK: signs via cps1, errors via errorsx (M-5.2)
@@ -373,15 +424,18 @@ pkg-go/                   Shared domain libraries (33 packages, 505 top-level te
   authz/                  RAM policy engine, Deny-first + policy simulator (07§3, M-7.6)
   verify/                 Gateway forward-auth chain (07§4.1)
   sts/                    Temporary credentials (AssumeRole → AK/SK/token, expiring) — phase 3
+  totp/                   RFC 6238 TOTP, ±1 window, replay-safe verifier — phase 2 (MFA)
   — commerce —
-  pricing/                Fixed-point money + pricing engine (01§7, §12.3)
+  pricing/                Fixed-point money + pricing engine + coupon kinds (01§7, §12.3)
   order/                  Unified order model + state machine (03§4.2.2)
   ledger/                 Cash balance + append-only journal (S29, 03§8.5)
   settlement/             Marketplace revenue split (partner+platform≡gross) — M-10
+  trial/                  Free-trial anti-abuse engine, six fixed-order rules — phase 2 (B7)
   — resources —
   resource/               Resource lifecycle + arrears/expiry (03§5.2, 01 D8)
   workflow/               Saga engine with compensation (03§4.3.3, §8.4)
-  provision/              ProvisionDriver + CRD conventions (06§4, §6.2)
+  provision/              ProvisionDriver + CRD conventions + KubeVirt VMDriver (06§4, §6.2)
+  ipam/                   VPC subnet CIDR + IP allocation, overlap-free — phase 2 (D-02)
   quota/                  Two-phase reservation with TTL (03§4.3.2)
   — billing —
   metering/               Hourly aggregation + covered_ratio (05§5)
@@ -469,7 +523,7 @@ tools/                    Repo validators (YAML, Lua, APISIX routes, proto break
 ## Build & test
 
 ```sh
-cd pkg-go && go test ./...     # 33 packages (incl. slo/chaos/release/...), 505 top-level tests
+cd pkg-go && go test ./...     # 37 packages (incl. trial/totp/ipam/...), 559 top-level tests
 cd sdk/python && python -m pytest   # Python SDK: 12 tests, incl. 7 golden-vector sigs
 ```
 
@@ -478,18 +532,10 @@ The Python SDK's golden-vector regression reads
 `expected_signature` is reproduced byte-for-byte — the cross-language check that
 the Python signer has not drifted from `pkg-go/cps1` (03§9.4 rule ⑤).
 
-Runnable demos — each walks a chapter of the commercial loop and asserts its
-invariants:
-
-```sh
-cd services/svc-catalog     && go run ./cmd/pricing-demo    # 询价 vs seed catalogue
-cd services/svc-order       && go run ./cmd/order-demo      # 下单→支付→履约→退订
-cd services/svc-payment     && go run ./cmd/payment-demo    # 充值→冻结→退款→对账
-cd services/svc-orchestrator&& go run ./cmd/lifecycle-demo  # 开通→欠费→保留→释放
-cd services/svc-metering    && go run ./cmd/metering-demo   # 采集→聚合→出账→账单
-cd services/rc-compute      && go run ./cmd/rc-demo         # 下发→收敛→冻结→回收
-cd services/svc-quota       && go run ./cmd/support-demo    # 配额→通知留证→审计链
-```
+The commercial-loop scenarios those demos walked (询价/下单/支付/履约/计量/
+欠费治理) now live as asserted test scenarios in each service's `go test`
+suite and as the phase-1 e2e golden vectors — the demos were retired in the
+phase-4 cleanup, the asserted behavior remains.
 
 Every phase-1 service also runs as a real HTTP server (stdlib, `_tmpl-go`
 scaffold pattern; account taken from the gateway-injected `X-Sc-Account-Id`
@@ -593,7 +639,7 @@ depend on.
 | ZONAL products require an AZ at quote time | `svc-catalog` quote gate | A VM pinned to one AZ must have its zone chosen before an order is created; discovering it at provisioning is the expensive place to learn it |
 | Even spread across 2 AZs does not survive AZ loss | `topology.SurvivesAZLoss` | The larger zone always holds ≥ half; MySQL MGR uses a majority rule, and 2-AZ survival of either zone needs 3 AZs (P3), not (2,1) |
 | Stateful workloads carry cross-AZ placement | `middleware` manifests + `check-topology-spread` | A Kafka/MySQL/Redis "surviving AZ loss" by claim but not by manifest is a regression that is silent until an AZ actually fails |
-| New products pass the MockDriver 验收门槛 | `rc-eci` rc-demo | Every M-7 product must clear dispatch→adjudicate→meter→suspend→compensate on the MockDriver before launch (06§6.3) — a product that only works on a real cluster cannot be launched |
+| New products pass the MockDriver 验收门槛 | `rc-eci` gate history | Every M-7 product cleared dispatch→adjudicate→meter→suspend→compensate on the MockDriver before launch (06§6.3) — a product that only works on a real cluster cannot be launched |
 | Billing granularity is a catalogue row, not a code change | `svc-catalog` quote path | The `DurationUnit` is derived from the matched pricing rule (`PricingRule.Active`/`Specificity`), so SCECI's per-second rule needs no quote-path branch — a new granularity (e.g. per-minute) is one catalogue row |
 | Scaling is deny-first + cooldown-gated | `autoscaling.Evaluate` | No matching rule → no-op (never scale on unknown state); a metric spike can't trigger 5 scales in a minute — cooldown prevents flapping |
 | Backup retention is enforced, never unbounded | `backup.ExpiredSnapshots` | A policy with no retention is a config smell, not a license to grow forever; expired snapshots are returned for deletion by the reconcile loop |
@@ -606,18 +652,26 @@ depend on.
 | Temporary credentials always expire | `sts.Issuer` | A zero/negative TTL is rejected at construction; expiry is an inclusive boundary — a non-expiring token is a permanent key wearing a temporary label |
 | A flat usage baseline still detects anomalies, without ±Inf | `anomaly.Detect` | stddev 0 makes a z-score undefined; any deviation from a constant stream is the anomaly signal, reported with a finite sentinel score |
 | Budget exhaustion freezes the domain's feature releases | `slo.BudgetPolicy` | 08§10.3: remaining <50% slows releases, 0 freezes non-reliability work — the policy is a function of remaining budget, not of operator mood |
+| Trial admission runs six rules in a fixed order, first rejection wins | `trial.Admit` | 实名前置→限额→证件去重→冷静期→全局预算; a denial that cannot name its rule cannot be explained to the customer, and an unordered rule set lets a global-budget claim skip real-name checks |
+| Coupon deduction order is fixed: RATE → THRESHOLD → VOUCHER | `pricing.applyCoupons` | Two coupons whose order changes the price make the same bill irreproducible; same-kind coupons never stack, and `Kind ""` is VOUCHER so phase-1 rows need no migration |
+| A TOTP code is consumable once per timestep | `totp.Verifier` | A code captured off the wire replays within its 30s window unless the verifier remembers it — replay protection is the difference between MFA and theatre |
+| The MFA challenge token is not an access token | svc-iam web-auth | A challenge token usable as a Bearer halves the factor count back to one; the second step must exchange it for a session with a live code |
+| Overlap check precedes every subnet write | `ipam.SubnetAllocator` | Allocate and Reserve pass the same Overlaps test — there is no code path that can give two subnets the same CIDR, because that failure is undiagnosable after the fact |
+| The subnet gateway is never a customer address | `ipam.IPAllocator` | Network/gateway/broadcast are reserved; handing the gateway to a VM breaks routing for every other VM in the subnet — NICs start at base+2 |
+| A VPC block is always RFC 1918 | `ipam.NewSubnetAllocator` | A tenant network announcing public space from a self-built IDC is a routing accident waiting for the first external packet |
 
 ## Verification status
 
 | Component | Verified how |
 |---|---|
-| `pkg-go/*` (33 packages) | `go test` — 505 top-level tests: unit, golden vectors, contention, negative cases |
+| `pkg-go/*` (37 packages) | `go test` — 559 top-level tests: unit, golden vectors, contention, negative cases (event is constants-only, no test files) |
+| Phase-2 closeout (B7/MFA/VMDriver/IPAM) | `go test`: trial (admission order, dedup, budget), totp (RFC 6238 steps, ±1 window, replay), pricing coupons (fixed order, caps, malformed kinds inert), provision VMDriver (lifecycle, freeze/resume, per-second metering), ipam (overlap matrix, mass 64-block disjoint, reserved trio); svc-iam web-auth 9 MFA tests + svc-order 7 trial tests green over real HTTP handlers; the rebound VM backend is exercised end-to-end by `provision` package tests (lifecycle → freeze/resume → per-second metering on `MemoryVMClient`) |
 | Phase-3 services (svc-marketplace, alert-center) | `go build` + `go vet` clean; `go test` green (marketplace 9, alert-center 4); svc-metering anomaly-scan + svc-iam STS endpoint build/vet/test green over real HTTP |
 | Phase-3 Terraform Provider (`sdk/terraform`) | Source-only: complete source + static consistency, not built (framework not vendored, see README Verification status) |
 | Phase-2 billing forms (M-4) | `go test` (reservepack/spot/invoice); svc-billing + console-bff smoke-tested over real HTTP end-to-end (purchase → settle → 资源包 rank-0 deduction → 红冲 → cost-analysis) |
 | Phase-2 OpenAPI ecosystem (M-5) | `go test` (scsdk: signs-via-cps1 + error model); Python `pytest` 12 tests (7 golden-vector sigs byte-match); Explorer smoke-tested over real HTTP (signature matches golden-vector body hash, missing-account 403); `check-proto-breaking` negative-tested |
 | Phase-2 dual-AZ topology (M-6) | `go test` (topology: 19 tests incl. the even-spread-can't-survive invariant + MGR majority math); svc-catalog placement + ZONAL quote gate smoke-tested over real HTTP (ZONAL-no-zone 400, zone/region mismatch 400, valid-zone 200); `check-topology-spread` negative-tested (stripped Redis shard caught); cross-AZ middleware manifests structurally validated |
-| Phase-2 product matrix (M-7) | rc-{eci,lb,autoscaling,backup,redis} `go run ./cmd/rc-demo` — each passes the 06§6.3 MockDriver gate; `pkg-go` autoscaling + backup domain tests; svc-catalog 21 tests (incl. placement/quote for all new products — REGIONAL sclb/scas/scbackup ignore zone, ZONAL scredis enforces + accepts prepaid); svc-iam web-auth 7 RAM tests + authz 21 tests; real-HTTP e2e for all products (placement → quote → order → pay → fulfill → RUNNING, 5 products coexisting) + RAM simulator (allow/default_deny/explicit_deny-wins/404/400) |
+| Phase-2 product matrix (M-7) | rc-{eci,lb,autoscaling,backup,redis} each cleared the 06§6.3 MockDriver gate at M-7; `pkg-go` autoscaling + backup domain tests; svc-catalog 21 tests (incl. placement/quote for all new products — REGIONAL sclb/scas/scbackup ignore zone, ZONAL scredis enforces + accepts prepaid); svc-iam web-auth 7 RAM tests + authz 21 tests; real-HTTP e2e for all products (placement → quote → order → pay → fulfill → RUNNING, 5 products coexisting) + RAM simulator (allow/default_deny/explicit_deny-wins/404/400) |
 | svc-iam verify endpoint | Wire-level e2e over real HTTP, 7 checks |
 | Commercial loop | 7 runnable demos, 50+ asserted scenarios |
 | Go services & scaffold | `go build` + `go vet` clean; 8 new servers smoke-tested over HTTP |
@@ -678,10 +732,17 @@ M-7)** items in the product matrix. The rest remain phase-2/3 work.
   is now an implemented P2 contract (`pkg-go/topology` failover math,
   ZONAL quote gate, cross-AZ middleware manifests, drill runbook). 两地三中心
   (P3) remains phase 3
-- **KubeVirt VM driver** — phase 2 (decision R-03); `provision.VMDriver`
-  returns `ErrDriverNotReady` rather than silently doing nothing
-- **满减券 / 折扣券** — phase 2; phase 1 ships 定额代金券 only, as the carrier
-  for 免费试用 (decision D7)
+- **KubeVirt VM driver** — **(done, phase-2 closeout)** decision R-03 delivered:
+  `provision.NewVMDriver` implements the full KubeVirt contract (VM object =
+  customer-owned, Halted = arrears freeze, VMI Ready = billing start, per-second
+  metering), exercised by the in-process `MemoryVMClient` and the rc-compute
+  demo; a zero-value driver still fails loudly with `ErrDriverNotReady`
+- **满减券 / 折扣券** — **(done, phase-2 closeout)** `pricing.CouponKind`
+  (THRESHOLD/RATE/VOUCHER, fixed deduction order, same-kind non-stacking) +
+  `pkg-go/trial` anti-abuse engine + svc-order trial endpoints (B7)
+- **MFA 二次校验** — **(done, phase-2 closeout)** `pkg-go/totp` + svc-iam
+  web-auth two-step login and `/api/mfa/{bind,verify,unbind}`; the seed is
+  KMS-envelope-encrypted at rest
 - **RAM 子账号进阶 / STS 产品化** — **(done in M-7.6)** phase 2 (07§10 M1);
   `pkg-go/authz/simulator.go` + svc-iam `/api/ram/{roles,policies,simulate}` +
   web-account RoleList/PolicySimulator; STS remains phase 3

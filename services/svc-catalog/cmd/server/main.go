@@ -22,7 +22,7 @@
 // stdlib-HTTP service. Envelope {RequestId,Code,Data} (03§9.3). In-memory store
 // (MySQL t_product/t_sku/t_pricing_rule/t_promo_policy in production). The seed
 // mirrors sql/V2__seed_phase1_catalog.sql — when the SQL seed changes, the
-// catalogue() below changes with it (the pricing-demo enforces the same).
+// catalogue() below changes with it (the server's own tests enforce the same).
 package main
 
 import (

@@ -285,11 +285,20 @@ flowchart LR
 | B4 | OpenAPI | ✅ 通过 | Explorer 覆盖 5 seed actions;SDK Go+Python;`check-proto-breaking.py` CI 检测破坏性变更 0 |
 | B5 | 租户隔离 | ✅ 通过 | 新增产品四元标签 + account_id 上下文拦截;account_id 网关注入 `X-Sc-Account-Id`,缺则 403 |
 | B6 | 财务合规 | ✅ 模型层通过 | invoice 红冲(全额负数发票,原票 VOIDED 终态不可逆,幂等 void)+ 退款 `ledger.Refund` + `order.TypeRefund` |
-| B7 | 运营能力 | ⏸ 一期代金券基础 | 免费试用代金券一期已实现;异常用量检测未在二期实装,落三期 |
+| B7 | 运营能力 | ✅ 通过 | 免费试用防薅引擎 `pkg-go/trial`(六规则固定次序逐条裁定:实名前置→在途/终身限额→证件去重→冷静期→全局预算)+ 三类代金券 `pricing.CouponKind`(满减/折扣含封顶/定额,抵扣次序固定 RATE→THRESHOLD→VOUCHER)+ svc-order `/api/v1/trial/{claim,status}` + svc-catalog V3 DDL;异常用量检测已随三期交付(`pkg-go/anomaly`) |
 
 > **延后三期的项**:云监控高级告警产品化、异常用量检测、第二物理地域、云市场/ISV、大数据/AI 平台。其中 SCKafka/日志服务原计划为"M-7.5 可选扩展(时间允许则做,否则落三期)",二期已补做交付(详见 §4.2)。
 >
 > **关键实装原则**(供三期与新产品参考):① 新计费粒度是目录行而非代码分支(询价 DurationUnit 从规则派生);② 导出引擎内部选择逻辑而非 fork(`PricingRule.Active/Specificity`、cps1 单源签名、authz 模拟器复用引擎 Deny-first);③ 托管产品=平台中间件运维经验产品化(SCRedis/SCKafka 直接复用 M-6.2a 跨 AZ manifest);④ MockDriver 验收门槛是 source-only 期唯一的真供给全链路测试。
+
+**二期收尾实装(2026-08-28 补充)— B7 试用体系 / MFA / VMDriver / IPAM:**
+
+| 项 | 实装状态 | 实装证据(代码路径) |
+|---|---|---|
+| B7 免费试用体系(§4.1 目标 2"免费试用代金券扩展为完整试用体系") | ✅ 已交付 | `pkg-go/trial`(六规则防薅引擎,`Admit` 固定次序返回首个拒绝规则:实名前置→在途限额→终身限额→证件去重→冷静期→全局预算)+ `pricing.CouponKind` 三类券(THRESHOLD 满减/RATE 折扣含封顶/VOUCHER 定额;`applyCoupons` 固定次序 RATE→THRESHOLD→VOUCHER,同类不叠加;`Kind ""` 按 VOUCHER 兼容一期存量行)+ svc-order `POST /api/v1/trial/claim`/`GET /api/v1/trial/status`(领取即发券入 t_coupon,幂等;状态端点事前预检资格)+ svc-catalog `sql/V3__b7_coupon_kinds_and_trial.sql`(`t_trial_activity`/`t_trial_record`/`t_trial_identity` 三表 + `t_coupon` 加 kind/threshold/rate_bp/cap_amount) |
+| MFA 强制登录(§3.3 IAM 行"MFA 二期完善") | ✅ 已交付 | `pkg-go/totp`(RFC 6238,±1 窗口,`Verifier` 防重放——同一时间步的码仅可消费一次)+ svc-iam web-auth 登录两步流(密码正确且 mfaEnabled → 返回 `mfa_required` 挑战令牌,挑战令牌≠访问令牌,不可当 Bearer 用)+ `POST /api/mfa/{bind,verify,unbind}`(TOTP 种子仅以 `kms.PurposeUser` 信封密文落库,验证时解密;绑定需激活码生效,解绑需活体码);`TestMFALoginCodeReplayRejected`/`TestMFAChallengeTokenIsNotAnAccessToken` 断言两条底线 |
+| VMDriver 真实实现(§4.2 决策 D-03/R-03:KubeVirt) | ✅ 已交付 | `provision.NewVMDriver`(KubeVirt 对象契约:VirtualMachine=客户持有对象,Halted=欠费冻结停机不删盘;VMI Ready=计费起点;冻结/恢复=runStrategy 一个字段;`CollectUsage` 按秒窗口整数算术输出 `cpu_core_hour`/`mem_gb_hour`,非 Ready 不计费)+ `MemoryVMClient`(进程内 KubeVirt 控制回路,含异步启动;集群部署换 kubevirt client-go 适配器,接口不变;rc-compute 场景[5] 在退役前已实跑"改绑虚拟化后端→下发→就绪→计量"全链路,此后由 `vmdriver_test.go` 承接) |
+| VPC 子网 IPAM(§3.2 D-02 改选条件"二期 VPC 进阶特性"的第一步:CIDR 规划) | ✅ 已交付 | `pkg-go/ipam`(`SubnetAllocator`:VPC 必须 RFC1918 且 /8~/24;first-fit 确定性分配天然对齐;`Reserve` 用户指定段过同一防重叠检查;`Release` 幂等且回洞复用;`IPAllocator`:网络/网关/广播三地址保留,客户地址自 base+2 起,`AllocateSpecific` 拒绝保留/占用地址;测试含 64 块两两不重叠暴力断言) |
 
 ### 4.1 阶段目标与非目标
 

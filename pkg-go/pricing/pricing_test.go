@@ -579,3 +579,255 @@ func TestPayableNeverNegative(t *testing.T) {
 		t.Errorf("coupon consumed %s, want exactly 180 (not the full face value)", got)
 	}
 }
+
+// --- Coupon kinds (phase-2 B7: 满减券 / 折扣券) ---
+
+// baseReq is the standard 180-yuan quote every coupon-kind test builds on.
+func baseReq() Request {
+	return Request{
+		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
+		Duration: 1, DurationUnit: DurationMonth, At: now,
+	}
+}
+
+func TestThresholdCouponTriggersAtThreshold(t *testing.T) {
+	// 满 150 减 30 on a 180 order: threshold reached → deduction 30.
+	coupons := []Coupon{{
+		CouponID: "mj-150-30", AccountID: 1, Kind: KindThreshold,
+		FaceValue: MustParseAmount("30"), Threshold: MustParseAmount("150"),
+	}}
+	e := Engine{}
+	res, err := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.CouponAmount.String(); got != "30" {
+		t.Errorf("coupon = %s, want 30", got)
+	}
+	if got := res.PayableAmount.String(); got != "150" {
+		t.Errorf("payable = %s, want 150", got)
+	}
+	if len(res.AppliedCoupons) != 1 || res.AppliedCoupons[0].CouponID != "mj-150-30" {
+		t.Errorf("applied = %+v, want the threshold coupon", res.AppliedCoupons)
+	}
+}
+
+func TestThresholdCouponBelowThresholdInert(t *testing.T) {
+	// 满 500 减 100 on a 180 order: threshold not reached → the coupon is
+	// simply not applicable, and must not deduct anything.
+	coupons := []Coupon{{
+		CouponID: "mj-500-100", AccountID: 1, Kind: KindThreshold,
+		FaceValue: MustParseAmount("100"), Threshold: MustParseAmount("500"),
+	}}
+	e := Engine{}
+	res, _ := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if !res.CouponAmount.IsZero() {
+		t.Fatalf("below-threshold coupon deducted %s", res.CouponAmount)
+	}
+	if len(res.AppliedCoupons) != 0 {
+		t.Errorf("below-threshold coupon recorded as applied: %+v", res.AppliedCoupons)
+	}
+}
+
+func TestThresholdCouponsDoNotStack(t *testing.T) {
+	// Two threshold coupons that both trigger: only the best (higher face)
+	// applies, mirroring the promotion no-stacking rule.
+	coupons := []Coupon{
+		{CouponID: "mj-a", AccountID: 1, Kind: KindThreshold,
+			FaceValue: MustParseAmount("30"), Threshold: MustParseAmount("150")},
+		{CouponID: "mj-b", AccountID: 1, Kind: KindThreshold,
+			FaceValue: MustParseAmount("50"), Threshold: MustParseAmount("150")},
+	}
+	e := Engine{}
+	res, _ := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if got := res.CouponAmount.String(); got != "50" {
+		t.Errorf("coupon = %s, want 50 (best single threshold coupon)", got)
+	}
+	if len(res.AppliedCoupons) != 1 || res.AppliedCoupons[0].CouponID != "mj-b" {
+		t.Errorf("applied = %+v, want only mj-b", res.AppliedCoupons)
+	}
+}
+
+func TestRateCouponDiscount(t *testing.T) {
+	// 85折 on 180: retained 153, discount 27.
+	coupons := []Coupon{{
+		CouponID: "zk-85", AccountID: 1, Kind: KindRate, RateBasisPoints: 8500,
+	}}
+	e := Engine{}
+	res, err := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.CouponAmount.String(); got != "27" {
+		t.Errorf("coupon = %s, want 27", got)
+	}
+	if got := res.PayableAmount.String(); got != "153" {
+		t.Errorf("payable = %s, want 153", got)
+	}
+}
+
+func TestRateCouponCapBoundsDiscount(t *testing.T) {
+	// 85折 on 180 would discount 27; a cap of 20 clips it to 20. Without the
+	// cap a percentage coupon on a large order is an unbounded liability.
+	coupons := []Coupon{{
+		CouponID: "zk-85-cap", AccountID: 1, Kind: KindRate,
+		RateBasisPoints: 8500, CapAmount: MustParseAmount("20"),
+	}}
+	e := Engine{}
+	res, _ := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if got := res.CouponAmount.String(); got != "20" {
+		t.Errorf("coupon = %s, want 20 (capped)", got)
+	}
+	if got := res.PayableAmount.String(); got != "160" {
+		t.Errorf("payable = %s, want 160", got)
+	}
+}
+
+func TestRateCouponsDoNotStack(t *testing.T) {
+	// 9折 (discount 18) vs 85折 (discount 27): only the better one applies.
+	coupons := []Coupon{
+		{CouponID: "zk-90", AccountID: 1, Kind: KindRate, RateBasisPoints: 9000},
+		{CouponID: "zk-85", AccountID: 1, Kind: KindRate, RateBasisPoints: 8500},
+	}
+	e := Engine{}
+	res, _ := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if got := res.CouponAmount.String(); got != "27" {
+		t.Errorf("coupon = %s, want 27 (best single rate coupon)", got)
+	}
+	if len(res.AppliedCoupons) != 1 || res.AppliedCoupons[0].CouponID != "zk-85" {
+		t.Errorf("applied = %+v, want only zk-85", res.AppliedCoupons)
+	}
+}
+
+func TestMalformedCouponKindsInert(t *testing.T) {
+	// Configuration errors in coupon rows must make the coupon unusable, not
+	// fail the quote: a bad activity row may not take pricing down.
+	coupons := []Coupon{
+		{CouponID: "mj-face-above-threshold", AccountID: 1, Kind: KindThreshold,
+			FaceValue: MustParseAmount("200"), Threshold: MustParseAmount("100")},
+		{CouponID: "mj-zero-face", AccountID: 1, Kind: KindThreshold,
+			FaceValue: 0, Threshold: MustParseAmount("100")},
+		{CouponID: "zk-rate-10000", AccountID: 1, Kind: KindRate, RateBasisPoints: 10000},
+		{CouponID: "zk-rate-0", AccountID: 1, Kind: KindRate, RateBasisPoints: 0},
+		{CouponID: "unknown-kind", AccountID: 1, Kind: CouponKind("MYSTERY"),
+			RemainValue: MustParseAmount("50")},
+	}
+	e := Engine{}
+	res, err := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.CouponAmount.IsZero() {
+		t.Fatalf("malformed coupons deducted %s, want 0", res.CouponAmount)
+	}
+}
+
+func TestCouponKindsComposeInFixedOrder(t *testing.T) {
+	// The full ③ pipeline: 85折 → 满150减30 → voucher 50, in that fixed order.
+	//
+	// 180 → rate 85折: discount 27, running 153
+	//     → threshold 满150减30: 153 ≥ 150 → discount 30, running 123
+	//     → voucher −50: running 73
+	// Total coupon = 27+30+50 = 107; payable 73.
+	coupons := []Coupon{
+		{CouponID: "c-voucher", AccountID: 1, RemainValue: MustParseAmount("50")},
+		{CouponID: "mj-150-30", AccountID: 1, Kind: KindThreshold,
+			FaceValue: MustParseAmount("30"), Threshold: MustParseAmount("150")},
+		{CouponID: "zk-85", AccountID: 1, Kind: KindRate, RateBasisPoints: 8500},
+	}
+	e := Engine{}
+	res, err := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.CouponAmount.String(); got != "107" {
+		t.Errorf("coupon total = %s, want 107", got)
+	}
+	if got := res.PayableAmount.String(); got != "73" {
+		t.Errorf("payable = %s, want 73", got)
+	}
+	// Application order is the fixed sub-order, regardless of input order.
+	if len(res.AppliedCoupons) != 3 {
+		t.Fatalf("applied %d coupons, want 3: %+v", len(res.AppliedCoupons), res.AppliedCoupons)
+	}
+	wantOrder := []string{"zk-85", "mj-150-30", "c-voucher"}
+	for i, want := range wantOrder {
+		if res.AppliedCoupons[i].CouponID != want {
+			t.Errorf("applied[%d] = %q, want %q (fixed sub-order rate→threshold→voucher)", i, res.AppliedCoupons[i].CouponID, want)
+		}
+	}
+	// The threshold fired at 153 (post-rate), not at 180 (post-promo): the
+	// sub-order is observable through the recorded amounts.
+	if got := res.AppliedCoupons[1].Amount.String(); got != "30" {
+		t.Errorf("threshold coupon took %s, want 30", got)
+	}
+	// Breakdown reconciles exactly (09 A2).
+	sum := res.PromoAmount.Add(res.CouponAmount).Add(res.PayableAmount)
+	if sum != res.ListAmount {
+		t.Errorf("breakdown does not reconcile: %s != %s", sum, res.ListAmount)
+	}
+}
+
+func TestThresholdMeasuredAfterRateDiscount(t *testing.T) {
+	// 95折 first (discount 9, running 171), then 满 175 减 30: the threshold is
+	// measured on the POST-rate amount 171 < 175 → the threshold coupon does
+	// NOT fire. Measuring thresholds on the pre-rate amount (180 ≥ 175) would
+	// be a different, less defensible rule — this test pins the chosen one.
+	coupons := []Coupon{
+		{CouponID: "zk-95", AccountID: 1, Kind: KindRate, RateBasisPoints: 9500},
+		{CouponID: "mj-175-30", AccountID: 1, Kind: KindThreshold,
+			FaceValue: MustParseAmount("30"), Threshold: MustParseAmount("175")},
+	}
+	e := Engine{}
+	res, _ := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if got := res.CouponAmount.String(); got != "9" {
+		t.Errorf("coupon = %s, want 9 (rate only; threshold must not fire)", got)
+	}
+	if len(res.AppliedCoupons) != 1 {
+		t.Errorf("applied = %+v, want only the rate coupon", res.AppliedCoupons)
+	}
+}
+
+func TestLegacyCouponsDefaultToVoucher(t *testing.T) {
+	// Phase-1 rows have no Kind set; they must keep working as vouchers
+	// without a data migration (usable()/applyCoupons default "" → VOUCHER).
+	coupons := []Coupon{{
+		CouponID: "c-legacy", AccountID: 1, RemainValue: MustParseAmount("60"),
+	}}
+	e := Engine{}
+	res, err := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.CouponAmount.String(); got != "60" {
+		t.Errorf("legacy coupon deducted %s, want 60", got)
+	}
+	if got := res.PayableAmount.String(); got != "120" {
+		t.Errorf("payable = %s, want 120", got)
+	}
+}
+
+func TestThresholdCouponDeductionCappedAtRemainder(t *testing.T) {
+	// threshold fires before vouchers: 180 ≥ 满25 → −20 (running 160), then the
+	// voucher −150 → payable 10. The deduction can never exceed the running
+	// amount: face ≤ threshold is enforced at usable(), and the threshold check
+	// guarantees running ≥ threshold ≥ face at fire time — so payable ≥ 0 by
+	// construction, not by clamping.
+	coupons := []Coupon{
+		{CouponID: "c-150", AccountID: 1, RemainValue: MustParseAmount("150")},
+		{CouponID: "mj-25-20", AccountID: 1, Kind: KindThreshold,
+			FaceValue: MustParseAmount("20"), Threshold: MustParseAmount("25")},
+	}
+	e := Engine{}
+	res, _ := e.Calculate(baseReq(), basicRules(), nil, coupons)
+	if got := res.CouponAmount.String(); got != "170" {
+		t.Errorf("coupon total = %s, want 170 (20 threshold + 150 voucher)", got)
+	}
+	if got := res.PayableAmount.String(); got != "10" {
+		t.Errorf("payable = %s, want 10", got)
+	}
+	if res.PayableAmount.IsNegative() {
+		t.Fatalf("payable = %s, must never be negative", res.PayableAmount)
+	}
+}

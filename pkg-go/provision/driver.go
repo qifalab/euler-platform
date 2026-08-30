@@ -559,29 +559,15 @@ func (d *MockDriver) Reclaim(resourceID string, at time.Time) error {
 	return nil
 }
 
-// VMDriver is the phase-2 virtualization backend. The interface is frozen now
-// so the control plane can be written against it; the implementation lands
-// with KubeVirt in phase 2 (decision R-03).
-//
-// It returns ErrDriverNotReady rather than silently doing nothing, so a
-// misconfigured catalogue entry fails loudly at dispatch instead of leaving an
-// order stuck in CREATING until it times out.
-type VMDriver struct{}
-
-// Type identifies the driver.
-func (VMDriver) Type() DriverType { return DriverVM }
-
-// Apply is not implemented in phase 1.
-func (VMDriver) Apply(Spec) (Status, error) { return Status{}, ErrDriverNotReady }
-
-// Delete is not implemented in phase 1.
-func (VMDriver) Delete(string) error { return ErrDriverNotReady }
-
-// Query is not implemented in phase 1.
-func (VMDriver) Query(string) (Status, error) { return Status{}, ErrDriverNotReady }
-
-// CollectUsage is not implemented in phase 1.
-func (VMDriver) CollectUsage(string) ([]UsagePoint, error) { return nil, ErrDriverNotReady }
+// VMDriver is the phase-2 virtualization backend (decision R-03: KubeVirt).
+// The implementation lives in vmdriver.go; the zero value keeps the
+// fail-loudly contract — an unconfigured driver (no cluster client) returns
+// ErrDriverNotReady rather than silently doing nothing, so a misconfigured
+// catalogue entry fails at dispatch instead of leaving an order stuck in
+// CREATING until it times out. See NewVMDriver.
+type VMDriver struct {
+	state *vmDriverState
+}
 
 // Registry resolves a product to its driver, so the control plane dispatches
 // without knowing which backend a product uses. Safe for concurrent use:

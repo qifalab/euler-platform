@@ -8,6 +8,15 @@
 //	POST /api/auth/logout   — revoke refresh
 //	GET  /api/auth/session   — validate access_token, return user + permission snapshot
 //
+//	MFA 强制登录 (07§2.4, 09-roadmap M-2): when an account has a bound TOTP
+//	seed, password alone is NOT enough — login returns a 5-minute mfaToken,
+//	and only POST /api/auth/mfa/verify (token + 6-digit code) mints the
+//	session. Binding lifecycle:
+//
+//	POST /api/mfa/bind     — mint a TOTP seed (KMS envelope), return QR provisioning URI
+//	POST /api/mfa/verify   — confirm a code from the app, ACTIVATE the factor
+//	POST /api/mfa/unbind   — remove the factor (requires a live code)
+//
 //	GET  /api/ak             — list the account's AccessKeys
 //	POST /api/ak             — create an AccessKey (secret shown once)
 //	POST /api/ak/{akId}/disable — disable an AccessKey
@@ -47,12 +56,19 @@ import (
 	"time"
 
 	"github.com/starcloud/sc-platform/authz"
+	"github.com/starcloud/sc-platform/kms"
 	"github.com/starcloud/sc-platform/sts"
+	"github.com/starcloud/sc-platform/totp"
 )
 
 const (
 	accessTTL  = 15 * time.Minute
 	refreshTTL = 7 * 24 * time.Hour
+	// mfaTTL bounds the second-factor challenge issued after a successful
+	// password check. Five minutes: enough for a human to open the
+	// authenticator, short enough that an intercepted challenge is not a
+	// lingering door.
+	mfaTTL = 5 * time.Minute
 	// maxBodyBytes caps every JSON request body (defense against oversized
 	// payloads); http.MaxBytesReader enforces it per-handler.
 	maxBodyBytes = 1 << 20 // 1 MiB
@@ -118,8 +134,13 @@ type account struct {
 	// change). It is embedded in issued access tokens ("tv" claim) and
 	// compared on verification, so older tokens are rejected immediately.
 	TokenVersion int
-	// phoneBound/mfaEnabled are not yet tracked in phase-1; profile reports false
-	// until the binding flows land (07§2.5). Fields kept for forward-compat.
+	// MFA (07§2.4): the TOTP seed is stored ONLY as a KMS envelope ciphertext
+	// (kms.PurposeUser, 07§5.3) and decrypted per verification. MFAEnabled
+	// flips on when the user proves the authenticator works (bind → verify);
+	// until then a bound seed does not gate login.
+	MFASecretCipher []byte
+	MFAKeyVersion   int
+	MFAEnabled      bool
 }
 
 type session struct {
@@ -154,7 +175,34 @@ var (
 
 	roleSeq int64
 	polSeq  int64
+
+	// MFA (07§2.4): the seed-encryption KMS and the shared replay-safe TOTP
+	// verifier. In production the KMS is svc-kms over gRPC (07§5.3); the
+	// interface is identical. The verifier's replay memory is process-local
+	// — restarting reopens a ≤90s replay window, the standard trade.
+	mfaKMS        *kms.KMS
+	totpVerifier  *totp.Verifier
 )
+
+func init() {
+	mfaKMS = kms.New()
+	if err := mfaKMS.GenerateMasterKey(kms.PurposeUser, 1); err != nil {
+		panic("mfa kms bootstrap: " + err.Error())
+	}
+	totpVerifier = totp.NewVerifier()
+}
+
+// mfaReplayKey scopes the TOTP replay memory per account.
+func mfaReplayKey(accountID int64) string { return fmt.Sprintf("mfa:%d", accountID) }
+
+// mfaSecret decrypts the account's TOTP seed for the duration of one
+// verification. Callers must not retain or log the return value.
+func mfaSecret(a account) ([]byte, error) {
+	if len(a.MFASecretCipher) == 0 {
+		return nil, errors.New("Auth.MFANotBound")
+	}
+	return mfaKMS.Decrypt(kms.PurposeUser, a.MFASecretCipher, a.MFAKeyVersion)
+}
 
 // ramUser is a RAM sub-account (07§2.6). Status mirrors the account status enum.
 type ramUser struct {
@@ -336,10 +384,71 @@ func verifyAccessToken(token string, now time.Time) (int64, int, error) {
 	}
 	var p struct {
 		Sub string `json:"sub"`
+		Typ string `json:"typ"`
 		Tv  int    `json:"tv"`
 		Exp int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
+		return 0, 0, errors.New("Auth.MalformedToken")
+	}
+	// Token-class separation: an MFA challenge token ("typ":"mfa") carries
+	// sub/tv/exp like an access token, but authorizes exactly one call
+	// (/api/auth/mfa/verify). Letting it through requireAuth would make the
+	// 5-minute login challenge a 5-minute full session.
+	if p.Typ != "" {
+		return 0, 0, errors.New("Auth.MalformedToken")
+	}
+	if now.Unix() >= p.Exp {
+		return 0, 0, errors.New("Auth.TokenExpired")
+	}
+	id, err := strconv.ParseInt(p.Sub, 10, 64)
+	if err != nil {
+		return 0, 0, errors.New("Auth.MalformedToken")
+	}
+	return id, p.Tv, nil
+}
+
+// issueMFAToken signs a short-lived challenge binding one account to one
+// pending second-factor verification ("typ":"mfa"). It is deliberately NOT an
+// access token: it authorizes exactly the /api/auth/mfa/verify call and
+// nothing else — every other endpoint ignores it.
+func issueMFAToken(a account, now time.Time) string {
+	header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payload := fmt.Sprintf(`{"sub":"%d","typ":"mfa","tv":%d,"iat":%d,"exp":%d}`,
+		a.AccountID, a.TokenVersion, now.Unix(), now.Add(mfaTTL).Unix())
+	payloadB64 := b64url([]byte(payload))
+	signingInput := header + "." + payloadB64
+	mac := hmac.New(sha256.New, []byte(hmacSecret))
+	mac.Write([]byte(signingInput))
+	return signingInput + "." + b64url(mac.Sum(nil))
+}
+
+// verifyMFAToken validates an MFA challenge token. It re-checks the account's
+// TokenVersion so a challenge issued before a password change is void.
+func verifyMFAToken(token string, now time.Time) (int64, int, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0, 0, errors.New("Auth.MalformedToken")
+	}
+	mac := hmac.New(sha256.New, []byte(hmacSecret))
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	if !hmac.Equal([]byte(parts[2]), []byte(b64url(mac.Sum(nil)))) {
+		return 0, 0, errors.New("Auth.InvalidSignature")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0, 0, errors.New("Auth.MalformedToken")
+	}
+	var p struct {
+		Sub string `json:"sub"`
+		Typ string `json:"typ"`
+		Tv  int    `json:"tv"`
+		Exp int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return 0, 0, errors.New("Auth.MalformedToken")
+	}
+	if p.Typ != "mfa" {
 		return 0, 0, errors.New("Auth.MalformedToken")
 	}
 	if now.Unix() >= p.Exp {
@@ -433,6 +542,20 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+
+	// MFA 强制登录 (07§2.4): a bound-and-activated TOTP seed makes the
+	// password merely step one. No session, no tokens — just a 5-minute
+	// challenge. The response still says who is logging in so the console can
+	// render "请输入动态验证码" without a second round-trip.
+	if a.MFAEnabled {
+		writeJSON(w, 200, "OK", map[string]any{
+			"mfaRequired": true,
+			"mfaToken":    issueMFAToken(a, now),
+			"user":        map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
+		})
+		return
+	}
+
 	refresh := randHex(32)
 	mu.Lock()
 	sessions[refresh] = &session{
@@ -445,6 +568,77 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		"accessToken": issueAccessToken(a, now),
 		"user":        map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
 	})
+}
+
+// mfaLoginRequest completes a second-factor login: the mfaToken from the
+// password step plus the 6-digit code from the authenticator.
+type mfaLoginRequest struct {
+	MFAToken string `json:"mfaToken"`
+	Code     string `json:"code"`
+}
+
+// handleMFALoginVerify implements POST /api/auth/mfa/verify — the second half
+// of login for MFA-enabled accounts. On success it mints the same session the
+// password-only path would have (access_token + refresh cookie), so the client
+// code after login is identical either way.
+func handleMFALoginVerify(w http.ResponseWriter, r *http.Request) {
+	var req mfaLoginRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	id, tv, err := verifyMFAToken(req.MFAToken, time.Now())
+	if err != nil {
+		writeErr(w, 401, err.Error(), "MFA 校验凭证无效,请重新登录")
+		return
+	}
+	mu.RLock()
+	a := byID[id]
+	mu.RUnlock()
+	if a.AccountID == 0 || a.Status != 1 {
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在或不可用")
+		return
+	}
+	if tv != a.TokenVersion {
+		writeErr(w, 401, "Auth.TokenRevoked", "登录凭证已失效,请重新登录")
+		return
+	}
+	secret, err := mfaSecret(a)
+	if err != nil {
+		writeErr(w, 401, err.Error(), "MFA 未绑定")
+		return
+	}
+	if err := totpVerifier.Verify(mfaReplayKey(a.AccountID), secret, req.Code, time.Now()); err != nil {
+		writeMFACodeErr(w, err)
+		return
+	}
+
+	now := time.Now()
+	refresh := randHex(32)
+	mu.Lock()
+	sessions[refresh] = &session{
+		account: a, refreshToken: refresh,
+		refreshExp: now.Add(refreshTTL), accessExp: now.Add(accessTTL),
+	}
+	mu.Unlock()
+	setRefreshCookie(w, refresh, now.Add(refreshTTL))
+	writeJSON(w, 200, "OK", map[string]any{
+		"accessToken": issueAccessToken(a, now),
+		"user":        map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
+	})
+}
+
+// writeMFACodeErr maps the verifier's failure to a wire code. The distinction
+// matters operationally: ErrReplayed means the code WAS valid — someone just
+// used it — which is a security signal worth surfacing, not a typo.
+func writeMFACodeErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, totp.ErrReplayed):
+		writeErr(w, 401, "Auth.MFACodeReused", "验证码已被使用,请等待下一枚")
+	case errors.Is(err, totp.ErrMalformedCode), errors.Is(err, totp.ErrBadCode):
+		writeErr(w, 401, "Auth.MFAInvalidCode", "动态验证码错误")
+	default:
+		writeErr(w, 401, "Auth.MFAInvalidCode", "动态验证码错误")
+	}
 }
 
 func verifyPassword(stored, input string) bool {
@@ -617,6 +811,155 @@ func handleRealnameVerify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- MFA management (07§2.4) -----------------------------------------------
+//
+// Binding is two-phase on purpose: bind mints the seed and shows the QR, but
+// MFAEnabled only flips when the user proves the authenticator works (verify).
+// A seed that never got confirmed therefore never locks anyone out — the
+// classic "bound MFA, lost phone, locked out on first login" failure cannot
+// happen.
+
+type mfaCodeRequest struct {
+	Code string `json:"code"`
+}
+
+// handleMFABind implements POST /api/mfa/bind — mint a fresh TOTP seed, store
+// it as a KMS envelope, and return the base32 secret + provisioning URI for
+// the QR code. The secret is shown here exactly once (same convention as AK
+// secrets); after this call it can only be proven, never read again.
+func handleMFABind(w http.ResponseWriter, r *http.Request) {
+	a, err := requireAuth(r)
+	if err != nil {
+		writeErr(w, 401, err.Error(), "未认证")
+		return
+	}
+	secret, err := totp.GenerateSecret()
+	if err != nil {
+		writeErr(w, 500, "Common.InternalError", "生成 MFA 种子失败")
+		return
+	}
+	cipher, version, err := mfaKMS.Encrypt(kms.PurposeUser, secret)
+	if err != nil {
+		writeErr(w, 500, "Common.InternalError", "加密 MFA 种子失败")
+		return
+	}
+
+	mu.Lock()
+	cur, ok := byID[a.AccountID]
+	if !ok {
+		mu.Unlock()
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	}
+	if cur.MFAEnabled {
+		mu.Unlock()
+		writeErr(w, 409, "Auth.MFAAlreadyBound", "已开启 MFA,请先解绑后再重新绑定")
+		return
+	}
+	cur.MFASecretCipher = cipher
+	cur.MFAKeyVersion = version
+	cur.MFAEnabled = false
+	accounts[cur.AccountName] = cur
+	byID[cur.AccountID] = cur
+	mu.Unlock()
+
+	writeJSON(w, 200, "OK", map[string]any{
+		"secret":            totp.SecretBase32(secret),
+		"provisioningUri":   totp.ProvisioningURI(secret, cur.AccountName, "StarCloud"),
+		"activationRequired": true,
+	})
+}
+
+// handleMFABindVerify implements POST /api/mfa/verify — confirm a code from
+// the freshly bound authenticator and ACTIVATE the factor. From this moment
+// password-only login is refused for the account.
+func handleMFABindVerify(w http.ResponseWriter, r *http.Request) {
+	a, err := requireAuth(r)
+	if err != nil {
+		writeErr(w, 401, err.Error(), "未认证")
+		return
+	}
+	var req mfaCodeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	mu.RLock()
+	cur := byID[a.AccountID]
+	mu.RUnlock()
+	if cur.AccountID == 0 {
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	}
+	if len(cur.MFASecretCipher) == 0 {
+		writeErr(w, 409, "Auth.MFANotBound", "请先绑定 MFA")
+		return
+	}
+	secret, err := mfaSecret(cur)
+	if err != nil {
+		writeErr(w, 500, "Common.InternalError", "读取 MFA 种子失败")
+		return
+	}
+	if err := totpVerifier.Verify(mfaReplayKey(cur.AccountID), secret, req.Code, time.Now()); err != nil {
+		writeMFACodeErr(w, err)
+		return
+	}
+
+	mu.Lock()
+	cur = byID[a.AccountID]
+	cur.MFAEnabled = true
+	accounts[cur.AccountName] = cur
+	byID[cur.AccountID] = cur
+	mu.Unlock()
+	writeJSON(w, 200, "OK", map[string]any{"mfaEnabled": true})
+}
+
+// handleMFAUnbind implements POST /api/mfa/unbind — remove the factor. A live
+// code is required, not just the session: a stolen access token (XSS shoulder
+// surfing) must not be enough to strip the account's second factor, which is
+// exactly the moment an attacker would otherwise strike.
+func handleMFAUnbind(w http.ResponseWriter, r *http.Request) {
+	a, err := requireAuth(r)
+	if err != nil {
+		writeErr(w, 401, err.Error(), "未认证")
+		return
+	}
+	var req mfaCodeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	mu.RLock()
+	cur := byID[a.AccountID]
+	mu.RUnlock()
+	if cur.AccountID == 0 {
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	}
+	if len(cur.MFASecretCipher) == 0 {
+		writeErr(w, 409, "Auth.MFANotBound", "未绑定 MFA")
+		return
+	}
+	secret, err := mfaSecret(cur)
+	if err != nil {
+		writeErr(w, 500, "Common.InternalError", "读取 MFA 种子失败")
+		return
+	}
+	if err := totpVerifier.Verify(mfaReplayKey(cur.AccountID), secret, req.Code, time.Now()); err != nil {
+		writeMFACodeErr(w, err)
+		return
+	}
+
+	mu.Lock()
+	cur = byID[a.AccountID]
+	cur.MFASecretCipher = nil
+	cur.MFAKeyVersion = 0
+	cur.MFAEnabled = false
+	accounts[cur.AccountName] = cur
+	byID[cur.AccountID] = cur
+	mu.Unlock()
+	totpVerifier.Forget(mfaReplayKey(a.AccountID))
+	writeJSON(w, 200, "OK", map[string]any{"mfaEnabled": false})
+}
+
 // --- account profile & password (03§9.3) ---
 
 // handleAccountProfile returns the authenticated account's profile snapshot.
@@ -636,7 +979,7 @@ func handleAccountProfile(w http.ResponseWriter, r *http.Request) {
 		"createdAt":      a.CreatedAt.UTC().Format(time.RFC3339),
 		"email":          a.AccountName,
 		"phoneBound":     false, // phase-1: no phone-binding flow yet (07§2.5)
-		"mfaEnabled":     false, // phase-1: MFA not yet enforced (07§2.4)
+		"mfaEnabled":     a.MFAEnabled, // real state since M-2: KMS-sealed TOTP seed (07§2.4)
 		// Password status for the security settings card: the account always
 		// authenticates by password in phase-1, so the hash presence IS the truth.
 		"passwordSet": a.PasswordHash != "",
@@ -1418,6 +1761,11 @@ func main() {
 	mux.HandleFunc("POST /api/auth/logout", handleLogout)
 	mux.HandleFunc("GET /api/auth/session", handleSession)
 	mux.HandleFunc("POST /api/auth/register", handleRegister)
+	// MFA 强制登录 (M-2): step two of login + factor lifecycle.
+	mux.HandleFunc("POST /api/auth/mfa/verify", handleMFALoginVerify)
+	mux.HandleFunc("POST /api/mfa/bind", handleMFABind)
+	mux.HandleFunc("POST /api/mfa/verify", handleMFABindVerify)
+	mux.HandleFunc("POST /api/mfa/unbind", handleMFAUnbind)
 	mux.HandleFunc("GET /api/realname/status", handleRealnameStatus)
 	mux.HandleFunc("POST /api/realname/verify", handleRealnameVerify)
 	mux.HandleFunc("GET /api/account/profile", handleAccountProfile)
