@@ -11,3 +11,10 @@ packages:
 allowBuilds:
   esbuild: true
   vue-demi: true
+# Dependabot fixes (GHSA-5xrq-8626-4rwp / GHSA-fx2h-pf6j-xcff / GHSA-w27v-7q3p-w38r):
+# pin the audit-flagged transitive deps. pnpm 11 reads overrides from THIS file,
+# not from package.json#pnpm.
+overrides:
+  svgo: 4.1.0
+  esbuild: 0.25.12
+  vite: 6.4.3
