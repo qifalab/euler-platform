@@ -306,7 +306,14 @@ func (m *Manager) ReleaseOccupy(tokenID string) error {
 	if err := m.store.UpdateUsage(updated, u.Version); err != nil {
 		return err
 	}
-	return m.store.DeleteToken(tokenID)
+	// The delete also has to tolerate an already-claimed token: a commit or the
+	// expiry sweep may have claimed it between the GetToken above and here, and
+	// this function's contract is that releasing an unknown or already-released
+	// token SUCCEEDS (it runs as saga compensation, which retries).
+	if err := m.store.DeleteToken(tokenID); err != nil && !errors.Is(err, ErrTokenNotFound) {
+		return err
+	}
+	return nil
 }
 
 // ReleaseCommitted returns committed capacity when a resource is released.

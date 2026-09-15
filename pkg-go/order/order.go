@@ -258,7 +258,10 @@ func (r CreateRequest) Validate() error {
 	if !r.ChargeType.Sellable() {
 		return fmt.Errorf("%w: %s", pricing.ErrChargeTypeUnsold, r.ChargeType)
 	}
-	if !r.SnapshotExpiresAt.IsZero() && !r.At.Before(r.SnapshotExpiresAt) {
+	// At is optional (Create falls back to the machine clock), so this check
+	// is only authoritative when the caller pinned the time; Create re-runs it
+	// against the resolved clock, which is what closes the zero-At bypass.
+	if !r.At.IsZero() && !r.SnapshotExpiresAt.IsZero() && !r.At.Before(r.SnapshotExpiresAt) {
 		return ErrSnapshotExpired
 	}
 	if r.Quote.PayableAmount.IsNegative() {
@@ -295,6 +298,13 @@ func (m *Machine) Create(req CreateRequest, orderID int64, orderNo string) (*Ord
 	now := req.At
 	if now.IsZero() {
 		now = m.Now()
+	}
+	// Authoritative snapshot-expiry check: the request may omit At, and a
+	// zero time is always "before" any expiry, so Validate cannot be the only
+	// gate — an expired quote must never become an order (it is an uncapped
+	// liability, per the CreateRequest doc).
+	if !req.SnapshotExpiresAt.IsZero() && !now.Before(req.SnapshotExpiresAt) {
+		return nil, Event{}, ErrSnapshotExpired
 	}
 
 	o := &Order{

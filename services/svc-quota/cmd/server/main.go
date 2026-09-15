@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/starcloud/sc-platform/quota"
+	"github.com/starcloud/sc-platform/storage"
 )
 
 // accountIDHeader is injected by the API gateway after authentication (see
@@ -44,32 +45,135 @@ const accountIDHeader = "X-Sc-Account-Id"
 // maxBodyBytes caps JSON request bodies.
 const maxBodyBytes = 1 << 20 // 1 MiB
 
-// quotaStore is an in-memory quota.Store. Production uses MySQL (sharded by
-// account_id, version column for the optimistic lock) with Redis as a read
-// accelerator; the optimistic lock lives in both.
+// quotaStore is the service's quota persistence facade: it owns the two pieces of
+// state that are process-local by design (the client-idempotency map and the
+// token-id sequence) and delegates everything else to backend — quota.SQLStore
+// against support_db when SC_DB_DSN is set, memQuotaStore otherwise.
+//
+// The handlers pass the facade itself to quota.NewManager, so the two-phase
+// protocol is wired identically with and without persistence.
 type quotaStore struct {
+	backend quota.Store
+	// idem maps a client idempotency key (scoped by account) to the token id it
+	// produced, so a retried occupy with the same key does not double-count
+	// Occupying. It is process-local: a restart forgets the keys it has seen, and
+	// the exactly-once guarantee then rests on the token row in the store.
+	idemMu sync.Mutex
+	idem   map[string]string
+	// nextTokenID mints a process-unique reservation id. The service builds a
+	// quota.Manager per request, and a Manager's default generator restarts at
+	// "qt-1" every time — with a store-wide token table that made the second
+	// request overwrite the first request's token (leaked occupancy,
+	// cross-account lookups).
+	nextTokenID func() string
+	// persistent reports whether backend is MySQL; it is what the startup log
+	// tells an operator.
+	persistent bool
+}
+
+// newQuotaStore wires the persistence backend. Persistence is opt-in
+// (pkg-go/storage doc): with SC_DB_DSN set, definitions, usage counters and
+// reservation tokens live in support_db, so a restart keeps both the counters and
+// the in-flight reservations. Unset, the demo store is used.
+//
+// A configured DSN that cannot be reached — or a schema sqlmigrate never touched —
+// is a startup failure: an "healthy" process whose first occupy 500s is worse than
+// one that refuses to come up.
+func newQuotaStore(ctx context.Context) (*quotaStore, error) {
+	s := &quotaStore{idem: make(map[string]string)}
+	db, ok, err := storage.MustOpenFor(ctx, "support_db")
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return newInMemoryQuotaStore(), nil
+	}
+	if err := storage.EnsureMigrated(ctx, db, "support_db"); err != nil {
+		return nil, err
+	}
+	// Reservation ids come from the 号段 allocator (support_db.id_sequence,
+	// 04§6.6): an in-process counter restarts at 1 and would let PutToken
+	// overwrite a live reservation after a restart.
+	ids, err := storage.OpenSequence(ctx, db, "quota_token", 1000)
+	if err != nil {
+		return nil, err
+	}
+	next := ids.NextFunc()
+	s.backend = quota.NewSQLStore(db)
+	s.nextTokenID = func() string { return fmt.Sprintf("qt-%d", next()) }
+	s.persistent = true
+	return s, nil
+}
+
+// newInMemoryQuotaStore builds the demo store: in-memory backend, local token-id
+// counter, seeded definitions. Handler tests construct it directly, so they never
+// depend on whether the developer's shell has SC_DB_DSN set.
+func newInMemoryQuotaStore() *quotaStore {
+	mem := newMemQuotaStore()
+	return &quotaStore{
+		backend:     mem,
+		idem:        make(map[string]string),
+		nextTokenID: mem.nextTokenID,
+	}
+}
+
+// The facade satisfies quota.Store by delegation, so handlers hand it to
+// quota.NewManager exactly as they handed the in-memory store before.
+func (s *quotaStore) GetDefinition(quotaCode string) (quota.Definition, error) {
+	return s.backend.GetDefinition(quotaCode)
+}
+
+func (s *quotaStore) GetUsage(accountID int64, quotaCode, region string) (quota.Usage, error) {
+	return s.backend.GetUsage(accountID, quotaCode, region)
+}
+
+func (s *quotaStore) UpdateUsage(u quota.Usage, expectedVersion int) error {
+	return s.backend.UpdateUsage(u, expectedVersion)
+}
+
+func (s *quotaStore) PutToken(t quota.Token) error { return s.backend.PutToken(t) }
+
+func (s *quotaStore) GetToken(tokenID string) (quota.Token, error) {
+	return s.backend.GetToken(tokenID)
+}
+
+func (s *quotaStore) DeleteToken(tokenID string) error { return s.backend.DeleteToken(tokenID) }
+
+func (s *quotaStore) ListExpiredTokens(now time.Time) ([]quota.Token, error) {
+	return s.backend.ListExpiredTokens(now)
+}
+
+// memQuotaStore is the in-memory quota.Store: definitions, usage and tokens in
+// maps under one lock. It is what keeps the demo and `go test` dependency-free.
+type memQuotaStore struct {
 	mu     sync.Mutex
 	defs   map[string]quota.Definition
 	usage  map[string]quota.Usage
 	tokens map[string]quota.Token
-	// idem maps a client idempotency key (scoped by account) to the token id it
-	// produced, so a retried occupy with the same key does not double-count
-	// Occupying. Production: unique index on (account_id, idempotency_key).
-	idem map[string]string
+	// tokenSeq mints reservation ids in the in-memory mode.
+	tokenSeq int64
 }
 
-func newQuotaStore() *quotaStore {
-	s := &quotaStore{
+func newMemQuotaStore() *memQuotaStore {
+	s := &memQuotaStore{
 		defs:   make(map[string]quota.Definition),
 		usage:  make(map[string]quota.Usage),
 		tokens: make(map[string]quota.Token),
-		idem:   make(map[string]string),
 	}
 	s.seed()
 	return s
 }
 
-func (s *quotaStore) seed() {
+// nextTokenID mints a process-unique reservation id, handed to every Manager so
+// the ids do not restart at 1 per request.
+func (s *memQuotaStore) nextTokenID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokenSeq++
+	return fmt.Sprintf("qt-%d", s.tokenSeq)
+}
+
+func (s *memQuotaStore) seed() {
 	// Seed the scecs-instance quota definition (limit 20, region-scoped) and a
 	// pre-seeded usage row for account 100123 so GET /usage returns the real
 	// shape before any occupy.
@@ -102,7 +206,7 @@ func usageKey(accountID int64, quotaCode, region string) string {
 	return fmt.Sprintf("%d|%s|%s", accountID, quotaCode, region)
 }
 
-func (s *quotaStore) GetDefinition(code string) (quota.Definition, error) {
+func (s *memQuotaStore) GetDefinition(code string) (quota.Definition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.defs[code]
@@ -112,7 +216,7 @@ func (s *quotaStore) GetDefinition(code string) (quota.Definition, error) {
 	return d, nil
 }
 
-func (s *quotaStore) GetUsage(accountID int64, quotaCode, region string) (quota.Usage, error) {
+func (s *memQuotaStore) GetUsage(accountID int64, quotaCode, region string) (quota.Usage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.usage[usageKey(accountID, quotaCode, region)]
@@ -122,7 +226,7 @@ func (s *quotaStore) GetUsage(accountID int64, quotaCode, region string) (quota.
 	return u, nil
 }
 
-func (s *quotaStore) UpdateUsage(u quota.Usage, expectedVersion int) error {
+func (s *memQuotaStore) UpdateUsage(u quota.Usage, expectedVersion int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := usageKey(u.AccountID, u.QuotaCode, u.Region)
@@ -139,14 +243,14 @@ func (s *quotaStore) UpdateUsage(u quota.Usage, expectedVersion int) error {
 	return nil
 }
 
-func (s *quotaStore) PutToken(t quota.Token) error {
+func (s *memQuotaStore) PutToken(t quota.Token) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tokens[t.TokenID] = t
 	return nil
 }
 
-func (s *quotaStore) GetToken(id string) (quota.Token, error) {
+func (s *memQuotaStore) GetToken(id string) (quota.Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tokens[id]
@@ -156,14 +260,14 @@ func (s *quotaStore) GetToken(id string) (quota.Token, error) {
 	return t, nil
 }
 
-func (s *quotaStore) DeleteToken(id string) error {
+func (s *memQuotaStore) DeleteToken(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.tokens, id)
 	return nil
 }
 
-func (s *quotaStore) ListExpiredTokens(now time.Time) ([]quota.Token, error) {
+func (s *memQuotaStore) ListExpiredTokens(now time.Time) ([]quota.Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []quota.Token
@@ -210,19 +314,26 @@ func idemKey(accountID int64, key string) string {
 // lookupIdem returns the still-live token previously produced for this
 // idempotency key, if any.
 func (s *quotaStore) lookupIdem(accountID int64, key string) (quota.Token, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.idemMu.Lock()
 	tokID, ok := s.idem[idemKey(accountID, key)]
+	s.idemMu.Unlock()
 	if !ok {
 		return quota.Token{}, false
 	}
-	tok, ok := s.tokens[tokID]
-	return tok, ok
+	// The token itself lives in the backend — in-memory in the demo, support_db
+	// when persistence is on. A token the sweeper has already reclaimed reads as
+	// a miss, which is exactly what lets the retry reserve afresh instead of
+	// handing back a dead reservation id.
+	tok, err := s.GetToken(tokID)
+	if err != nil {
+		return quota.Token{}, false
+	}
+	return tok, true
 }
 
 func (s *quotaStore) recordIdem(accountID int64, key, tokenID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.idemMu.Lock()
+	defer s.idemMu.Unlock()
 	s.idem[idemKey(accountID, key)] = tokenID
 }
 
@@ -259,7 +370,7 @@ func (s *quotaStore) handleOccupy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	mgr := quota.NewManager(s, time.Now, nil)
+	mgr := quota.NewManager(s, time.Now, s.nextTokenID)
 	tok, err := mgr.CheckAndOccupy(acct, quotaCodeFor(req.ProductCode), req.Region, req.Count, req.BizKey)
 	if err != nil {
 		switch {
@@ -313,7 +424,7 @@ func (s *quotaStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Common.InvalidParameter", 400, "reservationId is required")
 		return
 	}
-	mgr := quota.NewManager(s, time.Now, nil)
+	mgr := quota.NewManager(s, time.Now, s.nextTokenID)
 	// ReleaseOccupy is saga-compensation: it succeeds for unknown/already-released
 	// tokens. But the token, if it exists, must belong to this account — a
 	// cross-account release is a real error, not a silent no-op.
@@ -343,7 +454,7 @@ func (s *quotaStore) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if region == "" {
 		region = "cn-north-1"
 	}
-	mgr := quota.NewManager(s, time.Now, nil)
+	mgr := quota.NewManager(s, time.Now, s.nextTokenID)
 	u, err := mgr.Describe(acct, quotaCodeFor(productCode), region)
 	if err != nil {
 		if errors.Is(err, quota.ErrUnknownQuota) {
@@ -442,7 +553,15 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	store := newQuotaStore()
+	store, err := newQuotaStore(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Tell the operator where the counters live: in-memory counters are lost on
+	// restart, and a reservation that disappears with them is capacity the next
+	// order cannot see.
+	slog.Info("svc-quota store ready", "persistent", store.persistent)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })

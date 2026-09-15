@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,19 +11,50 @@ import (
 	"github.com/starcloud/sc-platform/workflow"
 )
 
+// flowStore is the persistence boundary for flow instances. The SQL
+// implementation writes resource_db's flow_instance + step_instance; the
+// in-memory one keeps the demo and `go test` dependency-free.
+//
+// put carries an error because a SQL backend has one: refusing to start a flow it
+// cannot record is better than running an untraceable saga.
+type flowStore interface {
+	put(r flowRecord) error
+	get(id int64) (flowRecord, bool, error)
+}
+
 // app wires the pkg-go/workflow engine to the HTTP handlers through small
 // ports, so the production Vitess-backed repositories (03§4.3.3) can be
 // swapped in without touching the handlers.
 type app struct {
 	engine *workflow.Engine
-	store  *flowStore
-	seq    atomic.Int64
+	store  flowStore
+	// nextID mints flow instance ids. The in-memory app uses an atomic counter;
+	// the persistent app takes them from the 号段 allocator, because a restart
+	// must not re-issue ids it already committed.
+	nextID func() int64
 }
 
-func newApp() *app {
+func newApp(ctx context.Context) (*app, error) {
+	store, nextID, err := newStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("svc-workflow store ready", "persistent", persistentStore(store))
 	return &app{
 		engine: workflow.NewEngine(time.Now),
-		store:  newFlowStore(),
+		store:  store,
+		nextID: nextID,
+	}, nil
+}
+
+// newInMemoryApp builds the demo app. Handler tests construct it directly, so
+// they never depend on whether the developer's shell has SC_DB_DSN set.
+func newInMemoryApp() *app {
+	var seq atomic.Int64
+	return &app{
+		engine: workflow.NewEngine(time.Now),
+		store:  newMemFlowStore(),
+		nextID: func() int64 { return seq.Add(1) },
 	}
 }
 
@@ -34,11 +67,16 @@ func (a *app) StartFlow(accountID int64, defKey, bizKey string) (int64, workflow
 		return 0, workflow.Result{}, fmt.Errorf("unknown flow definition %q", defKey)
 	}
 
-	id := a.seq.Add(1)
+	id := a.nextID()
 	ctx := &workflow.Context{AccountID: accountID, BizKey: bizKey}
 	result := a.engine.Run(id, ctx, steps)
 
-	a.store.put(toFlowRecord(id, accountID, defKey, bizKey, result))
+	// The record is the saga's trail: writing it is part of starting the flow,
+	// and a failure here is surfaced rather than logged-and-forgotten — an
+	// instance nobody can see is an unexplainable resource (03§8.5).
+	if err := a.store.put(toFlowRecord(id, accountID, defKey, bizKey, result)); err != nil {
+		return id, result, err
+	}
 
 	return id, result, nil
 }
@@ -103,28 +141,29 @@ func toFlowRecord(id, accountID int64, defKey, bizKey string, res workflow.Resul
 	return rec
 }
 
-// flowStore is the in-memory stand-in for the flow_instance table. It is safe
+// memFlowStore is the in-memory stand-in for the flow_instance table. It is safe
 // for concurrent use so the HTTP handlers can run in parallel.
-type flowStore struct {
+type memFlowStore struct {
 	mu    sync.RWMutex
 	items map[int64]flowRecord
 }
 
-func newFlowStore() *flowStore {
-	return &flowStore{items: make(map[int64]flowRecord)}
+func newMemFlowStore() *memFlowStore {
+	return &memFlowStore{items: make(map[int64]flowRecord)}
 }
 
-func (s *flowStore) put(r flowRecord) {
+func (s *memFlowStore) put(r flowRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.items[r.ID] = r
+	return nil
 }
 
-func (s *flowStore) get(id int64) (flowRecord, bool) {
+func (s *memFlowStore) get(id int64) (flowRecord, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.items[id]
-	return r, ok
+	return r, ok, nil
 }
 
 // --- Predefined flows (in-memory step closures) ------------------------------

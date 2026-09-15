@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/starcloud/sc-platform/accesskey"
 	"github.com/starcloud/sc-platform/kms"
+	"github.com/starcloud/sc-platform/storage"
 	"github.com/starcloud/sc-platform/verify"
 )
 
@@ -99,7 +101,30 @@ func newApp() (*app, error) {
 	if err := k.GenerateMasterKey(kms.PurposeAK, 1); err != nil {
 		return nil, err
 	}
-	store := newMemAKStore()
+
+	// The AK store decides where credentials live. Persistence is opt-in
+	// (pkg-go/storage doc): with SC_DB_DSN set, keys live in account_db so a
+	// restarted verifier still resolves every live key; unset, the in-memory
+	// store keeps the demo and `go test` dependency-free.
+	//
+	// A configured DSN that cannot be reached is a startup failure: a verifier
+	// that cannot read credentials must not pretend to authenticate anyone.
+	ctx := context.Background()
+	db, ok, err := storage.MustOpenFor(ctx, "account_db")
+	if err != nil {
+		return nil, err
+	}
+	var store accesskey.Store
+	if ok {
+		if err := storage.EnsureMigrated(ctx, db, "account_db"); err != nil {
+			return nil, err
+		}
+		store = accesskey.NewSQLStore(ctx, db)
+		slog.Info("svc-iam verify AK store ready", "persistent", true)
+	} else {
+		store = newMemAKStore()
+		slog.Info("svc-iam verify AK store ready", "persistent", false)
+	}
 	mgr := accesskey.NewManager(store, k, time.Now)
 
 	return &app{

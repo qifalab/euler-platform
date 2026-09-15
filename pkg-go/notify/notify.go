@@ -148,6 +148,7 @@ var (
 	ErrMissingAccount   = errors.New("notify: no account attribution")
 	ErrMissingBizKey    = errors.New("notify: trust-critical notification requires a BizKey")
 	ErrDeliveryExhausted = errors.New("notify: delivery attempts exhausted, escalating")
+	ErrNotFound         = errors.New("notify: notification not found")
 )
 
 // Sender delivers a message on one channel. Production implementations wrap
@@ -168,6 +169,9 @@ type Store interface {
 	// the query a support agent runs when a customer says they were never
 	// warned.
 	FindByBizKey(accountID int64, class Class, bizKey string) ([]Notification, error)
+	// ListByAccount returns the tenant's notification inbox, newest first —
+	// the console view on top of the same rows.
+	ListByAccount(accountID int64) ([]Notification, error)
 }
 
 // Dispatcher sends notifications and records the outcome.

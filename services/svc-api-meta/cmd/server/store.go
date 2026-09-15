@@ -17,10 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/starcloud/sc-platform/errors"
 	"github.com/starcloud/sc-platform/identifier"
@@ -41,16 +38,24 @@ type Action struct {
 	UpdatedAt   string          `json:"updated_at"`   // RFC3339
 }
 
-// actionStore is the in-memory metadata store keyed by Action id.
+// actionStore wires the metadata handlers to the Action repository. The demo
+// seed runs only for the in-memory repo: writing the demo Actions into a shared
+// openapi_meta would claim product surface that the real services register
+// themselves at startup.
 type actionStore struct {
-	mu      sync.RWMutex
-	actions map[string]Action
+	repo actionRepo
 }
 
 func newMetaStore() *actionStore {
-	s := &actionStore{actions: make(map[string]Action)}
+	s := newMetaStoreWith(newMemActionRepo())
 	s.seedActions()
 	return s
+}
+
+// newMetaStoreWith wires a repo. Tests use it to run the handlers against
+// whichever backend they are exercising.
+func newMetaStoreWith(repo actionRepo) *actionStore {
+	return &actionStore{repo: repo}
 }
 
 // seedActions registers a representative slice of the phase-1 product API
@@ -77,9 +82,10 @@ func (s *actionStore) seedActions() {
 			ErrorCodes:  []string{"scvpc.InvalidCidrBlock", "scvpc.QuotaExceeded"}},
 	}
 	for _, a := range seed {
-		a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		a.UpdatedBy = "system-seed"
-		s.actions[a.ID] = a
+		if err := s.repo.Upsert(&a); err != nil {
+			panic(fmt.Sprintf("seed action %s failed: %v", a.ID, err))
+		}
 	}
 }
 
@@ -88,34 +94,21 @@ func actionID(product, action string) string {
 	return product + "." + action
 }
 
-// --- domain operations (would hit MySQL in the real service) -----------------
+// --- domain operations (delegated to the repo; MySQL when SC_DB_DSN is set) --
 
-func (s *actionStore) register(a Action) Action {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	s.actions[a.ID] = a
-	return a
-}
-
-func (s *actionStore) get(id string) (Action, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	a, ok := s.actions[id]
-	return a, ok
-}
-
-func (s *actionStore) listByProduct(product string) []Action {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []Action
-	for _, a := range s.actions {
-		if product == "" || a.ProductCode == product {
-			out = append(out, a)
-		}
+func (s *actionStore) register(a Action) (Action, error) {
+	if err := s.repo.Upsert(&a); err != nil {
+		return Action{}, err
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+	return a, nil
+}
+
+func (s *actionStore) get(id string) (*Action, bool, error) {
+	return s.repo.Get(id)
+}
+
+func (s *actionStore) listByProduct(product string) ([]*Action, error) {
+	return s.repo.List(product)
 }
 
 // --- HTTP handlers ------------------------------------------------------------
@@ -222,7 +215,12 @@ func (s *actionStore) handleRegisterAction(w http.ResponseWriter, r *http.Reques
 		ErrorCodes:  req.ErrorCodes,
 		UpdatedBy:   acct,
 	}
-	saved := s.register(a)
+	saved, err := s.register(a)
+	if err != nil {
+		writeError(w, errorsx.New("ApiMeta.RegisterFailed", errorsx.StatusInternalError,
+			"action metadata persistence failed"))
+		return
+	}
 	writeJSON(w, http.StatusOK, saved)
 }
 
@@ -234,7 +232,12 @@ func (s *actionStore) handleGetAction(w http.ResponseWriter, r *http.Request) {
 	}
 	product := r.PathValue("product")
 	action := r.PathValue("action")
-	a, ok := s.get(actionID(product, action))
+	a, ok, err := s.get(actionID(product, action))
+	if err != nil {
+		writeError(w, errorsx.New("ApiMeta.ReadFailed", errorsx.StatusInternalError,
+			"action metadata lookup failed"))
+		return
+	}
 	if !ok {
 		writeError(w, errorsx.New("ApiMeta.ActionNotFound", errorsx.StatusNotFound,
 			fmt.Sprintf("action %q not found", actionID(product, action))))
@@ -250,9 +253,14 @@ func (s *actionStore) handleListActions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	product := r.URL.Query().Get("product")
-	list := s.listByProduct(product)
+	list, err := s.listByProduct(product)
+	if err != nil {
+		writeError(w, errorsx.New("ApiMeta.ReadFailed", errorsx.StatusInternalError,
+			"action metadata lookup failed"))
+		return
+	}
 	if list == nil {
-		list = []Action{}
+		list = []*Action{}
 	}
 	writeJSON(w, http.StatusOK, list)
 }

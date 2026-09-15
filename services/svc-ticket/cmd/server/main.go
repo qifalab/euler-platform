@@ -69,6 +69,14 @@ type Ticket struct {
 	Messages  []Message   `json:"messages"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
+	// ClientToken is the idempotency key the DDL's uk_client_token arbitrates
+	// (不可后置通道 must not double-open a ticket under a network retry). The
+	// store fills it in when the caller did not supply one.
+	ClientToken string `json:"-"`
+	// Version is the optimistic lock the ticket row carries; the SQL store
+	// advances it on every transition. The in-memory store keeps it for parity
+	// so both implementations hand out the same shape.
+	Version int `json:"-"`
 }
 
 // Message is a single entry in the ticket thread.
@@ -95,9 +103,26 @@ func slaDeadline(priority string, created time.Time) time.Time {
 // this with MySQL sharded by account_id.
 type Store interface {
 	Create(t *Ticket) error
+	// Get returns a COPY of the ticket: handing out the stored pointer lets a
+	// caller mutate shared state outside the store's lock.
 	Get(accountID int64, ticketID string) (*Ticket, error)
-	ListByAccount(accountID int64) []*Ticket
+	// ListByAccount returns the account's tickets, newest first. The error is
+	// part of the port because a SQL backend has one; the in-memory store has
+	// nothing to report and returns nil.
+	ListByAccount(accountID int64) ([]*Ticket, error)
+	// Reply appends a message and moves the ticket to WAITING_REPLY, under the
+	// store's write lock so concurrent replies cannot lose each other's append.
+	Reply(accountID int64, ticketID string, msg Message, now time.Time) (*Ticket, error)
+	// Close moves the ticket to CLOSED under the store's write lock.
+	Close(accountID int64, ticketID string, now time.Time) (*Ticket, error)
 }
+
+// Errors returned by the store's mutating operations; the handlers map them to
+// HTTP status codes without holding a lock of their own.
+var (
+	errTicketNotFound = errors.New("ticket: not found")
+	errTicketClosed   = errors.New("ticket: closed")
+)
 
 // memoryStore is the phase-1 in-memory Store.
 type memoryStore struct {
@@ -124,24 +149,68 @@ func (s *memoryStore) Create(t *Ticket) error {
 	return nil
 }
 
+// cloneTicket deep-copies a ticket (including its message slice) so a value
+// handed to a handler can never alias the stored one.
+func cloneTicket(t *Ticket) *Ticket {
+	if t == nil {
+		return nil
+	}
+	cp := *t
+	cp.Messages = append([]Message(nil), t.Messages...)
+	return &cp
+}
+
 func (s *memoryStore) Get(accountID int64, ticketID string) (*Ticket, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t, ok := s.byID[ticketID]
 	if !ok || t.AccountID != accountID {
-		return nil, fmt.Errorf("ticket: not found")
+		return nil, errTicketNotFound
 	}
-	return t, nil
+	return cloneTicket(t), nil
 }
 
-func (s *memoryStore) ListByAccount(accountID int64) []*Ticket {
+func (s *memoryStore) ListByAccount(accountID int64) ([]*Ticket, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	list := make([]*Ticket, 0, len(s.byAcct[accountID]))
-	list = append(list, s.byAcct[accountID]...)
+	for _, t := range s.byAcct[accountID] {
+		list = append(list, cloneTicket(t))
+	}
 	// newest first
 	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
-	return list
+	return list, nil
+}
+
+func (s *memoryStore) Reply(accountID int64, ticketID string, msg Message, now time.Time) (*Ticket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.byID[ticketID]
+	if !ok || t.AccountID != accountID {
+		return nil, errTicketNotFound
+	}
+	if t.Status == StatusClosed {
+		return nil, errTicketClosed
+	}
+	t.Messages = append(t.Messages, msg)
+	t.Status = StatusWaitingReply
+	t.UpdatedAt = now
+	return cloneTicket(t), nil
+}
+
+func (s *memoryStore) Close(accountID int64, ticketID string, now time.Time) (*Ticket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.byID[ticketID]
+	if !ok || t.AccountID != accountID {
+		return nil, errTicketNotFound
+	}
+	if t.Status == StatusClosed {
+		return nil, errTicketClosed
+	}
+	t.Status = StatusClosed
+	t.UpdatedAt = now
+	return cloneTicket(t), nil
 }
 
 // --- Application ------------------------------------------------------------
@@ -229,7 +298,12 @@ func (a *app) handleList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "Ticket.MissingAccount", "account_id header required")
 		return
 	}
-	list := a.store.ListByAccount(accountID)
+	list, err := a.store.ListByAccount(accountID)
+	if err != nil {
+		slog.Error("ticket list failed", "account", accountID, "err", err)
+		writeErr(w, http.StatusInternalServerError, "Ticket.ListFailed", "工单列表读取失败")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"tickets": list})
 }
 
@@ -260,26 +334,25 @@ func (a *app) handleReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := a.store.Get(accountID, ticketID)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "Ticket.NotFound", "ticket not found")
-		return
-	}
-	if t.Status == StatusClosed {
-		writeErr(w, http.StatusConflict, "Ticket.Closed", "ticket is closed")
-		return
-	}
-
-	now := a.now()
-	t.Messages = append(t.Messages, Message{
+	msg := Message{
 		ID:        uuid.NewString(),
 		Author:    strconv.FormatInt(accountID, 10),
 		FromUser:  true,
 		Body:      body.Message,
-		CreatedAt: now,
-	})
-	t.Status = StatusWaitingReply
-	t.UpdatedAt = now
+		CreatedAt: a.now(),
+	}
+	t, err := a.store.Reply(accountID, ticketID, msg, msg.CreatedAt)
+	switch {
+	case errors.Is(err, errTicketNotFound):
+		writeErr(w, http.StatusNotFound, "Ticket.NotFound", "ticket not found")
+		return
+	case errors.Is(err, errTicketClosed):
+		writeErr(w, http.StatusConflict, "Ticket.Closed", "ticket is closed")
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "Common.InternalError", "failed to append reply")
+		return
+	}
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -294,17 +367,18 @@ func (a *app) handleClose(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Ticket.InvalidID", "ticket id required")
 		return
 	}
-	t, err := a.store.Get(accountID, ticketID)
-	if err != nil {
+	t, err := a.store.Close(accountID, ticketID, a.now())
+	switch {
+	case errors.Is(err, errTicketNotFound):
 		writeErr(w, http.StatusNotFound, "Ticket.NotFound", "ticket not found")
 		return
-	}
-	if t.Status == StatusClosed {
+	case errors.Is(err, errTicketClosed):
 		writeErr(w, http.StatusConflict, "Ticket.Closed", "ticket is already closed")
 		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "Common.InternalError", "failed to close ticket")
+		return
 	}
-	t.Status = StatusClosed
-	t.UpdatedAt = a.now()
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -397,7 +471,12 @@ func (a *app) handleAPIList(w http.ResponseWriter, r *http.Request) {
 		writeEnvelopedErr(w, r, http.StatusForbidden, "Ticket.MissingAccount", "account_id header required")
 		return
 	}
-	list := a.store.ListByAccount(accountID)
+	list, err := a.store.ListByAccount(accountID)
+	if err != nil {
+		slog.Error("ticket list failed", "account", accountID, "err", err)
+		writeEnvelopedErr(w, r, http.StatusInternalServerError, "Ticket.ListFailed", "工单列表读取失败")
+		return
+	}
 	dto := make([]ticketDTO, 0, len(list))
 	for _, t := range list {
 		dto = append(dto, toTicketDTO(t))
@@ -574,7 +653,13 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	a := newApp(newMemoryStore())
+	store, err := newStore(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("svc-ticket store ready", "persistent", persistentStore(store))
+	a := newApp(store)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)

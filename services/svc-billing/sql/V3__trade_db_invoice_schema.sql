@@ -44,7 +44,7 @@ CREATE TABLE `invoice` (
   PRIMARY KEY (`invoice_id`),
   UNIQUE KEY `uk_invoice` (`account_id`,`invoice_id`) COMMENT '幂等;同ID只一行',
   KEY `idx_acc_period` (`account_id`,`bill_period`,`status`) COMMENT '按账期查发票'
-) ENGINE=InnoDB DEFAULT CHARSET=utf2mb4
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='发票文档;红冲不删原票,置VOIDED并开负数票,终态不可逆(B6/M-4.3)';
 
 -- -----------------------------------------------------------------------------
@@ -63,5 +63,5 @@ CREATE TABLE `invoice_item` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_invoice_seq` (`account_id`,`invoice_id`,`seq`) COMMENT '一行一序号',
   KEY `idx_invoice` (`account_id`,`invoice_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf2mb4
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='发票明细行;红冲行金额为负(B6/M-4.3)';

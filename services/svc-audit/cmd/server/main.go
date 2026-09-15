@@ -48,7 +48,20 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	store := newAuditStore()
+	ctx := context.Background()
+	repo, err := newCheckpointRepo(ctx)
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	store, err := newAuditStoreWith(ctx, repo)
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Log where the chain heads live: a restart that resets chains to genesis
+	// would silently validate a truncated trail.
+	slog.Info("svc-audit checkpoint repo ready", "persistent", repo != nil)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)

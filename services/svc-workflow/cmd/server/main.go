@@ -47,7 +47,11 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	app := newApp()
+	app, err := newApp(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
@@ -168,7 +172,12 @@ func (a *app) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, ok := a.store.get(id)
+	rec, ok, err := a.store.get(id)
+	if err != nil {
+		slog.Error("flow lookup failed", "flowId", id, "err", err)
+		writeErr(w, "Workflow.LookupFailed", "flow lookup failed", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		writeErr(w, "Workflow.NotFound", "flow not found", http.StatusNotFound)
 		return

@@ -135,6 +135,10 @@ CREATE TABLE `refund_record` (
 -- to Kafka; business code is forbidden from producing money/resource events
 -- directly, because a direct send can succeed while the transaction rolls back
 -- (or vice versa) and the two states diverge with no way to reconcile.
+--
+-- 这是 trade_db 里 outbox_message 的唯一权威定义: svc-payment 也写这张表,
+-- 但它在自己的 V1 里不再重复建表(重复会让迁移中断在 Error 1050,且两份定义
+-- 漂移时生效的那一份取决于目录顺序)。改这张表时请同时确认两个写入方。
 -- -----------------------------------------------------------------------------
 CREATE TABLE `outbox_message` (
   `id`            BIGINT UNSIGNED NOT NULL,

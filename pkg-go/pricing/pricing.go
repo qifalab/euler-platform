@@ -81,8 +81,11 @@ func ParseAmount(s string) (Amount, error) {
 		return 0, errors.New("pricing: amount has sign but no digits")
 	}
 
-	intPart, fracPart, hasFrac := strings.Cut(s, ".")
-	if intPart == "" && !hasFrac {
+	intPart, fracPart, _ := strings.Cut(s, ".")
+	if intPart == "" && fracPart == "" {
+		// "." (or a sign followed by ".") carries no digits at all. Parsing it
+		// as zero would silently turn a malformed price into a free product —
+		// the exact failure this strictness exists to prevent.
 		return 0, fmt.Errorf("pricing: malformed amount %q", s)
 	}
 	if strings.Contains(fracPart, ".") {
@@ -143,13 +146,11 @@ func MustParseAmount(s string) Amount {
 // e.g. "180.5". This is the form written to price_snapshot.detail_json and
 // returned by the 询价 API.
 func (a Amount) String() string {
-	neg := a < 0
-	v := int64(a)
-	if neg {
-		v = -v
-	}
-	units := v / scaleFactor
-	frac := v % scaleFactor
+	// Magnitude is taken in uint64 so math.MinInt64 negates correctly: -v on
+	// int64 would overflow back to itself and print a garbled value.
+	u := absU64(int64(a))
+	units := u / scaleFactor
+	frac := u % scaleFactor
 
 	out := fmt.Sprintf("%d", units)
 	if frac != 0 {
@@ -157,7 +158,7 @@ func (a Amount) String() string {
 		fracStr = strings.TrimRight(fracStr, "0")
 		out += "." + fracStr
 	}
-	if neg {
+	if a < 0 {
 		out = "-" + out
 	}
 	return out

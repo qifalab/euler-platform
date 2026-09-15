@@ -53,14 +53,19 @@ const accountIDHeader = "X-Sc-Account-Id"
 // maxBodyBytes caps JSON request bodies (defense against oversized payloads).
 const maxBodyBytes = 1 << 20 // 1 MiB
 
-// lifecycleStore is the in-memory resource lifecycle ledger + order mirror.
-// In production this is MySQL (sharded by account_id) + the order service.
+// lifecycleStore wires the fulfilment saga to the resource ledger over HTTP.
+// The ledger decides where instances live (resource_db when SC_DB_DSN is set,
+// in-memory otherwise); the order mirror stays in memory in both modes —
+// order_main belongs to svc-order, and a second service writing it would be two
+// writers on one aggregate (see resourceLedger's doc).
 type lifecycleStore struct {
-	mu        sync.RWMutex
-	resources map[string]*resource.Instance // ResourceID → instance
-	orders    map[int64]*order.Order        // OrderID → order (mirror for fulfilment)
-	orderRes  map[int64]string              // OrderID → ResourceID (fulfilment idempotency)
-	resSeq    int
+	mu    sync.RWMutex
+	// orders mirrors the orders this process has seen, for the saga's
+	// PAID→FULFILLING→COMPLETED transitions. A restart drops in-flight mirrors;
+	// the durable half of the saga is the resource row (state + order_id).
+	orders map[int64]*order.Order
+	ledger resourceLedger
+	resSeq int
 	// driver is the service-level provision driver singleton (created once at
 	// startup; MockDriver is internally synchronized, so it is shared safely
 	// across requests without the store lock).
@@ -68,13 +73,21 @@ type lifecycleStore struct {
 }
 
 func newStore() *lifecycleStore {
+	return newStoreWith(newMemLedger())
+}
+
+// newStoreWith wires a ledger. The demo seed runs only for the in-memory ledger:
+// writing two demo instances into a shared resource_db would invent resources for
+// account 100123 in every environment pointed at it.
+func newStoreWith(ledger resourceLedger) *lifecycleStore {
 	s := &lifecycleStore{
-		resources: make(map[string]*resource.Instance),
-		orders:    make(map[int64]*order.Order),
-		orderRes:  make(map[int64]string),
-		driver:    provision.NewMockDriver(time.Now),
+		orders: make(map[int64]*order.Order),
+		ledger: ledger,
+		driver: provision.NewMockDriver(time.Now),
 	}
-	s.seed()
+	if _, mem := ledger.(*memLedger); mem {
+		s.seed()
+	}
 	return s
 }
 
@@ -84,20 +97,24 @@ func (s *lifecycleStore) seed() {
 	inst := &resource.Instance{
 		ResourceID: "scecs-cn-north-1-01-a1b2c3d4", AccountID: 100123,
 		ProductCode: "scecs", Region: "cn-north-1", ChargeType: resource.ChargePrepaid,
-		State: resource.StateRunning, SpecCode: "scecs.s2.large",
+		ResourceType: "instance", State: resource.StateRunning, SpecCode: "scecs.s2.large",
 		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
 	}
-	s.resources[inst.ResourceID] = inst
+	if err := s.ledger.Create(inst); err != nil {
+		panic(fmt.Sprintf("seed resource failed: %v", err))
+	}
 
 	// Seed one VPC (scvpc) so network-dependent wizards (scredis / sckafka
 	// VPC dropdowns) list a real, placeable network from day one in dev.
 	vpc := &resource.Instance{
 		ResourceID: "scvpc-cn-north-1-01-vpc0a1b2c", AccountID: 100123,
 		ProductCode: "scvpc", Region: "cn-north-1", ChargeType: resource.ChargePostpaid,
-		State: resource.StateRunning, SpecCode: "scvpc.standard",
+		ResourceType: "vpc", State: resource.StateRunning, SpecCode: "scvpc.standard",
 		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
 	}
-	s.resources[vpc.ResourceID] = vpc
+	if err := s.ledger.Create(vpc); err != nil {
+		panic(fmt.Sprintf("seed resource failed: %v", err))
+	}
 }
 
 // --- fulfilment saga (03§4.3.3) ---
@@ -154,19 +171,18 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		s.orders[req.OrderID] = o
 	}
 
-	// Fulfilment idempotency: a retry for an order that already produced a
-	// resource returns the existing resourceId (200), not a 409.
-	if resID, dup := s.orderRes[req.OrderID]; dup {
-		if inst, ok := s.resources[resID]; ok && inst.AccountID == acct {
-			resp := map[string]any{
-				"resourceId": resID, "state": string(inst.State),
-				"orderId": o.OrderID, "orderState": string(o.State),
-				"billingStart": inst.BillingStart.Format(time.RFC3339),
-			}
-			s.mu.Unlock()
-			writeJSON(w, "OK", resp)
-			return
+	// Fulfilment idempotency, restart-safe: the LEDGER arbitrates (idx_order),
+	// not a process map — a retry after a restart must still return the resource
+	// the first attempt created.
+	if prior, err := s.ledger.ByOrder(acct, req.OrderID); err == nil && prior != nil {
+		resp := map[string]any{
+			"resourceId": prior.ResourceID, "state": string(prior.State),
+			"orderId": o.OrderID, "orderState": string(o.State),
+			"billingStart": prior.BillingStart.Format(time.RFC3339),
 		}
+		s.mu.Unlock()
+		writeJSON(w, "OK", resp)
+		return
 	}
 
 	// 1. Order must be PAID (the only provisioning trigger, D8 invariant).
@@ -185,7 +201,9 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Create resource instance (CREATING).
+	// 3. Create resource instance (CREATING) in the ledger. The id carries the
+	// order id, so a retried fulfilment re-derives the same id and the table's
+	// primary key — not a process counter — is what keeps it unique.
 	s.resSeq++
 	resID := fmt.Sprintf("%s-%s-%02d-%08d", req.ProductCode, req.Region, s.resSeq, req.OrderID)
 	ct := resource.ChargePrepaid
@@ -194,11 +212,27 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 	}
 	inst := &resource.Instance{
 		ResourceID: resID, AccountID: acct, ProductCode: req.ProductCode,
-		Region: req.Region, ChargeType: ct, State: resource.StateCreating,
-		SpecCode: req.SpecCode, CreatedAt: time.Now(), UpdatedAt: time.Now(), Version: 1,
+		ResourceType: "instance", Region: req.Region, ChargeType: ct,
+		State: resource.StateCreating, SpecCode: req.SpecCode, OrderID: req.OrderID,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), Version: 1,
 	}
-	s.resources[resID] = inst
-	s.orderRes[req.OrderID] = resID
+	if err := s.ledger.Create(inst); err != nil {
+		// Lost the create to a concurrent duplicate for the same order: serve
+		// the winner's resource instead of failing the retry.
+		if prior, gerr := s.ledger.ByOrder(acct, req.OrderID); gerr == nil && prior != nil {
+			resp := map[string]any{
+				"resourceId": prior.ResourceID, "state": string(prior.State),
+				"orderId": o.OrderID, "orderState": string(o.State),
+				"billingStart": prior.BillingStart.Format(time.RFC3339),
+			}
+			s.mu.Unlock()
+			writeJSON(w, "OK", resp)
+			return
+		}
+		slog.Error("resource persist failed", "orderId", req.OrderID, "err", err)
+		writeErr(w, "Provision.Failed", 500, "开通失败,资源台账写入失败")
+		return
+	}
 	s.mu.Unlock()
 
 	// 4. Fan out to the ProvisionDriver (service-level singleton; MockDriver in
@@ -208,14 +242,17 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		ResourceType: "instance", Region: req.Region, IdempotencyKey: strconv.FormatInt(req.OrderID, 10),
 	}
 	status, err := s.driver.Apply(spec)
+	s.recordProvision(resID, acct, spec, status, err)
 
-	// Phase B (re-lock): write the outcome back to the ledger.
+	// Phase B (re-lock): write the outcome back to the ledger. Every edge goes
+	// through the ledger's Transition — machine + guarded persist + journal row
+	// in one call — and BillingStart is stamped there on the first RUNNING edge
+	// (计费起点=首次 RUNNING 时刻,永不回拨), so no handler can reset it.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rm := resource.NewMachine(time.Now)
 	if err != nil || !status.Ready() {
 		// Compensation (reverse order): mark resource failed, order → REFUNDING.
-		if _, terr := rm.Transition(inst, resource.StateCreateFailed, inst.Version, "provision failed"); terr != nil {
+		if terr := s.ledger.Transition(inst, resource.StateCreateFailed, "provision failed"); terr != nil {
 			slog.Error("resource transition to CREATE_FAILED failed", "resourceId", resID, "err", terr)
 		}
 		if _, terr := om.Transition(o, order.StateRefunding, o.Version); terr != nil {
@@ -225,12 +262,11 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Provision.Failed", 500, "开通失败,已进入退款")
 		return
 	}
-	if _, terr := rm.Transition(inst, resource.StateRunning, inst.Version, "provisioned"); terr != nil {
+	if terr := s.ledger.Transition(inst, resource.StateRunning, "provisioned"); terr != nil {
 		slog.Error("resource transition to RUNNING failed", "resourceId", resID, "err", terr)
 		writeErr(w, "Resource.StateTransitionFailed", 409, "资源状态流转失败")
 		return
 	}
-	inst.BillingStart = time.Now() // billing starts at RUNNING, never resets (D8)
 
 	// 5. Transition order FULFILLING → COMPLETED.
 	if _, terr := om.Transition(o, order.StateCompleted, o.Version); terr != nil {
@@ -246,18 +282,41 @@ func (s *lifecycleStore) handleFulfill(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// recordProvision writes the dispatch record for the retry scanner. A failure
+// here is logged, not fatal: the dispatch already happened, and losing the audit
+// row must not fail a request whose resource came up.
+func (s *lifecycleStore) recordProvision(resID string, acct int64, spec provision.Spec, status provision.Status, err error) {
+	recStatus, lastError := "DONE", ""
+	if err != nil || !status.Ready() {
+		recStatus, lastError = "FAILED", fmt.Sprintf("%v", err)
+	}
+	params, merr := json.Marshal(spec)
+	if merr != nil {
+		params = []byte("{}")
+	}
+	if rerr := s.ledger.RecordProvision(provisionRecord{
+		ResourceID: resID, AccountID: acct, OpType: "CREATE",
+		IdempotKey: spec.IdempotencyKey, Params: string(params),
+		Status: recStatus, LastError: lastError,
+	}); rerr != nil {
+		slog.Error("provision task record failed", "resourceId", resID, "err", rerr)
+	}
+}
+
 func (s *lifecycleStore) handleListResources(w http.ResponseWriter, r *http.Request) {
 	acct, ok := accountIDFrom(w, r)
 	if !ok {
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]map[string]any, 0)
-	for _, inst := range s.resources {
-		if inst.AccountID == acct {
-			out = append(out, instanceToMap(inst))
-		}
+	list, err := s.ledger.List(acct)
+	if err != nil {
+		slog.Error("resource list failed", "account", acct, "err", err)
+		writeErr(w, "Resource.ListFailed", 500, "资源列表读取失败")
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, inst := range list {
+		out = append(out, instanceToMap(inst))
 	}
 	writeJSON(w, "OK", out)
 }
@@ -267,11 +326,14 @@ func (s *lifecycleStore) handleResourceDetail(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	resID := r.PathValue("id")
-	inst, exists := s.resources[resID]
-	if !exists || inst.AccountID != acct {
+	inst, err := s.ledger.Get(acct, resID)
+	if err != nil {
+		slog.Error("resource lookup failed", "resourceId", resID, "err", err)
+		writeErr(w, "Resource.LookupFailed", 500, "资源查询失败")
+		return
+	}
+	if inst == nil {
 		writeErr(w, "Resource.NotFound", 404, "资源不存在")
 		return
 	}
@@ -283,25 +345,25 @@ func (s *lifecycleStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Phase A (under lock): legal transition into RELEASING.
-	s.mu.Lock()
+	// Phase A: legal transition into RELEASING, persisted with its journal row.
 	resID := r.PathValue("id")
-	inst, exists := s.resources[resID]
-	if !exists || inst.AccountID != acct {
-		s.mu.Unlock()
+	inst, err := s.ledger.Get(acct, resID)
+	if err != nil {
+		slog.Error("resource lookup failed", "resourceId", resID, "err", err)
+		writeErr(w, "Resource.LookupFailed", 500, "资源查询失败")
+		return
+	}
+	if inst == nil {
 		writeErr(w, "Resource.NotFound", 404, "资源不存在")
 		return
 	}
-	m := resource.NewMachine(time.Now)
-	if _, err := m.Transition(inst, resource.StateReleasing, inst.Version, "user release"); err != nil {
-		s.mu.Unlock()
+	if err := s.ledger.Transition(inst, resource.StateReleasing, "user release"); err != nil {
 		slog.Error("resource transition to RELEASING failed", "resourceId", resID, "err", err)
 		writeErr(w, "Resource.StateTransitionFailed", 409, "资源状态流转失败")
 		return
 	}
-	s.mu.Unlock()
 
-	// Reclaim via the driver outside the ledger lock (Delete is idempotent).
+	// Reclaim via the driver (Delete is idempotent).
 	if err := s.driver.Delete(resID); err != nil {
 		slog.Error("driver delete failed", "resourceId", resID, "err", err)
 		writeErr(w, "Resource.ReleaseFailed", 500, "资源回收失败,请重试")
@@ -309,9 +371,7 @@ func (s *lifecycleStore) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Phase B: legal transition RELEASING → RELEASED.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := m.Transition(inst, resource.StateReleased, inst.Version, "released"); err != nil {
+	if err := s.ledger.Transition(inst, resource.StateReleased, "released"); err != nil {
 		slog.Error("resource transition to RELEASED failed", "resourceId", resID, "err", err)
 		writeErr(w, "Resource.StateTransitionFailed", 409, "资源状态流转失败")
 		return
@@ -344,18 +404,20 @@ func (s *lifecycleStore) handleResourceAction(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	resID := r.PathValue("id")
-	inst, exists := s.resources[resID]
-	if !exists || inst.AccountID != acct {
+	inst, err := s.ledger.Get(acct, resID)
+	if err != nil {
+		slog.Error("resource lookup failed", "resourceId", resID, "err", err)
+		writeErr(w, "Resource.LookupFailed", 500, "资源查询失败")
+		return
+	}
+	if inst == nil {
 		writeErr(w, "Resource.NotFound", 404, "资源不存在")
 		return
 	}
 
-	m := resource.NewMachine(time.Now)
 	transition := func(to resource.State, reason string) bool {
-		if _, err := m.Transition(inst, to, inst.Version, reason); err != nil {
+		if err := s.ledger.Transition(inst, to, reason); err != nil {
 			slog.Error("resource action transition failed", "resourceId", resID, "to", to, "err", err)
 			writeErr(w, "Resource.StateTransitionFailed", 409,
 				fmt.Sprintf("资源状态 %s 不允许 %s", inst.State, req.Action))
@@ -484,7 +546,15 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	store := newStore()
+	ledger, err := newLedger(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Log where the ledger lives: in-memory resources vanish on restart, and a
+	// customer's running instance vanishing is not a recoverable incident.
+	slog.Info("svc-orchestrator ledger ready", "persistent", persistentLedger(ledger))
+	store := newStoreWith(ledger)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })

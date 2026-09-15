@@ -324,11 +324,16 @@ func (d VMDriver) CollectUsage(resourceID string) ([]UsagePoint, error) {
 		}
 		return nil, err
 	}
+	now := d.state.now()
 	if obs.RunStrategy == RunStrategyHalted || !obs.VMIReady {
+		// Service is stopped (arrears freeze) or still booting: nothing is
+		// billable for this window, and the window clock must still advance.
+		// Leaving lastCollect at the pre-freeze instant would make the first
+		// collection after a resume report the whole stopped period as
+		// cpu/mem usage — billing for time the VM was halted.
+		d.state.lastCollect[resourceID] = now
 		return nil, nil
 	}
-
-	now := d.state.now()
 	windowStart := d.state.lastCollect[resourceID]
 	if windowStart.IsZero() {
 		// First collection: charge for the last minute, the granularity the

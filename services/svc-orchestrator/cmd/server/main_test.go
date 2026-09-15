@@ -69,11 +69,14 @@ func TestReleaseWalksStateMachine(t *testing.T) {
 	if relRec.Code != 200 {
 		t.Fatalf("release: %d %s", relRec.Code, relRec.Body.String())
 	}
-	s.mu.RLock()
-	got := string(s.resources[resID].State)
-	s.mu.RUnlock()
-	if got != "RELEASED" {
-		t.Fatalf("state = %s, want RELEASED", got)
+	// Read the state through the ledger API rather than the in-memory map: the
+	// assertion then holds for whichever backend the service is wired to.
+	got, err := s.ledger.Get(100123, resID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || string(got.State) != "RELEASED" {
+		t.Fatalf("state = %+v, want RELEASED", got)
 	}
 	// Releasing again must fail with a state error, not silently succeed.
 	relReq2 := httptest.NewRequest("POST", "/api/v1/orchestrator/resources/"+resID+"/release", nil)

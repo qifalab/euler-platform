@@ -168,4 +168,11 @@ var (
 	ErrMissingIdempotency = errors.New("reservepack: idempotency key required")
 	ErrDuplicateEntry     = errors.New("reservepack: entry already applied (idempotent no-op)")
 	ErrRefundExceedsFace  = errors.New("reservepack: refund would exceed face value")
+	// ErrVersionConflict means another writer moved the pack first. It is NOT
+	// "not found": reporting a lost optimistic-lock race as a missing pack
+	// sends the caller down a 500 path for a retryable condition.
+	ErrVersionConflict = errors.New("reservepack: version conflict (concurrent pack update)")
+	// ErrInvalidAmount rejects non-positive movement amounts: a negative
+	// "consume" would credit quota and a negative "refund" would debit it.
+	ErrInvalidAmount = errors.New("reservepack: amount must be positive")
 )

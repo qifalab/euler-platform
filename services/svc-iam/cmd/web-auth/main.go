@@ -1181,15 +1181,31 @@ func handleAssumeRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Auth.InvalidParameter", "malformed body")
 		return
 	}
-	if strings.TrimSpace(req.Role) == "" {
+	roleName := strings.TrimSpace(req.Role)
+	if roleName == "" {
 		writeErr(w, 400, "Auth.InvalidParameter", "role is required")
+		return
+	}
+	// A role may only be assumed if it exists on THIS account and is enabled.
+	// Without this lookup the role name is a free-form string that ends up in
+	// the security token's principal — any signed-in tenant could mint itself
+	// a token claiming an arbitrary (e.g. platform-admin) role.
+	mu.RLock()
+	role, found := ramRoles[a.AccountID][roleName]
+	mu.RUnlock()
+	if !found {
+		writeErr(w, 403, "Auth.RoleNotAssumable", "该角色不存在")
+		return
+	}
+	if role.Status != 1 {
+		writeErr(w, 403, "Auth.RoleNotAssumable", "该角色已被禁用")
 		return
 	}
 	if stsIssuer == nil {
 		writeErr(w, 503, "Common.InternalError", "STS not initialised")
 		return
 	}
-	cred, err := stsIssuer.AssumeRole(req.Role, strconv.FormatInt(a.AccountID, 10))
+	cred, err := stsIssuer.AssumeRole(roleName, strconv.FormatInt(a.AccountID, 10))
 	if err != nil {
 		writeErr(w, 500, "Common.InternalError", err.Error())
 		return

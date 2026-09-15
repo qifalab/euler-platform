@@ -82,6 +82,8 @@ var (
 	ErrInvoiceExists      = errors.New("invoice: invoice id already used by a non-draft invoice")
 	ErrInvoiceTerminal    = errors.New("invoice: invoice is in a terminal state")
 	ErrInvoiceAlreadyVoid = errors.New("invoice: invoice already voided")
+	ErrMissingReversalID  = errors.New("invoice: 红冲 requires a reversal invoice id")
+	ErrReversalIDTaken    = errors.New("invoice: reversal id is already used by another invoice")
 	ErrVoidAmountMismatch = errors.New("invoice: 红冲 amount must equal the original")
 	ErrEmptyTitle         = errors.New("invoice: title (发票抬头) required")
 	ErrEmptyItems         = errors.New("invoice: invoice must have at least one line item")
@@ -171,6 +173,15 @@ func (b *Book) Issue(invoiceID string) (Invoice, error) {
 // Void is idempotent: voiding an already-voided invoice returns the existing
 // reversal rather than creating a second one.
 func (b *Book) Void(originalID, reversalID string) (Invoice, error) {
+	// The reversal is a NEW tax document and needs its own id. An empty or
+	// self-referencing id would collide with the original (or with a later
+	// document) and silently replace a record in the book.
+	if reversalID == "" {
+		return Invoice{}, ErrMissingReversalID
+	}
+	if reversalID == originalID {
+		return Invoice{}, fmt.Errorf("%w: %s is the original", ErrReversalIDTaken, reversalID)
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	orig, ok := b.invoices[originalID]
@@ -188,6 +199,11 @@ func (b *Book) Void(originalID, reversalID string) (Invoice, error) {
 	}
 	if orig.Status != StatusIssued {
 		return Invoice{}, fmt.Errorf("%w: only an ISSUED invoice may be voided, got %s", ErrInvoiceTerminal, orig.Status)
+	}
+	// Never overwrite an existing document: 红冲 adds a document, it does not
+	// replace one. A taken id is an operator error, not a reversal.
+	if _, taken := b.invoices[reversalID]; taken {
+		return Invoice{}, fmt.Errorf("%w: %s", ErrReversalIDTaken, reversalID)
 	}
 
 	// Build the 红冲 invoice: same title/tax/period, negative amount.

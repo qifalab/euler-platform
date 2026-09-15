@@ -86,6 +86,10 @@ type meteringStore struct {
 	// sells no resource packs (decision D6), so it is cash balance only.
 	pools map[int64][]billing.Pool
 	now   func() time.Time
+	// agg is the durable aggregate ledger (nil = in-memory only); every write
+	// into aggCache goes through cacheAgg, and a restart rebuilds the cache
+	// from the ledger (repo.go).
+	agg aggRepo
 }
 
 func newMeteringStore() *meteringStore {
@@ -155,7 +159,7 @@ func (s *meteringStore) seed() {
 		// call. Matches the ClickHouse upsert-by-AggID semantics.
 		key := seededResourceID + "|" + "cpu_core_hour"
 		if usage, err := agg.Aggregate(s.records[key], hr); err == nil {
-			s.aggCache[usage.AggID] = usage
+			s.cacheAgg(usage)
 		}
 	}
 }
@@ -247,7 +251,7 @@ func (s *meteringStore) handleIngest(w http.ResponseWriter, r *http.Request) {
 	hourStart := metering.HourOf(ws)
 	agg := metering.NewAggregator(s.now)
 	if usage, err := agg.Aggregate(s.records[key], hourStart); err == nil {
-		s.aggCache[usage.AggID] = usage
+		s.cacheAgg(usage)
 	}
 
 	writeJSON(w, "OK", map[string]any{
@@ -478,13 +482,27 @@ func inPeriod(h time.Time, period string, newest time.Time) bool {
 // for alert-center, never a billing decision — metering does not drop or
 // relabel a usage record on an anomaly verdict (03§4.2.5 宁可重采不可漏采).
 func (s *meteringStore) handleAnomalyScan(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountIDFrom(w, r); !ok {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
 		return
 	}
 	resourceID := r.URL.Query().Get("resourceId")
 	metric := r.URL.Query().Get("metric")
 	if resourceID == "" || metric == "" {
 		writeErr(w, "Metering.InvalidParameter", 400, "resourceId and metric are required")
+		return
+	}
+	// Owner check, same as every other read path in this service: the usage
+	// series of another tenant's resource is not this caller's data.
+	s.mu.RLock()
+	owner, known := s.accounts[resourceID]
+	s.mu.RUnlock()
+	if !known {
+		writeErr(w, "Metering.ResourceNotFound", 404, "no usage recorded for resource")
+		return
+	}
+	if owner != acct {
+		writeErr(w, "Metering.ResourceNotOwned", 403, "resource belongs to another account")
 		return
 	}
 	key := resourceID + "|" + metric
@@ -589,7 +607,19 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	store := newMeteringStore()
+	agg, err := newAggRepo(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	store, err := newMeteringStoreWith(agg)
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Log where the aggregate ledger lives: aggregates are the basis every bill
+	// reconciles against, and a cache-only store forgets them on restart.
+	slog.Info("svc-metering aggregate ledger ready", "persistent", agg != nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })

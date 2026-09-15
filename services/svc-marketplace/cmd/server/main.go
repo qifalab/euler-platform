@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -35,6 +36,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,6 +46,67 @@ import (
 )
 
 const accountIDHeader = "X-Sc-Account-Id"
+
+const internalTokenHeader = "X-Sc-Internal-Token"
+
+// devOperatorAccount is the seeded dev account that acts as the platform
+// operator when no allowlist is configured. Tests and the local console use
+// it; a real deployment sets SC_MARKETPLACE_OPERATORS.
+const devOperatorAccount = 100123
+
+// operatorAccounts is the platform-side allowlist for the review desk and the
+// settlement job. Approval and 分账 are platform operations: a partner must
+// not approve its own listing, and a tenant must not settle an arbitrary
+// order. Unset (dev default) = the seeded dev operator account only.
+var operatorAccounts = parseOperators(os.Getenv("SC_MARKETPLACE_OPERATORS"))
+
+func parseOperators(raw string) map[int64]bool {
+	out := make(map[int64]bool)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(part, 10, 64); err == nil && id > 0 {
+			out[id] = true
+		}
+	}
+	if len(out) == 0 {
+		out[devOperatorAccount] = true
+	}
+	return out
+}
+
+// requireOperator enforces that the caller is a platform-side operator.
+func requireOperator(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	acct, ok := accountFrom(w, r)
+	if !ok {
+		return 0, false
+	}
+	if !operatorAccounts[acct] {
+		writeErr(w, http.StatusForbidden, "Marketplace.NotOperator",
+			"platform operator role required for review and settlement")
+		return 0, false
+	}
+	return acct, true
+}
+
+// internalTokenMiddleware optionally enforces a shared-secret header for
+// service-to-service calls (SC_INTERNAL_TOKEN). Unset (dev default) = off;
+// production turns it on in addition to the operator allowlist.
+func internalTokenMiddleware(h http.Handler) http.Handler {
+	token := os.Getenv("SC_INTERNAL_TOKEN")
+	if token == "" {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get(internalTokenHeader)), []byte(token)) != 1 {
+			writeErr(w, http.StatusForbidden, "Common.Forbidden", "invalid internal token")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
 
 // --- Marketplace domain -----------------------------------------------------
 
@@ -104,11 +167,13 @@ type SettlementRecord struct {
 type Store interface {
 	CreateListing(l *Listing) error
 	GetListing(id int64) (*Listing, error)
-	ListApproved(category ListingCategory) []*Listing
-	ListByStatus(status ListingStatus, category ListingCategory) []*Listing
+	// The read paths carry an error because a SQL backend has one; the in-memory
+	// store has nothing to report and returns nil.
+	ListApproved(category ListingCategory) ([]*Listing, error)
+	ListByStatus(status ListingStatus, category ListingCategory) ([]*Listing, error)
 	UpdateListingStatus(id int64, from, to ListingStatus) (*Listing, error)
 	CreateSettlement(s *SettlementRecord) error
-	GetSettlementByOrder(orderID string) (*SettlementRecord, bool)
+	GetSettlementByOrder(orderID string) (*SettlementRecord, bool, error)
 }
 
 type memoryStore struct {
@@ -153,11 +218,11 @@ func (s *memoryStore) GetListing(id int64) (*Listing, error) {
 	return l, nil
 }
 
-func (s *memoryStore) ListApproved(category ListingCategory) []*Listing {
+func (s *memoryStore) ListApproved(category ListingCategory) ([]*Listing, error) {
 	return s.ListByStatus(StatusApproved, category)
 }
 
-func (s *memoryStore) ListByStatus(status ListingStatus, category ListingCategory) []*Listing {
+func (s *memoryStore) ListByStatus(status ListingStatus, category ListingCategory) ([]*Listing, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Listing, 0)
@@ -171,7 +236,7 @@ func (s *memoryStore) ListByStatus(status ListingStatus, category ListingCategor
 		out = append(out, l)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ListingID < out[j].ListingID })
-	return out
+	return out, nil
 }
 
 func (s *memoryStore) UpdateListingStatus(id int64, from, to ListingStatus) (*Listing, error) {
@@ -202,11 +267,11 @@ func (s *memoryStore) CreateSettlement(r *SettlementRecord) error {
 	return nil
 }
 
-func (s *memoryStore) GetSettlementByOrder(orderID string) (*SettlementRecord, bool) {
+func (s *memoryStore) GetSettlementByOrder(orderID string) (*SettlementRecord, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.settlements[orderID]
-	return r, ok
+	return r, ok, nil
 }
 
 // --- Application + handlers --------------------------------------------------
@@ -284,7 +349,9 @@ type approveReq struct {
 }
 
 func (a *app) handleApprove(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountFrom(w, r); !ok {
+	// Review is a platform operation: the publishing partner (or any other
+	// tenant) must not approve its own listing.
+	if _, ok := requireOperator(w, r); !ok {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -313,7 +380,8 @@ func (a *app) handleApprove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleList(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountFrom(w, r); !ok {
+	acct, ok := accountFrom(w, r)
+	if !ok {
 		return
 	}
 	category := ListingCategory(r.URL.Query().Get("category"))
@@ -334,7 +402,20 @@ func (a *app) handleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeOK(w, map[string]any{"listings": a.store.ListByStatus(status, category)})
+	// The approved catalogue is public to signed-in tenants; the review queue
+	// (and any other lifecycle view) is the operator's desk — a pending
+	// listing belongs to one partner and is not another tenant's business.
+	if status != StatusApproved && !operatorAccounts[acct] {
+		writeErr(w, 403, "Marketplace.NotOperator", "platform operator role required for the review queue")
+		return
+	}
+	listings, err := a.store.ListByStatus(status, category)
+	if err != nil {
+		slog.Error("listing query failed", "status", status, "category", category, "err", err)
+		writeErr(w, 500, "Marketplace.ListFailed", "listing query failed")
+		return
+	}
+	writeOK(w, map[string]any{"listings": listings})
 }
 
 // settleReq is POST /api/v1/marketplace/settlements.
@@ -345,7 +426,10 @@ type settleReq struct {
 }
 
 func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountFrom(w, r); !ok {
+	// Settlement is the platform's 分账 job: the gross amount and the partner
+	// rate come from the approved listing, and the caller must be a platform
+	// operator rather than any tenant that can name the order id.
+	if _, ok := requireOperator(w, r); !ok {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -360,7 +444,13 @@ func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 	// Idempotent: settling the same order twice returns the same split, never a
 	// double payout.
-	if existing, ok := a.store.GetSettlementByOrder(req.OrderID); ok {
+	existing, ok, err := a.store.GetSettlementByOrder(req.OrderID)
+	if err != nil {
+		slog.Error("settlement lookup failed", "orderId", req.OrderID, "err", err)
+		writeErr(w, 500, "Marketplace.SettlementFailed", "settlement lookup failed")
+		return
+	}
+	if ok {
 		writeOK(w, existing)
 		return
 	}
@@ -442,7 +532,7 @@ func newMux(a *app) http.Handler {
 	mux.HandleFunc("POST /api/v1/marketplace/listings/{id}/approve", a.handleApprove)
 	mux.HandleFunc("GET /api/v1/marketplace/listings", a.handleList)
 	mux.HandleFunc("POST /api/v1/marketplace/settlements", a.handleSettle)
-	return recoverMiddleware(requestIDMiddleware(mux))
+	return recoverMiddleware(requestIDMiddleware(internalTokenMiddleware(mux)))
 }
 
 func main() {
@@ -450,7 +540,13 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	a := newApp(newMemoryStore())
+	store, err := newStore(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("svc-marketplace store ready", "persistent", persistentStore(store))
+	a := newApp(store)
 	srv := &http.Server{Addr: *addr, Handler: newMux(a), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("svc-marketplace listening", "addr", *addr)

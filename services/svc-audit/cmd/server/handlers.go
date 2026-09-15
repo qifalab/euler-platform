@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -23,12 +24,17 @@ import (
 // (04§3.1). It is the tenant attribution for every audit event.
 const accountHeader = "X-Sc-Account-Id"
 
-// auditStore is an in-memory implementation of the svc-audit persistence
-// contract: per-account chain + event trail.
+// auditStore is the svc-audit persistence shape: per-account chain + event
+// trail. The full trail lives in ClickHouse in production (this process keeps
+// the hot tail); what must survive a restart is the chain head, persisted as a
+// checkpoint (checkpoint.go) — a chain that resets to genesis would silently
+// validate a truncated trail.
 type auditStore struct {
 	mu     sync.Mutex
 	chains map[int64]*audit.Chain
 	events map[int64][]audit.Event
+	// checkpoints persists the chain head (nil = in-memory only).
+	checkpoints checkpointRepo
 }
 
 func newAuditStore() *auditStore {
@@ -36,6 +42,22 @@ func newAuditStore() *auditStore {
 		chains: make(map[int64]*audit.Chain),
 		events: make(map[int64][]audit.Event),
 	}
+}
+
+// newAuditStoreWith wires a checkpoint repo and resumes every persisted chain.
+// The event trail starts empty after a restart — the full history is
+// ClickHouse's to answer; the chain's continuity is what the checkpoint guards.
+func newAuditStoreWith(ctx context.Context, repo checkpointRepo) (*auditStore, error) {
+	s := newAuditStore()
+	s.checkpoints = repo
+	cps, err := repo.LoadAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, cp := range cps {
+		s.chains[cp.AccountID] = audit.ResumeChain(cp.AccountID, cp.Head, cp.Sequence)
+	}
+	return s, nil
 }
 
 func (s *auditStore) chainFor(accountID int64) *audit.Chain {
@@ -65,8 +87,16 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The per-account chain is shared state: the sequence read, the event
+	// construction and the append all happen under the lock. Reading
+	// Sequence() outside it (as the pre-fix code did) let two concurrent
+	// appends mint the same EventID — and chainFor writes the chains map, so
+	// the unlocked call was a concurrent map write, which is a fatal runtime
+	// error rather than a recoverable panic.
+	s.mu.Lock()
 	now := time.Now().UTC()
-	seq := s.chainFor(accountID).Sequence() + 1
+	chain := s.chainFor(accountID)
+	seq := chain.Sequence() + 1
 	ev := audit.Event{
 		EventID:        audit.EventID(now, seq),
 		EventTime:      now,
@@ -89,10 +119,12 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 		TraceID:        r.Header.Get("X-Sc-TraceId"),
 	}
 
-	s.mu.Lock()
-	recorded, err := s.chainFor(accountID).Append(ev)
+	recorded, err := chain.Append(ev)
 	if err == nil {
 		s.events[accountID] = append(s.events[accountID], recorded)
+		// Publish the new head outside the chain's own store — the checkpoint
+		// is what makes truncation detectable. Self-heals on the next append.
+		recordCheckpoint(s, accountID)
 	}
 	s.mu.Unlock()
 
@@ -108,8 +140,10 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 //
 //	GET /internal/audit/{account}/events
 func (s *auditStore) handleList(w http.ResponseWriter, r *http.Request) {
-	accountID, err := accountFromPath(w, r)
-	if err != nil {
+	// The path names the trail; the gateway header names the caller. They must
+	// be the same account: a tenant may read its own trail, never another's.
+	accountID, ok := s.authorizedAccount(w, r)
+	if !ok {
 		return
 	}
 
@@ -125,8 +159,8 @@ func (s *auditStore) handleList(w http.ResponseWriter, r *http.Request) {
 //
 //	GET /internal/audit/{account}/verify
 func (s *auditStore) handleVerify(w http.ResponseWriter, r *http.Request) {
-	accountID, err := accountFromPath(w, r)
-	if err != nil {
+	accountID, ok := s.authorizedAccount(w, r)
+	if !ok {
 		return
 	}
 
@@ -145,6 +179,25 @@ func (s *auditStore) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 // requireAccount pulls account_id from the gateway-injected header and
 // returns 403 when it is absent or malformed.
+// authorizedAccount resolves the {account} path segment and requires it to
+// match the gateway-authenticated caller. A mismatch is 403: reading or
+// verifying another tenant's audit trail is never a legitimate operation.
+func (s *auditStore) authorizedAccount(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	caller, ok := requireAccount(w, r)
+	if !ok {
+		return 0, false
+	}
+	accountID, err := accountFromPath(w, r)
+	if err != nil {
+		return 0, false
+	}
+	if accountID != caller {
+		writeError(w, http.StatusForbidden, "AccessDenied", "audit trail belongs to another account")
+		return 0, false
+	}
+	return accountID, true
+}
+
 func requireAccount(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := parseAccountID(r.Header.Get(accountHeader))
 	if err != nil {

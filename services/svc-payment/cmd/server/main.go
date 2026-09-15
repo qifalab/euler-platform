@@ -49,6 +49,7 @@ import (
 
 	"github.com/starcloud/sc-platform/ledger"
 	"github.com/starcloud/sc-platform/pricing"
+	"github.com/starcloud/sc-platform/storage"
 )
 
 // accountIDHeader carries the caller's account id. TRUST NOTE: this header is
@@ -66,9 +67,16 @@ const maxBodyBytes = 1 << 20
 
 // minorToAmount converts a minor-units (分) integer into a pricing.Amount
 // (micro-units of a yuan). 1 分 = 1/100 元 = 10_000/1_000_000 元.
+//
+// Precondition: minor must be within the range decodeAmountRequest enforces
+// (0 < minor <= maxMinor). The multiplication wraps outside it, and a wrapped
+// recharge is a corrupted balance rather than a rejected request.
 func minorToAmount(minor int64) pricing.Amount {
 	return pricing.Amount(minor) * 10_000
 }
+
+// maxMinor bounds amountMinor so that minor × 10_000 cannot overflow int64.
+const maxMinor = int64(1<<63-1) / 10_000
 
 // amountToMinor converts a pricing.Amount back to minor units (分).
 func amountToMinor(a pricing.Amount) int64 {
@@ -141,23 +149,71 @@ func (m *inMemStore) ListEntries(accountID int64) ([]ledger.Entry, error) {
 // freeze/consume) — the server never fabricates one.
 type paymentServer struct {
 	ledger *ledger.Ledger
+	// persistent reports whether the ledger is backed by trade_db. It is what
+	// decides whether the demo seed runs: seeding a shared database would
+	// invent ¥500 for account 100123 in every environment pointed at it.
+	persistent bool
 }
 
-func newPaymentServer() *paymentServer {
-	store := newInMemStore()
-	var (
-		seqMu sync.Mutex
-		seq   int64
-	)
-	l := ledger.New(store, time.Now, func() int64 {
-		seqMu.Lock()
-		defer seqMu.Unlock()
-		seq++
-		return seq
-	})
-	ps := &paymentServer{ledger: l}
+// newPaymentServer wires the ledger. Persistence is opt-in (pkg-go/storage
+// doc): with SC_DB_DSN set the ledger is trade_db's account_balance +
+// ledger_entry, so balances survive a restart; unset, the service keeps the
+// in-memory store that makes the runnable demo dependency-free.
+//
+// A configured DSN that cannot be reached — or a schema sqlmigrate never
+// touched — is a startup failure, not a runtime surprise: coming up "healthy"
+// against an unmigrated database turns the first recharge into a 500.
+//
+// Entry ids come from the 号段 allocator (storage.Sequence over
+// trade_db.id_sequence, 04§6.6) whenever the store is persistent. The in-process
+// counter below is only correct for the in-memory store: pointed at a real
+// database it restarts at 1 and collides with the journal rows the previous run
+// committed.
+func newPaymentServer(ctx context.Context) (*paymentServer, error) {
+	db, ok, err := storage.MustOpenFor(ctx, "trade_db")
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return newInMemoryPaymentServer(), nil
+	}
+	if err := storage.EnsureMigrated(ctx, db, "trade_db"); err != nil {
+		return nil, err
+	}
+	ids, err := storage.OpenSequence(ctx, db, "ledger_entry", 1000)
+	if err != nil {
+		return nil, err
+	}
+	return &paymentServer{
+		ledger:     ledger.New(ledger.NewSQLStore(db), time.Now, ids.NextFunc()),
+		persistent: true,
+	}, nil
+}
+
+// newInMemoryPaymentServer builds the demo server: in-memory store, local id
+// counter, seeded balance. Handler tests construct it directly, so they never
+// depend on whether the developer's shell has SC_DB_DSN set — a test that wrote
+// demo recharges into trade_db would be a data incident.
+func newInMemoryPaymentServer() *paymentServer {
+	ps := &paymentServer{ledger: ledger.New(newInMemStore(), time.Now, localCounter())}
 	ps.seed()
 	return ps
+}
+
+// localCounter mints the journal ids of the in-memory store. It is guarded
+// because concurrent handlers share it, and it is deliberately not used for the
+// persistent store (see newPaymentServer).
+func localCounter() func() int64 {
+	var (
+		mu  sync.Mutex
+		seq int64
+	)
+	return func() int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		seq++
+		return seq
+	}
 }
 
 // seed primes account 100123 with ¥500 (50_000 分) of available balance, matching
@@ -197,6 +253,10 @@ func decodeAmountRequest(w http.ResponseWriter, r *http.Request) (amountRequest,
 	}
 	if req.AmountMinor <= 0 {
 		writeErr(w, "Common.InvalidParameter", 400, "amountMinor must be positive")
+		return req, false
+	}
+	if req.AmountMinor > maxMinor {
+		writeErr(w, "Common.InvalidParameter", 400, "amountMinor out of range")
 		return req, false
 	}
 	if req.IdemKey == "" {
@@ -409,7 +469,15 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	srv := newPaymentServer()
+	srv, err := newPaymentServer(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Log where the money actually lands: an operator reading logs needs to know
+	// whether this process is holding balances in memory (and will lose them on
+	// restart) or in trade_db.
+	slog.Info("svc-payment ledger ready", "persistent", srv.persistent, "schema", storage.Schema())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })

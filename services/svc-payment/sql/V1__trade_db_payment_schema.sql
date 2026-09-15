@@ -158,24 +158,16 @@ CREATE TABLE `recharge_record` (
 -- -----------------------------------------------------------------------------
 -- outbox_message — 本地消息表 (03§8.2)
 -- Written in the SAME transaction as the balance/payment change.
+--
+-- 该表由 svc-order 的 V1 建立 —— trade_db 是 5 个服务共用的逻辑库,一张表只能
+-- 有一个权威定义。这里曾经复制了一份,后果不是"多一层保险"而是迁移必挂:
+-- 第二个目录执行到这条 CREATE TABLE 时已经存在,直接 Error 1050 中断整个迁移;
+-- 而两份定义各自漂移时(这里的 biz_type/topic 注释与 order 侧不同),哪一份生效
+-- 只取决于目录顺序,建出来的表与谁写的服务对不上。
+--
+-- 权威定义: services/svc-order/sql/V1__trade_db_order_schema.sql
+-- 本服务同样写这张表(充值到账/支付成功事件),列与索引完全一致。
 -- -----------------------------------------------------------------------------
-CREATE TABLE `outbox_message` (
-  `id`            BIGINT UNSIGNED NOT NULL,
-  `account_id`    BIGINT UNSIGNED NOT NULL COMMENT '冗余分片键,与业务表同片同事务',
-  `biz_type`      VARCHAR(32) NOT NULL COMMENT 'payment/refund/recharge',
-  `biz_key`       VARCHAR(64) NOT NULL,
-  `topic`         VARCHAR(64) NOT NULL COMMENT 'cloud.trade.payment.event / cloud.billing.account.event',
-  `partition_key` VARCHAR(64) NOT NULL COMMENT '支付事件按 order_id,账务事件按 account_id(04§5.4)',
-  `event_id`      VARCHAR(64) NOT NULL,
-  `payload`       MEDIUMTEXT NOT NULL,
-  `status`        TINYINT NOT NULL DEFAULT 0 COMMENT '0待发 1已发 2放弃',
-  `retry_count`   INT NOT NULL DEFAULT 0,
-  `next_retry`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `created_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_event_id` (`event_id`),
-  KEY `idx_status_retry` (`status`,`next_retry`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本地消息表';
 
 -- -----------------------------------------------------------------------------
 -- 对账视图:余额 vs 流水

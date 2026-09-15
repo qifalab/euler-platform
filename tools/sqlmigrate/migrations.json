@@ -1,0 +1,34 @@
+{
+  "$comment": [
+    "MySQL migration manifest: which service owns which logical database",
+    "(04-middleware §6.3: account_db / trade_db / resource_db / support_db /",
+    "metering_db / openapi_meta). Files inside a directory are applied in",
+    "filename order (V1__…, V2__…, V3__…), once each, tracked in that schema's",
+    "schema_migration table with a checksum so an edited already-applied file",
+    "is an error rather than a silent re-run.",
+    "engines.alert_history is ClickHouse DDL (03§4.4.6): kept in the manifest so",
+    "the repo state has one source of truth, skipped by the MySQL runner."
+  ],
+  "schemas": [
+    { "dir": "services/svc-iam/sql", "schema": "account_db" },
+    { "dir": "services/svc-org/sql", "schema": "account_db" },
+    { "dir": "services/svc-catalog/sql", "schema": "trade_db" },
+    { "dir": "services/svc-order/sql", "schema": "trade_db" },
+    { "dir": "services/svc-payment/sql", "schema": "trade_db" },
+    { "dir": "services/svc-billing/sql", "schema": "trade_db" },
+    { "dir": "services/svc-marketplace/sql", "schema": "trade_db" },
+    { "dir": "services/svc-metering/sql", "schema": "metering_db" },
+    { "dir": "services/svc-orchestrator/sql", "schema": "resource_db" },
+    { "dir": "services/svc-quota/sql", "schema": "support_db" },
+    { "dir": "services/svc-ticket/sql", "schema": "support_db" },
+    { "dir": "services/svc-monitor/sql", "schema": "support_db" },
+    { "dir": "services/svc-api-meta/sql", "schema": "openapi_meta" }
+  ],
+  "engines": {
+    "alert_history": {
+      "dir": "services/alert-center/sql",
+      "engine": "clickhouse",
+      "note": "alert history is written to ClickHouse (03§4.4.6); the MySQL side of alert-center lives in support_db."
+    }
+  }
+}

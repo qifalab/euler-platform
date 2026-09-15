@@ -42,7 +42,16 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	store := newMetaStore()
+	repo, err := newActionRepo(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// The Actions registry is what the gateway and the CI error-code gate
+	// validate against: in-memory metadata would forget the surface between
+	// restarts, so where it lives is worth a log line.
+	slog.Info("svc-api-meta action repo ready", "persistent", persistentActionRepo(repo))
+	store := newMetaStoreWith(repo)
 	registry := newRegistryStore()
 
 	mux := http.NewServeMux()

@@ -125,19 +125,30 @@ func groupKey(tenantID int64, product string) string {
 // drops muted groups last — a muted group's alerts vanish entirely regardless
 // of severity.
 func Converge(alerts []Alert, silence *Silence) []Alert {
-	seen := make(map[string]bool)
-	best := make(map[string]Alert)
-
+	// 1. 去重: one alert per DedupKey, and an escalation wins. DedupKey does not
+	// carry Severity — a re-fire that raises the level is the same alert
+	// getting worse, not a duplicate to drop. Keeping only the first would
+	// silently swallow a CRITICAL that arrived after a WARNING, and the result
+	// would depend on input order.
+	index := make(map[string]int, len(alerts))
+	deduped := make([]Alert, 0, len(alerts))
 	for _, a := range alerts {
-		if seen[a.DedupKey()] {
-			continue // 1. 去重
-		}
-		seen[a.DedupKey()] = true
-
 		if silence != nil && silence.Muted(a) {
 			continue // 4. 静默 (before grouping so a muted group never re-enters)
 		}
+		key := a.DedupKey()
+		if i, ok := index[key]; ok {
+			if a.Severity.Rank() > deduped[i].Severity.Rank() {
+				deduped[i] = a
+			}
+			continue
+		}
+		index[key] = len(deduped)
+		deduped = append(deduped, a)
+	}
 
+	best := make(map[string]Alert)
+	for _, a := range deduped {
 		cur, ok := best[a.GroupKey()]
 		if !ok || a.Severity.Rank() > cur.Severity.Rank() {
 			best[a.GroupKey()] = a // 2+3. 分组 + 抑制: keep the highest severity per group

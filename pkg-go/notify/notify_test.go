@@ -62,6 +62,19 @@ func (m *memStore) FindByBizKey(accountID int64, class Class, bizKey string) ([]
 	return out, nil
 }
 
+func (m *memStore) ListByAccount(accountID int64) ([]Notification, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Notification
+	for _, n := range m.items {
+		if n.AccountID == accountID {
+			out = append(out, n)
+		}
+	}
+	SortByTime(out)
+	return out, nil
+}
+
 // mockSender records what it was asked to send and can be made to fail.
 type mockSender struct {
 	ch     Channel

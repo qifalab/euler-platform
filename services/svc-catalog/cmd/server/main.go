@@ -139,13 +139,39 @@ func newCatalogStore() *catalogStore {
 	return s
 }
 
-// seed mirrors sql/V2__seed_phase1_catalog.sql plus the phase-2 SCECI addition.
-// The 7 sellable products of decision R-01 / adjudication C1+S1: SCVPC / SCECS
-// / SCBS / SCOSS / SCRDS / SCMON / SCEIP. SCECI (弹性容器实例) lands in phase-2
-// (M-7.1, 09-roadmap §4.3): a per-second-billed container instance fulfilled by
-// the K8s driver (DriverK8s), distinct from SCECS's VM driver (DriverVM/_mock).
+// seed fills the in-memory store. The DB-backed store takes the quote-path
+// tables from trade_db (repo.go) and serves the inventory lists (regions/
+// images/categories) from the same seed in both modes.
 func (s *catalogStore) seed() {
-	s.products = []product{
+	s.products = seedProducts()
+	s.skus = seedSKUs()
+	s.rules = seedRules()
+	s.promos = seedPromos()
+	s.regions = seedRegions()
+	s.images = seedImages()
+	s.categories = seedCategories()
+}
+
+// newCatalogStoreWith builds a store from an already-loaded catalogue.
+func newCatalogStoreWith(data catalogData) *catalogStore {
+	return &catalogStore{
+		products:   data.Products,
+		skus:       data.SKUs,
+		rules:      data.Rules,
+		promos:     data.Promos,
+		regions:    seedRegions(),
+		images:     seedImages(),
+		categories: seedCategories(),
+	}
+}
+
+// seedProducts lists the sellable products of decision R-01 / adjudication
+// C1+S1: SCVPC / SCECS / SCBS / SCOSS / SCRDS / SCMON / SCEIP. SCECI (弹性容器
+// 实例) lands in phase-2 (M-7.1, 09-roadmap §4.3): a per-second-billed container
+// instance fulfilled by the K8s driver (DriverK8s), distinct from SCECS's VM
+// driver (DriverVM/_mock).
+func seedProducts() []product {
+	return []product{
 		{ProductCode: "scvpc", ProductName: "辰云专有网络", Category: "network", Description: "租户逻辑隔离网络,一切资源的网络边界", ResourceType: "vpc", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "network-line"},
 		{ProductCode: "scecs", ProductName: "辰云服务器", Category: "compute", Description: "云上虚拟服务器,一切资源的基础算力载体", ResourceType: "instance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "compute-line"},
 		{ProductCode: "scbs", ProductName: "辰云块存储", Category: "storage", Description: "挂载云服务器的高性能云盘", ResourceType: "disk", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "storage-line"},
@@ -186,8 +212,11 @@ func (s *catalogStore) seed() {
 		// storage is a replica flag, not a placement constraint. DriverK8s.
 		{ProductCode: "sclog", ProductName: "辰云日志服务", Category: "middleware", Description: "日志采集与存储,Vector+ClickHouse,多租户隔离", ResourceType: "loginstance", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "data-line"},
 	}
+}
 
-	s.skus = []sku{
+// seedSKUs lists the sellable SKUs: one row per product × spec × charge form.
+func seedSKUs() []sku {
+	return []sku{
 		{SKUCode: "scecs.s2.small.prepaid", ProductCode: "scecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
 		{SKUCode: "scecs.s2.small.postpaid", ProductCode: "scecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
 		{SKUCode: "scecs.s2.large.prepaid", ProductCode: "scecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
@@ -233,9 +262,13 @@ func (s *catalogStore) seed() {
 		{SKUCode: "sclog.log.standard.postpaid", ProductCode: "sclog", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard","retention_days":7,"storage_gb":50}`, Status: "1"},
 		{SKUCode: "sclog.log.pro.postpaid", ProductCode: "sclog", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"pro","retention_days":30,"storage_gb":500,"cross_az":true}`, Status: "1"},
 	}
+}
 
+// seedRules lists the pricing rules — append-only in the schema (01§12.3), so
+// the seed is the initial append and every later change is a new row.
+func seedRules() []pricing.PricingRule {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.rules = []pricing.PricingRule{
+	return []pricing.PricingRule{
 		// SCECS 包年包月 (元/月)
 		{RuleID: 1, SKUCode: "scecs.s2.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("90"), EffectiveFrom: from},
 		{RuleID: 2, SKUCode: "scecs.s2.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("180"), EffectiveFrom: from},
@@ -291,17 +324,25 @@ func (s *catalogStore) seed() {
 		{RuleID: 36, SKUCode: "sclog.log.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.005"), EffectiveFrom: from},
 		{RuleID: 37, SKUCode: "sclog.log.pro.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
 	}
+}
 
+// seedPromos lists the platform promotions (询价 takes the single best
+// applicable one, 01§12.3 — promotions never stack).
+func seedPromos() []pricing.Promotion {
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.promos = []pricing.Promotion{
+	return []pricing.Promotion{
 		{PromoID: "promo-newuser-2026", PromoType: pricing.PromoDiscountRate, ScopeType: "ORDER", RateBasisPoints: 3000, UserTag: "new", StartAt: from, EndAt: to},
 		{PromoID: "promo-ecs-annual", PromoType: pricing.PromoDiscountRate, ScopeType: "PRODUCT", ScopeRef: "scecs", RateBasisPoints: 8500, StartAt: from, EndAt: to},
 	}
+}
 
-	// Sellable region/zone inventory (00§4.1, P2 dual-AZ shape). The seed is the
-	// MySQL t_region/t_zone tables in production; the zone ids are validated by
-	// the same identifier.AZName convention the quote path enforces (M-6).
-	s.regions = []region{
+// seedRegions lists the sellable region/zone inventory (00§4.1, P2 dual-AZ
+// shape). There is no DDL table for region/zone inventory yet — platform
+// metadata, served from this seed in both modes; the zone ids are validated by
+// the same identifier.AZName convention the quote path enforces (M-6).
+func seedRegions() []region {
+	return []region{
 		{RegionID: "cn-north-1", RegionName: "华北 1（北京）", Zones: []zone{
 			{ZoneID: "cn-north-1-a", ZoneName: "华北 1 可用区 A"},
 			{ZoneID: "cn-north-1-b", ZoneName: "华北 1 可用区 B"},
@@ -315,20 +356,26 @@ func (s *catalogStore) seed() {
 			{ZoneID: "cn-south-1-b", ZoneName: "华南 1 可用区 B"},
 		}},
 	}
+}
 
-	// Public image inventory for compute products (t_image in production).
-	// Status 2 = on-sale, mirroring the product convention.
-	s.images = []image{
+// seedImages lists the public image inventory for compute products. Like the
+// region inventory there is no DDL table yet; the seed is the inventory in
+// both modes. Status 2 = on-sale, mirroring the product convention.
+func seedImages() []image {
+	return []image{
 		{ImageID: "centos-7.9", Name: "CentOS 7.9 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
 		{ImageID: "ubuntu-22.04", Name: "Ubuntu 22.04 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
 		{ImageID: "debian-12", Name: "Debian 12 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
 		{ImageID: "rocky-9", Name: "Rocky Linux 9 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
 		{ImageID: "windows-2022", Name: "Windows Server 2022 数据中心版 64位", OS: "windows", Arch: "x86_64", ProductCode: "scecs", Status: 2},
 	}
+}
 
-	// Marketing taxonomy (t_category in production, edited by the marketing
-	// back-office). Codes cover every Category value used by the product seed.
-	s.categories = []category{
+// seedCategories lists the marketing taxonomy (edited by the marketing
+// back-office; no DDL table yet). Codes cover every Category value used by the
+// product seed.
+func seedCategories() []category {
+	return []category{
 		{Code: "compute", Name: "计算", Description: "云服务器、容器实例等基础算力", Link: "https://docs.eulercloud.cn/compute"},
 		{Code: "storage", Name: "存储", Description: "对象存储、块存储与备份", Link: "https://docs.eulercloud.cn/storage"},
 		{Code: "database", Name: "数据库", Description: "托管关系型与缓存数据库", Link: "https://docs.eulercloud.cn/database"},
@@ -869,7 +916,23 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	store := newCatalogStore()
+	repo, err := newCatalogRepo(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	loadCtx, loadCancel := context.WithTimeout(context.Background(), loadDeadline)
+	store, err := newCatalogStoreFrom(loadCtx, repo)
+	loadCancel()
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Log where the catalogue lives: prices and placements edited by ops in the
+	// database take effect on restart, and a store still running on its seed is
+	// a very different animal.
+	slog.Info("svc-catalog catalogue ready", "persistent", persistentCatalogRepo(repo),
+		"products", len(store.products), "skus", len(store.skus), "rules", len(store.rules))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })

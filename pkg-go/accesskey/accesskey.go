@@ -252,9 +252,22 @@ func (m *Manager) Rotate(ak string, grace time.Duration) (Created, error) {
 	// especially rotating a key that is itself mid-grace — grows the live-key
 	// set without limit, defeating the 2-key cap (07§2.2 rule 2).
 	nowCheck := m.now()
-	if !old.GraceUntil.IsZero() && nowCheck.Before(old.GraceUntil) {
-		// The key being rotated is already the superseded half of a rotation.
-		return Created{}, ErrRotationInProgress
+	// Only a key that is currently usable may be rotated. A DISABLED key, or a
+	// superseded key whose grace window has closed, is already dead to the
+	// gateway (ResolveSK refuses both); rotating it would reset GraceUntil and
+	// revive it — and because the live-key count below treats such a key as
+	// already gone, the revived key would sit outside the cap entirely.
+	if old.Status == StatusDisabled {
+		return Created{}, ErrDisabled
+	}
+	if !old.GraceUntil.IsZero() {
+		if nowCheck.Before(old.GraceUntil) {
+			// The key being rotated is already the superseded half of a rotation.
+			return Created{}, ErrRotationInProgress
+		}
+		// Past its grace window: effectively disabled (07§2.2). Rotating it
+		// would resurrect it; the operator must enable or delete it explicitly.
+		return Created{}, ErrDisabled
 	}
 	siblings, err := m.store.ListByOwner(old.AccountID, old.OwnerType, old.OwnerID)
 	if err != nil {

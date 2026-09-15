@@ -39,6 +39,7 @@ import (
 	"github.com/starcloud/sc-platform/metering"
 	"github.com/starcloud/sc-platform/pricing"
 	"github.com/starcloud/sc-platform/reservepack"
+	"github.com/starcloud/sc-platform/storage"
 )
 
 func main() {
@@ -51,7 +52,12 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	app := newApp()
+	app, err := newApp(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("svc-billing stores ready", "persistent", storage.Enabled())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
@@ -126,16 +132,18 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 // App + in-memory stores
 // ---------------------------------------------------------------------------
 
-// app holds the wired pkg-go domain objects and the in-memory stores that
-// stand in for the trade_db ledger and quota/pool tables until phase 2.
+// app holds the wired pkg-go domain objects and the stores behind them: MySQL
+// (trade_db) when SC_DB_DSN is set, in-memory otherwise.
 type app struct {
-	ledger   *ledger.Ledger
-	store    *memLedgerStore
+	ledger *ledger.Ledger
+	// store is the ledger's persistence port — *memLedgerStore in the demo,
+	// ledger.SQLStore against trade_db.
+	store    ledger.Store
 	engine   *billing.Engine
 	pools    *poolRegistry
 	charges  *chargeRegistry
 	packs     *reservepack.Ledger
-	packStore *reservepack.MemoryStore
+	packStore reservepack.Store
 	invoices  *invoice.Book
 
 	// settleMu serializes the settle commit phase so a concurrent duplicate
@@ -146,27 +154,93 @@ type app struct {
 	settled  map[string]map[string]any
 }
 
-func newApp() *app {
-	store := newMemLedgerStore()
-	packStore := reservepack.NewMemoryStore()
-	// The seq closures are shared by concurrent handlers; guard each with its
-	// own mutex so ID generation is race-free.
+// newApp wires the domain objects. Persistence is opt-in (pkg-go/storage doc):
+// with SC_DB_DSN set, the cash ledger and the resource-pack ledger are trade_db's
+// tables, so balances, packs and their journals survive a restart; unset, the
+// service keeps the in-memory stores that make the demo and `go test`
+// dependency-free.
+//
+// A configured DSN that cannot be reached, or a schema sqlmigrate never touched,
+// is a startup failure: an "healthy" process whose first settle 500s is worse
+// than one that refuses to come up.
+//
+// Journal ids come from the 号段 allocator (trade_db.id_sequence, 04§6.6) when
+// the store is persistent. The in-process counters are only correct for the
+// in-memory store — pointed at a real database they restart at 1 and collide with
+// the rows the previous run committed.
+//
+// The invoice book stays in memory either way: the invoice DDL exists, but no
+// invoice store adapter does yet. Saying so is better than a half-wired book that
+// silently loses 红冲 documents.
+func newApp(ctx context.Context) (*app, error) {
+	db, ok, err := storage.MustOpenFor(ctx, "trade_db")
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return newInMemoryApp(), nil
+	}
+	if err := storage.EnsureMigrated(ctx, db, "trade_db"); err != nil {
+		return nil, err
+	}
+	ledgerIDs, err := storage.OpenSequence(ctx, db, "ledger_entry", 1000)
+	if err != nil {
+		return nil, err
+	}
+	packIDs, err := storage.OpenSequence(ctx, db, "resource_pack_journal", 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	var invMu sync.Mutex
+	var invSeq int64
+	app := &app{
+		engine:   billing.NewEngine(time.Now),
+		pools:    newPoolRegistry(),
+		charges:  newChargeRegistry(),
+		settled:  make(map[string]map[string]any),
+		invoices: invoice.NewBook(time.Now, func() string { invMu.Lock(); defer invMu.Unlock(); invSeq++; return fmt.Sprintf("inv-%d", invSeq) }),
+	}
+	app.store = ledger.NewSQLStore(db)
+	app.ledger = ledger.New(app.store, time.Now, ledgerIDs.NextFunc())
+	app.packStore = reservepack.NewSQLStore(db)
+	app.packs = reservepack.New(app.packStore, time.Now, packIDs.NextFunc())
+	return app, nil
+}
+
+// newInMemoryApp builds the demo app: in-memory stores, guarded local id
+// counters, invoice book. Tests construct it directly, so they never depend on
+// whether the developer's shell has SC_DB_DSN set.
+func newInMemoryApp() *app {
+	var invMu sync.Mutex
+	var invSeq int64
+	app := &app{
+		engine:   billing.NewEngine(time.Now),
+		pools:    newPoolRegistry(),
+		charges:  newChargeRegistry(),
+		settled:  make(map[string]map[string]any),
+		invoices: invoice.NewBook(time.Now, func() string { invMu.Lock(); defer invMu.Unlock(); invSeq++; return fmt.Sprintf("inv-%d", invSeq) }),
+	}
+	app.store = newMemLedgerStore()
+	app.ledger = ledger.New(app.store, time.Now, guardedCounter())
+	app.packStore = reservepack.NewMemoryStore()
+	app.packs = reservepack.New(app.packStore, time.Now, guardedCounter())
+	return app
+}
+
+// guardedCounter mints the in-memory ids. The closures are shared by concurrent
+// handlers, so the counter is mutex-guarded: an unguarded ++ both races under
+// -race and can hand two journal entries the same id.
+func guardedCounter() func() int64 {
 	var (
-		packMu  sync.Mutex
-		packSeq int64
-		invMu   sync.Mutex
-		invSeq  int64
+		mu  sync.Mutex
+		seq int64
 	)
-	return &app{
-		ledger:    ledger.New(store, time.Now, nil),
-		store:     store,
-		engine:    billing.NewEngine(time.Now),
-		pools:     newPoolRegistry(),
-		charges:   newChargeRegistry(),
-		packs:     reservepack.New(packStore, time.Now, func() int64 { packMu.Lock(); defer packMu.Unlock(); packSeq++; return packSeq }),
-		packStore: packStore,
-		invoices:  invoice.NewBook(time.Now, func() string { invMu.Lock(); defer invMu.Unlock(); invSeq++; return fmt.Sprintf("inv-%d", invSeq) }),
-		settled:   make(map[string]map[string]any),
+	return func() int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		seq++
+		return seq
 	}
 }
 
@@ -365,6 +439,13 @@ func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
 			// Commit the pack consumption with the charge id as the idempotency
 			// key, so a retried settlement is a no-op against the pack ledger.
 			if _, _, _, err := a.packs.Consume(d.Ref, req.ProductCode, d.Amount, s.Charge.ChargeID, s.Charge.ChargeID); err != nil && !errors.Is(err, reservepack.ErrPackTerminal) && !errors.Is(err, reservepack.ErrPackExhausted) && !errors.Is(err, reservepack.ErrInsufficientQuota) {
+				if errors.Is(err, reservepack.ErrVersionConflict) {
+					// A concurrent settlement moved the pack under us; the
+					// caller can retry the same aggregate (the charge id is
+					// the idempotency key, so a retry cannot double-charge).
+					writeErr(w, http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent pack update, retry")
+					return
+				}
 				slog.Error("pack consume failed", "account", acct, "pack", d.Ref, "err", err)
 				writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
 				return
@@ -489,6 +570,16 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "invalid faceValue")
 			return
 		}
+		if face.IsZero() || face.IsNegative() {
+			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "faceValue must be positive")
+			return
+		}
+		if strings.TrimSpace(req.OrderKey) == "" {
+			// The order key is both the idempotency key of the purchase and the
+			// key tying the quota to a settled order.
+			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "orderKey is required")
+			return
+		}
 		var expire time.Time
 		if req.ExpireAt != "" {
 			expire, err = time.Parse(time.RFC3339, req.ExpireAt)
@@ -497,8 +588,51 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Pre-flight the pack state BEFORE taking money: re-purchasing a pack id
+		// under a different order key is rejected by the ledger, and discovering
+		// that after the debit would need a compensating refund.
+		if existing, ok, err := a.packStore.GetPack(req.PackID); err != nil {
+			slog.Error("pack lookup failed", "account", acct, "pack", req.PackID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+			return
+		} else if ok {
+			// Same order key: idempotent replay, nothing to charge again.
+			if prior, found, err := a.packStore.FindByIdempotencyKey(req.PackID, req.OrderKey); err != nil {
+				slog.Error("pack idempotency lookup failed", "account", acct, "pack", req.PackID, "err", err)
+				writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+				return
+			} else if found {
+				_ = prior
+				writeJSON(w, http.StatusOK, packToMap(existing))
+				return
+			}
+			writeErr(w, http.StatusConflict, "Billing.PackExists", "pack id already purchased")
+			return
+		}
+
+		// A pack is BOUGHT. Crediting quota without collecting its price is a
+		// free-quota mint (and, since packs are waterfall rank 0, free compute).
+		// Debit the face value from the cash balance first; production does the
+		// debit, the credit and the journal write in one local transaction.
+		payKey := "pack:" + req.OrderKey
+		if _, _, err := a.ledger.Consume(acct, face, "pack", req.OrderKey, payKey,
+			"purchase resource pack "+req.PackID); err != nil && !errors.Is(err, ledger.ErrDuplicateEntry) {
+			if errors.Is(err, ledger.ErrInsufficientBalance) {
+				writeErr(w, http.StatusConflict, "Billing.InsufficientBalance", "insufficient balance for the pack")
+				return
+			}
+			slog.Error("pack payment failed", "account", acct, "pack", req.PackID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+			return
+		}
 		pack, _, err := a.packs.Purchase(req.PackID, acct, req.ProductCode, req.SKUCode, face, expire, req.OrderKey)
 		if err != nil {
+			// The debit already happened; give it back so a rejected purchase
+			// cannot leave cash with nothing to show for it.
+			if _, _, rerr := a.ledger.Refund(acct, face, req.OrderKey, "pack-undo:"+req.OrderKey,
+				"pack purchase reversed "+req.PackID); rerr != nil && !errors.Is(rerr, ledger.ErrDuplicateEntry) {
+				slog.Error("pack purchase compensation failed", "account", acct, "pack", req.PackID, "err", rerr)
+			}
 			slog.Warn("pack purchase failed", "account", acct, "pack", req.PackID, "err", err)
 			writeErr(w, http.StatusBadRequest, "Billing.PurchaseFailed", "pack purchase failed")
 			return
@@ -653,6 +787,12 @@ func (a *app) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
 	limitBody(w, r)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "malformed request")
+		return
+	}
+	if strings.TrimSpace(req.ReversalID) == "" {
+		// The 红冲 document needs its own id; the store refuses an empty one
+		// (and refuses to overwrite an existing document with it).
+		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "reversalId is required")
 		return
 	}
 	// IDOR guard: the original invoice must belong to the caller's account.

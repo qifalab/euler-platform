@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,7 +54,11 @@ type tag struct {
 // in-memory implementation; production backs this with MySQL (sharded by
 // account_id) without changing the handlers.
 type orgStore interface {
-	CreateProject(p project) error
+	// CreateProject takes a pointer because the store owns the project id: the
+	// schema's key is a 号段-issued BIGINT (04§6.6), so the persistent store
+	// assigns one and the caller must see it. The in-memory store keeps whatever
+	// id the caller supplied.
+	CreateProject(p *project) error
 	GetProject(accountID, projectID string) (project, error)
 	ListProjects(accountID string) ([]project, error)
 	UpdateProject(accountID, projectID string, name *string, parentID *string) error
@@ -96,13 +101,13 @@ var (
 
 // --- memStore: projects ------------------------------------------------------
 
-func (s *memStore) CreateProject(p project) error {
+func (s *memStore) CreateProject(p *project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.projects[projKey(p.AccountID, p.ProjectID)]; ok {
 		return errProjectExists
 	}
-	s.projects[projKey(p.AccountID, p.ProjectID)] = p
+	s.projects[projKey(p.AccountID, p.ProjectID)] = *p
 	return nil
 }
 
@@ -217,7 +222,22 @@ type orgService struct {
 	store orgStore
 }
 
-func newOrgService() *orgService {
+// newOrgService wires the service to its storage. Persistence is opt-in
+// (pkg-go/storage doc): SC_DB_DSN set → account_db; unset → the in-memory store
+// that keeps the demo and `go test` dependency-free.
+func newOrgService(ctx context.Context) (*orgService, error) {
+	store, err := newStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("svc-org store ready", "persistent", persistentStore(store))
+	return &orgService{store: store}, nil
+}
+
+// newInMemoryOrgService builds the demo service. Handler tests construct it
+// directly, so they never depend on whether the developer's shell has SC_DB_DSN
+// set — a test that wrote projects into account_db would be a data incident.
+func newInMemoryOrgService() *orgService {
 	return &orgService{store: newMemStore()}
 }
 
@@ -292,7 +312,14 @@ func (s *orgService) handleProjects(w http.ResponseWriter, r *http.Request) {
 			pid = uuid.NewString()
 		}
 		p := project{ProjectID: pid, AccountID: acct, Name: req.Name, ParentID: req.ParentID}
-		if err := s.store.CreateProject(p); err != nil {
+		if err := s.store.CreateProject(&p); err != nil {
+			// A malformed account/parent id is the caller's error, not a
+			// conflict; everything else on this path is the name-uniqueness
+			// refusal the DDL's uk_acc_name encodes.
+			if errors.Is(err, errInvalidAccount) {
+				writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", err.Error())
+				return
+			}
 			writeErr(w, http.StatusConflict, "Project.AlreadyExists", err.Error())
 			return
 		}

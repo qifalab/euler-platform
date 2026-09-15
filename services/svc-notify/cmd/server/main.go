@@ -38,6 +38,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/starcloud/sc-platform/notify"
+	"github.com/starcloud/sc-platform/storage"
 )
 
 func main() {
@@ -47,7 +48,29 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	store := newMemStore()
+	// The notification store decides where the evidence lives. Persistence is
+	// opt-in (pkg-go/storage doc): with SC_DB_DSN set, notifications and their
+	// per-channel deliveries land in support_db — "you never told me" is then
+	// answerable by query; unset, the in-memory store keeps the demo.
+	//
+	// A configured DSN that cannot be reached is a startup failure: a notifier
+	// that cannot record what it sent must not claim to have sent it.
+	var store notify.Store = newMemStore()
+	persistent := false
+	db, ok, err := storage.MustOpenFor(context.Background(), "support_db")
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	if ok {
+		if err := storage.EnsureMigrated(context.Background(), db, "support_db"); err != nil {
+			slog.Error("startup failed", "err", err)
+			os.Exit(1)
+		}
+		store = notify.NewSQLStore(context.Background(), db)
+		persistent = true
+	}
+	slog.Info("svc-notify notification store ready", "persistent", persistent)
 	disp := notify.NewDispatcher(store, time.Now, uuid.NewString)
 	// Register a mock sender per channel so a notification always has a
 	// delivery path in this reference implementation. Production registers the
@@ -104,7 +127,7 @@ func main() {
 // app wires the pkg-go/notify domain logic to HTTP handlers.
 type app struct {
 	disp  *notify.Dispatcher
-	store *memStore
+	store notify.Store
 	// announcements is the public site-content board (news / programs / videos)
 	// served by GET /api/v1/announcements. It rides on svc-notify because a
 	// broadcast announcement IS a notification — same audience-wide publish
@@ -368,7 +391,11 @@ func (a *app) list(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Sc-Account-Id header required")
 		return
 	}
-	ns := a.store.ListByAccount(accountID)
+	ns, err := a.store.ListByAccount(accountID)
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, "Notify.ListFailed", "通知列表读取失败")
+		return
+	}
 	dto := make([]notificationDTO, 0, len(ns))
 	for _, n := range ns {
 		dto = append(dto, toDTO(n))
@@ -464,9 +491,8 @@ func (m *memStore) FindByBizKey(accountID int64, class notify.Class, bizKey stri
 }
 
 // ListByAccount returns the notifications recorded for a tenant, newest first.
-// It is an HTTP-view convenience method on top of the Store; the domain only
-// needs the queries defined by the Store interface.
-func (m *memStore) ListByAccount(accountID int64) []notify.Notification {
+// It is the console inbox view on top of the Store.
+func (m *memStore) ListByAccount(accountID int64) ([]notify.Notification, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []notify.Notification
@@ -480,7 +506,7 @@ func (m *memStore) ListByAccount(accountID int64) []notify.Notification {
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
-	return out
+	return out, nil
 }
 
 // mockSender is a mock notify.Sender per channel. In production these are

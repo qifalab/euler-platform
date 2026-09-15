@@ -69,7 +69,7 @@ func (s *MemoryStore) Apply(entry Entry, newPack Pack, expectedVersion int) erro
 		return ErrPackNotFound
 	}
 	if ok && existing.Version != expectedVersion {
-		return ErrPackNotFound // optimistic-lock mismatch; caller retries
+		return ErrVersionConflict // optimistic-lock mismatch; caller retries
 	}
 	// Idempotency check at apply time too (defense in depth; the Ledger checks
 	// first, but a direct Apply caller could double-apply).

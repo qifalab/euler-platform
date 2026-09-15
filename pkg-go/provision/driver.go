@@ -35,6 +35,7 @@ package provision
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -401,13 +402,18 @@ func (d *MockDriver) Apply(spec Spec) (Status, error) {
 	defer d.mu.Unlock()
 	existing, ok := d.resources[spec.ResourceID]
 	if ok && !existing.deleted {
-		// Idempotent: re-applying the same spec is a no-op that returns
-		// current status rather than an error.
-		if spec.Suspend != existing.spec.Suspend {
+		// Idempotent: re-applying the SAME spec is a no-op that returns
+		// current status rather than an error. Any other change (params, zone,
+		// labels) must land in the stored spec — a mock that swallows a
+		// resize silently keeps metering the old shape and hands the customer
+		// a bill that disagrees with the requested configuration.
+		if !reflect.DeepEqual(existing.spec, spec) {
 			existing.spec = spec
-			existing.status.Phase = PhaseReady
-			if spec.Suspend {
+			switch {
+			case spec.Suspend:
 				existing.status.Phase = PhaseSuspended
+			case existing.status.Phase == PhaseSuspended:
+				existing.status.Phase = PhaseReady
 			}
 			existing.status.UpdatedAt = d.now()
 			existing.status.ObservedGeneration++

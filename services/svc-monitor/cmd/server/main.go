@@ -32,7 +32,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
@@ -97,14 +96,16 @@ type AlertRule struct {
 	UpdatedAt              time.Time         `json:"updatedAt"`
 }
 
+// ruleStore wires the rule handlers to the persistence boundary. The demo seed
+// runs only for the in-memory repo: writing three demo rules into a shared
+// support_db would invent alerting for account 100123 in every environment
+// pointed at it (alert-engine would start evaluating them).
 type ruleStore struct {
-	mu    sync.RWMutex
-	rules map[int64]*AlertRule // ruleId → rule
-	seq   int64
+	repo ruleRepo
 }
 
 func newRuleStore() *ruleStore {
-	s := &ruleStore{rules: make(map[int64]*AlertRule)}
+	s := newRuleStoreWith(newMemRuleRepo())
 	// Seeds use proto operator semantics: "cpu ≥ 80" → 2 (GTE), "req > 1000" → 1 (GT).
 	s.seed(100123, "scecs", "instance", "cpu_utilization", "80.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP", "EMAIL"})
 	s.seed(100123, "scecs", "instance", "memory_utilization", "90.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP"})
@@ -112,27 +113,22 @@ func newRuleStore() *ruleStore {
 	return s
 }
 
-func (s *ruleStore) seed(acct int64, product, rtype, metric, threshold string, cmp, period, evalP int, channels []string) {
-	s.seq++
-	r := &AlertRule{
-		RuleID: s.seq, AccountID: acct, ProductCode: product, ResourceType: rtype,
-		Metric: metric, Threshold: threshold, ComparisonOperator: cmp, Period: period,
-		EvalPeriods: evalP, NotificationChannels: channels, Status: 1, Version: 1,
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}
-	s.rules[r.RuleID] = r
+// newRuleStoreWith wires a repo. Tests use it to run the handlers against
+// whichever backend they are exercising.
+func newRuleStoreWith(repo ruleRepo) *ruleStore {
+	return &ruleStore{repo: repo}
 }
 
-func (s *ruleStore) list(acct int64) []*AlertRule {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []*AlertRule
-	for _, r := range s.rules {
-		if r.AccountID == acct {
-			out = append(out, r)
-		}
+func (s *ruleStore) seed(acct int64, product, rtype, metric, threshold string, cmp, period, evalP int, channels []string) {
+	now := time.Now()
+	if err := s.repo.Create(&AlertRule{
+		AccountID: acct, ProductCode: product, ResourceType: rtype,
+		Metric: metric, Threshold: threshold, ComparisonOperator: cmp, Period: period,
+		EvalPeriods: evalP, NotificationChannels: channels, Status: 1, Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		panic(fmt.Sprintf("seed alert rule failed: %v", err))
 	}
-	return out
 }
 
 // --- HTTP helpers (envelope, 03§9.3) ---
@@ -174,7 +170,13 @@ func (s *ruleStore) handleListRules(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, "OK", s.list(acct))
+	list, err := s.repo.List(acct)
+	if err != nil {
+		slog.Error("rule list failed", "account", acct, "err", err)
+		writeErr(w, "Monitor.ListFailed", 500, "告警规则读取失败")
+		return
+	}
+	writeJSON(w, "OK", list)
 }
 
 type createRuleRequest struct {
@@ -220,31 +222,173 @@ func (s *ruleStore) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	if len(req.NotificationChannels) == 0 {
 		req.NotificationChannels = []string{"IN_APP"}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Idempotent: uk_acc_rule (account, product, resource_type, metric) — upsert.
-	for _, existing := range s.rules {
-		if existing.AccountID == acct && existing.ProductCode == req.ProductCode &&
-			existing.ResourceType == req.ResourceType && existing.Metric == req.Metric {
-			existing.Threshold = req.Threshold
-			existing.ComparisonOperator = req.ComparisonOperator
-			existing.Period = req.Period
-			existing.EvalPeriods = req.EvalPeriods
-			existing.NotificationChannels = req.NotificationChannels
-			existing.Version++
-			existing.UpdatedAt = time.Now()
-			writeJSON(w, "OK", existing)
+	// Idempotent: uk_acc_rule (account, product, resource_type, metric) — the
+	// natural key upserts: creating the same rule again re-parameters it and
+	// keeps its id, so no duplicate alerting is minted.
+	existing, err := s.repo.ByNaturalKey(acct, req.ProductCode, req.ResourceType, req.Metric)
+	if err != nil {
+		slog.Error("rule natural key lookup failed", "account", acct, "metric", req.Metric, "err", err)
+		writeErr(w, "Monitor.CreateFailed", 500, "告警规则写入失败")
+		return
+	}
+	if existing != nil {
+		prev := existing.Version
+		existing.Threshold = req.Threshold
+		existing.ComparisonOperator = req.ComparisonOperator
+		existing.Period = req.Period
+		existing.EvalPeriods = req.EvalPeriods
+		existing.NotificationChannels = req.NotificationChannels
+		existing.Version++
+		existing.UpdatedAt = time.Now()
+		if err := s.repo.Save(existing, prev); err != nil {
+			slog.Error("rule upsert save failed", "ruleId", existing.RuleID, "err", err)
+			writeErr(w, "Monitor.CreateFailed", 500, "告警规则写入失败")
 			return
 		}
+		writeJSON(w, "OK", existing)
+		return
 	}
-	s.seq++
 	rule := &AlertRule{
-		RuleID: s.seq, AccountID: acct, ProductCode: req.ProductCode, ResourceType: req.ResourceType,
+		AccountID: acct, ProductCode: req.ProductCode, ResourceType: req.ResourceType,
 		Metric: req.Metric, Threshold: req.Threshold, ComparisonOperator: req.ComparisonOperator,
 		Period: req.Period, EvalPeriods: req.EvalPeriods, NotificationChannels: req.NotificationChannels,
 		Status: 1, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
-	s.rules[rule.RuleID] = rule
+	if err := s.repo.Create(rule); err != nil {
+		// Lost the ByNaturalKey race to a concurrent create of the same rule:
+		// the unique key fired. Re-read and take the update path — the retry
+		// must not fail with 500 for the very race the unique key exists to
+		// arbitrate.
+		if errors.Is(err, ErrRuleConflict) {
+			if dup, gerr := s.repo.ByNaturalKey(acct, req.ProductCode, req.ResourceType, req.Metric); gerr == nil && dup != nil {
+				prev := dup.Version
+				dup.Threshold = req.Threshold
+				dup.ComparisonOperator = req.ComparisonOperator
+				dup.Period = req.Period
+				dup.EvalPeriods = req.EvalPeriods
+				dup.NotificationChannels = req.NotificationChannels
+				dup.Version++
+				dup.UpdatedAt = time.Now()
+				if err := s.repo.Save(dup, prev); err == nil {
+					writeJSON(w, "OK", dup)
+					return
+				}
+			}
+			writeErr(w, "Monitor.VersionConflict", 409, "规则已被修改,请刷新后重试")
+			return
+		}
+		slog.Error("rule create failed", "account", acct, "metric", req.Metric, "err", err)
+		writeErr(w, "Monitor.CreateFailed", 500, "告警规则写入失败")
+		return
+	}
+	writeJSON(w, "OK", rule)
+}
+
+// updateRuleReq is the PUT /api/v1/monitor/rules/{id} body. Fields are
+// pointers so "not supplied" is distinguishable from the zero value; Version
+// is the optimistic-lock guard from the row the caller read.
+type updateRuleReq struct {
+	Threshold            *string   `json:"threshold"`
+	ComparisonOperator   *int      `json:"comparisonOperator"`
+	Period               *int      `json:"period"`
+	EvalPeriods          *int      `json:"evalPeriods"`
+	NotificationChannels *[]string `json:"notificationChannels"`
+	Status               *int      `json:"status"`
+	Version              int       `json:"version"`
+}
+
+// handleUpdateRule implements PUT /api/v1/monitor/rules/{id} — the update path
+// the route table has always documented but never registered. The rule's
+// Version is the optimistic lock: a console tab editing a stale copy is
+// refused with 409 rather than silently overwriting a newer edit.
+func (s *ruleStore) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
+	acct, ok := accountIDFrom(w, r)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "invalid rule id")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var req updateRuleReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, "malformed body")
+		return
+	}
+	if req.Threshold == nil && req.ComparisonOperator == nil && req.Period == nil &&
+		req.EvalPeriods == nil && req.NotificationChannels == nil && req.Status == nil {
+		writeErr(w, "Common.InvalidParameter", 400, "no fields to update")
+		return
+	}
+	if req.ComparisonOperator != nil && !validComparisonOperator(*req.ComparisonOperator) {
+		writeErr(w, "Common.InvalidParameter", 400, "comparisonOperator must be 1(>) 2(>=) 3(<) 4(<=)")
+		return
+	}
+	if req.Period != nil && *req.Period <= 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "period must be positive seconds")
+		return
+	}
+	if req.EvalPeriods != nil && *req.EvalPeriods <= 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "evalPeriods must be positive")
+		return
+	}
+	if req.Status != nil && *req.Status != 1 && *req.Status != 2 {
+		writeErr(w, "Common.InvalidParameter", 400, "status must be 1(enabled) or 2(disabled)")
+		return
+	}
+	if req.Version <= 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "version is required")
+		return
+	}
+
+	rule, err := s.repo.Get(acct, id)
+	if err != nil {
+		slog.Error("rule lookup failed", "ruleId", id, "err", err)
+		writeErr(w, "Monitor.UpdateFailed", 500, "告警规则读取失败")
+		return
+	}
+	if rule == nil {
+		writeErr(w, "Monitor.RuleNotFound", 404, "告警规则不存在")
+		return
+	}
+	if rule.Version != req.Version {
+		writeErr(w, "Monitor.VersionConflict", 409, "规则已被修改,请刷新后重试")
+		return
+	}
+	if req.Threshold != nil {
+		rule.Threshold = *req.Threshold
+	}
+	if req.ComparisonOperator != nil {
+		rule.ComparisonOperator = *req.ComparisonOperator
+	}
+	if req.Period != nil {
+		rule.Period = *req.Period
+	}
+	if req.EvalPeriods != nil {
+		rule.EvalPeriods = *req.EvalPeriods
+	}
+	if req.NotificationChannels != nil && len(*req.NotificationChannels) > 0 {
+		rule.NotificationChannels = *req.NotificationChannels
+	}
+	if req.Status != nil {
+		rule.Status = *req.Status
+	}
+	rule.Version++
+	rule.UpdatedAt = time.Now()
+	// Save re-guards on req.Version: the row can still move between the Get
+	// above and this write (two tabs, or the console and the engine's own
+	// bookkeeping) — that race reports as the same 409.
+	if err := s.repo.Save(rule, req.Version); err != nil {
+		if errors.Is(err, ErrRuleConflict) {
+			writeErr(w, "Monitor.VersionConflict", 409, "规则已被修改,请刷新后重试")
+			return
+		}
+		slog.Error("rule save failed", "ruleId", id, "err", err)
+		writeErr(w, "Monitor.UpdateFailed", 500, "告警规则保存失败")
+		return
+	}
 	writeJSON(w, "OK", rule)
 }
 
@@ -259,14 +403,11 @@ func (s *ruleStore) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Common.InvalidParameter", 400, "invalid rule id")
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rule, exists := s.rules[id]
-	if !exists || rule.AccountID != acct {
-		writeErr(w, "Monitor.RuleNotFound", 404, "告警规则不存在")
+	if err := s.repo.Delete(acct, id); err != nil {
+		slog.Error("rule delete failed", "ruleId", id, "err", err)
+		writeErr(w, "Monitor.DeleteFailed", 500, "告警规则删除失败")
 		return
 	}
-	delete(s.rules, id)
 	writeJSON(w, "OK", map[string]any{"ruleId": id, "deleted": true})
 }
 
@@ -478,12 +619,21 @@ func main() {
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	store := newRuleStore()
+	repo, err := newRuleRepo(context.Background())
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	// Log where the rules live: in-memory rules vanish on restart, and a monitor
+	// that forgets what it should be alerting on is not a recoverable incident.
+	slog.Info("svc-monitor rule repo ready", "persistent", persistentRuleRepo(repo))
+	store := newRuleStoreWith(repo)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })
 	mux.HandleFunc("GET /api/v1/monitor/rules", store.handleListRules)
 	mux.HandleFunc("POST /api/v1/monitor/rules", store.handleCreateRule)
+	mux.HandleFunc("PUT /api/v1/monitor/rules/{id}", store.handleUpdateRule)
 	mux.HandleFunc("DELETE /api/v1/monitor/rules/{id}", store.handleDeleteRule)
 	mux.HandleFunc("GET /api/v1/monitor/metrics", store.handleQueryMetrics)
 	mux.HandleFunc("GET /api/v1/monitor/templates", store.handleTemplates)

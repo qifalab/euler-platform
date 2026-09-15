@@ -139,7 +139,19 @@ func (e Event) canonicalPayload() string {
 	b.WriteByte('|')
 	b.WriteString(e.Identity.Principal)
 	b.WriteByte('|')
+	// Identity.Type and MFAPresent are part of the hash: whether the caller was
+	// a root account, a RAM user or an assumed role, and whether MFA was
+	// present, are exactly the facts an investigator cites. Leaving them out
+	// would let them be rewritten without breaking the chain.
+	b.WriteString(e.Identity.Type)
+	b.WriteByte('|')
+	b.WriteString(fmt.Sprintf("%t", e.Identity.MFAPresent))
+	b.WriteByte('|')
 	b.WriteString(e.Identity.AKID)
+	b.WriteByte('|')
+	// UserAgent is hashed too — it is the tool fingerprint, and a forger's
+	// first instinct is to rewrite it.
+	b.WriteString(e.UserAgent)
 	b.WriteByte('|')
 	b.WriteString(string(e.Decision))
 	b.WriteByte('|')

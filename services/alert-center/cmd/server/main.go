@@ -36,6 +36,8 @@ import (
 	"time"
 
 	"github.com/starcloud/sc-platform/alertcenter"
+	"github.com/starcloud/sc-platform/notify"
+	"github.com/starcloud/sc-platform/storage"
 )
 
 const accountIDHeader = "X-Sc-Account-Id"
@@ -51,7 +53,11 @@ type notification struct {
 	EmittedAt time.Time               `json:"emittedAt"`
 }
 
-// store buffers ingested alerts and retains emitted notifications.
+// store buffers ingested alerts and retains emitted notifications. When a
+// durable notification store is wired (support_db via pkg-go/notify), every
+// emitted notification is also written through to it — the in-memory slice is
+// the process view, the notification table is the record a support agent or a
+// regulator can query.
 type store struct {
 	mu            sync.Mutex
 	buffer        []alertcenter.Alert
@@ -59,6 +65,8 @@ type store struct {
 	limiter       *alertcenter.TenantLimiter
 	silence       *alertcenter.Silence
 	now           func() time.Time
+	// notifyStore persists emitted notifications (nil = in-memory only).
+	notifyStore notify.Store
 }
 
 func newStore() *store {
@@ -75,13 +83,28 @@ func (s *store) ingest(a alertcenter.Alert) {
 	s.buffer = append(s.buffer, a)
 }
 
-func (s *store) flush() []notification {
+// flushForTenant converges the CALLER's buffered alerts and emits their
+// notifications. The buffer is shared by every tenant the process serves, so
+// the flush must both converge only the caller's alerts and leave everyone
+// else's in place — the pre-fix global flush returned other tenants'
+// notifications in the response and let any tenant consume alerts it does not
+// own.
+func (s *store) flushForTenant(tenantID int64) []notification {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	// Four-stage convergence over the buffered batch.
-	converged := alertcenter.Converge(s.buffer, s.silence)
-	s.buffer = s.buffer[:0]
+	mine := make([]alertcenter.Alert, 0, len(s.buffer))
+	others := make([]alertcenter.Alert, 0, len(s.buffer))
+	for _, a := range s.buffer {
+		if a.TenantID == tenantID {
+			mine = append(mine, a)
+			continue
+		}
+		others = append(others, a)
+	}
+	s.buffer = others
+	// Four-stage convergence over the caller's batch.
+	converged := alertcenter.Converge(mine, s.silence)
 
 	var emitted []notification
 	for _, a := range converged {
@@ -98,6 +121,7 @@ func (s *store) flush() []notification {
 		}
 		s.notifications = append(s.notifications, n)
 		emitted = append(emitted, n)
+		s.persistNotification(n)
 	}
 	sort.Slice(s.notifications, func(i, j int) bool {
 		return s.notifications[i].EmittedAt.After(s.notifications[j].EmittedAt)
@@ -111,6 +135,40 @@ func (s *store) list() []notification {
 	out := make([]notification, len(s.notifications))
 	copy(out, s.notifications)
 	return out
+}
+
+// persistNotification writes one emitted notification to the durable store.
+// Called with s.mu held. A failure is logged, not fatal: the alert remains in
+// the source stream and the next ingest of the same alert re-emits, while
+// blocking the flush would drop every other tenant's notifications behind one
+// bad write.
+func (s *store) persistNotification(n notification) {
+	if s.notifyStore == nil {
+		return
+	}
+	// The notification table's identity is the business key pair (account,
+	// class, biz_key); the alert id is the biz key, so a re-emitted alert
+	// upserts rather than duplicating the record.
+	nn := notify.Notification{
+		NotificationID: "alert-" + n.AlertID,
+		AccountID:      n.TenantID,
+		Class:          notify.ClassAlert,
+		TemplateID:     "alert-center-" + string(n.Severity),
+		BizKey:         n.AlertID,
+		Channels:       []notify.Channel{notify.ChannelInApp},
+		Status:         notify.StatusSent,
+		CreatedAt:      n.EmittedAt,
+		SentAt:         n.EmittedAt,
+		Deliveries: []notify.Delivery{{
+			Channel:  notify.ChannelInApp,
+			Success:  true,
+			SentAt:   n.EmittedAt,
+			Provider: "alert-center",
+		}},
+	}
+	if err := s.notifyStore.Save(nn); err != nil {
+		slog.Error("notification persist failed", "alertId", n.AlertID, "err", err)
+	}
 }
 
 // --- handlers ------------------------------------------------------------------
@@ -154,10 +212,11 @@ func (s *store) handleIngest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *store) handleFlush(w http.ResponseWriter, r *http.Request) {
-	if _, ok := tenantFrom(w, r); !ok {
+	tenantID, ok := tenantFrom(w, r)
+	if !ok {
 		return
 	}
-	writeOK(w, map[string]any{"notifications": s.flush()})
+	writeOK(w, map[string]any{"notifications": s.flushForTenant(tenantID)})
 }
 
 func (s *store) handleList(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +279,24 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	s := newStore()
+	// The notification store decides where the emitted-notifications record
+	// lives. Persistence is opt-in (pkg-go/storage doc): with SC_DB_DSN set,
+	// every emitted notification also lands in support_db.notification (the
+	// same rows svc-notify serves), so "you were warned" is answerable by
+	// query after this process dies; unset, the in-memory slice keeps the demo.
+	db, ok, err := storage.MustOpenFor(context.Background(), "support_db")
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	if ok {
+		if err := storage.EnsureMigrated(context.Background(), db, "support_db"); err != nil {
+			slog.Error("startup failed", "err", err)
+			os.Exit(1)
+		}
+		s.notifyStore = notify.NewSQLStore(context.Background(), db)
+	}
+	slog.Info("alert-center notification store ready", "persistent", ok)
 	srv := &http.Server{Addr: *addr, Handler: newMux(s), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("alert-center listening", "addr", *addr)

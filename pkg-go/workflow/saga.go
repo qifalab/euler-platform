@@ -272,8 +272,12 @@ func (e *Engine) compensate(
 		idx := completed[i]
 		step := steps[idx]
 		if step.Undo == nil {
-			// Nothing to reverse for this step.
+			// Nothing to reverse for this step, but the record still has to
+			// land in step_instance: a compensation result invisible to the
+			// operator is indistinguishable from a step still believed to be
+			// in effect.
 			records[idx].Status = StepCompensated
+			e.emit(flowInstanceID, records[idx])
 			continue
 		}
 

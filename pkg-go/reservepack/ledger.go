@@ -1,11 +1,20 @@
 package reservepack
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/starcloud/sc-platform/pricing"
 )
+
+// commitAttempts bounds the optimistic-lock retry loop. A conflict means
+// another writer (a concurrent settlement, a refund) moved the pack between
+// our read and our write; the loop re-reads, recomputes against the fresh
+// balance and tries again. Three attempts is ample for a single pack's
+// contention profile, and the fresh state (possibly exhausted, possibly
+// expired) is what the retry acts on.
+const commitAttempts = 3
 
 // Store is the persistence boundary for packs and their journals, mirroring
 // ledger.Store. Production backs this with t_resource_pack /
@@ -109,60 +118,98 @@ func (l *Ledger) Consume(packID, productCode string, requested pricing.Amount, b
 	if consumeKey == "" {
 		return Pack{}, Entry{}, 0, ErrMissingIdempotency
 	}
+	if requested.IsZero() || requested.IsNegative() {
+		// A negative "consume" would flow through Min() as a negative take and
+		// credit the pack; the movement amount is a magnitude, never a sign.
+		return Pack{}, Entry{}, 0, fmt.Errorf("%w: %s", ErrInvalidAmount, requested)
+	}
 	if existing, ok, err := l.store.FindByIdempotencyKey(packID, consumeKey); err != nil {
 		return Pack{}, Entry{}, 0, err
 	} else if ok {
-		p, _, gerr := l.store.GetPack(packID)
-		return p, existing, 0, gerr
+		return l.replayConsume(packID, existing, requested)
 	}
 
-	pack, ok, err := l.store.GetPack(packID)
+	var lastErr error
+	for attempt := 0; attempt < commitAttempts; attempt++ {
+		pack, ok, err := l.store.GetPack(packID)
+		if err != nil {
+			return Pack{}, Entry{}, 0, err
+		}
+		if !ok {
+			return Pack{}, Entry{}, 0, ErrPackNotFound
+		}
+		now := l.now()
+		if !pack.usable(productCode, now) {
+			if pack.Status.IsTerminal() {
+				return pack, Entry{}, requested, ErrPackTerminal
+			}
+			if !pack.ExpireAt.IsZero() && !now.Before(pack.ExpireAt) {
+				return pack, Entry{}, requested, ErrPackExpired
+			}
+			return pack, Entry{}, requested, ErrInsufficientQuota
+		}
+
+		take := pricing.Min(pack.Available(now), requested)
+		if take.IsZero() {
+			return pack, Entry{}, requested, ErrInsufficientQuota
+		}
+		shortfall := requested.Sub(take)
+		newRemaining := pack.Remaining.Sub(take)
+		status := pack.Status
+		if newRemaining.IsZero() {
+			status = StatusExhausted
+		}
+		next := pack
+		next.Remaining = newRemaining
+		next.Status = status
+		next.Version = pack.Version + 1
+
+		entry := Entry{
+			EntryID:        l.nextEntryID(),
+			PackID:         packID,
+			Type:           EntryConsume,
+			Amount:         take,
+			Balance:        newRemaining,
+			BizKey:         bizKey,
+			IdempotencyKey: consumeKey,
+			CreatedAt:      now,
+		}
+		switch err := l.store.Apply(entry, next, pack.Version); {
+		case err == nil:
+			return next, entry, shortfall, nil
+		case errors.Is(err, ErrVersionConflict):
+			// Another writer moved first: re-read and recompute. The fresh
+			// state decides — it may now be exhausted or expired.
+			lastErr = err
+			continue
+		case errors.Is(err, ErrDuplicateEntry):
+			// A concurrent caller applied this very consumeKey first; its
+			// result is the one that stands (exactly-once, not twice).
+			if prior, ok, ferr := l.store.FindByIdempotencyKey(packID, consumeKey); ferr == nil && ok {
+				return l.replayConsume(packID, prior, requested)
+			}
+			return Pack{}, Entry{}, 0, err
+		default:
+			return Pack{}, Entry{}, 0, err
+		}
+	}
+	return Pack{}, Entry{}, 0, lastErr
+}
+
+// replayConsume reproduces the original consume result on an idempotent
+// replay, including the shortfall the first attempt reported. Returning zero
+// would tell a retrying settlement that the pack covered the whole charge and
+// let it skip the next waterfall tier — the platform would silently under-bill.
+func (l *Ledger) replayConsume(packID string, existing Entry, requested pricing.Amount) (Pack, Entry, pricing.Amount, error) {
+	p, _, err := l.store.GetPack(packID)
 	if err != nil {
 		return Pack{}, Entry{}, 0, err
 	}
-	if !ok {
-		return Pack{}, Entry{}, 0, ErrPackNotFound
+	shortfall := requested.Sub(existing.Amount)
+	if shortfall.IsNegative() {
+		shortfall = 0
 	}
-	now := l.now()
-	if !pack.usable(productCode, now) {
-		if pack.Status.IsTerminal() {
-			return pack, Entry{}, requested, ErrPackTerminal
-		}
-		if !pack.ExpireAt.IsZero() && !now.Before(pack.ExpireAt) {
-			return pack, Entry{}, requested, ErrPackExpired
-		}
-		return pack, Entry{}, requested, ErrInsufficientQuota
-	}
-
-	take := pricing.Min(pack.Available(now), requested)
-	if take.IsZero() {
-		return pack, Entry{}, requested, ErrInsufficientQuota
-	}
-	shortfall := requested.Sub(take)
-	newRemaining := pack.Remaining.Sub(take)
-	status := pack.Status
-	if newRemaining.IsZero() {
-		status = StatusExhausted
-	}
-	next := pack
-	next.Remaining = newRemaining
-	next.Status = status
-	next.Version = pack.Version + 1
-
-	entry := Entry{
-		EntryID:        l.nextEntryID(),
-		PackID:         packID,
-		Type:           EntryConsume,
-		Amount:         take,
-		Balance:        newRemaining,
-		BizKey:         bizKey,
-		IdempotencyKey: consumeKey,
-		CreatedAt:      now,
-	}
-	if err := l.store.Apply(entry, next, pack.Version); err != nil {
-		return Pack{}, Entry{}, 0, err
-	}
-	return next, entry, shortfall, nil
+	return p, existing, shortfall, nil
 }
 
 // Refund credits quota back for a reversed charge. Refund is bounded by FaceValue:
@@ -171,6 +218,9 @@ func (l *Ledger) Refund(packID string, amount pricing.Amount, bizKey, refundKey 
 	if refundKey == "" {
 		return Pack{}, Entry{}, ErrMissingIdempotency
 	}
+	if amount.IsZero() || amount.IsNegative() {
+		return Pack{}, Entry{}, fmt.Errorf("%w: %s", ErrInvalidAmount, amount)
+	}
 	if existing, ok, err := l.store.FindByIdempotencyKey(packID, refundKey); err != nil {
 		return Pack{}, Entry{}, err
 	} else if ok {
@@ -178,44 +228,65 @@ func (l *Ledger) Refund(packID string, amount pricing.Amount, bizKey, refundKey 
 		return p, existing, gerr
 	}
 
-	pack, ok, err := l.store.GetPack(packID)
-	if err != nil {
-		return Pack{}, Entry{}, err
-	}
-	if !ok {
-		return Pack{}, Entry{}, ErrPackNotFound
-	}
-	// An expired pack does not accept refunds — its quota was forfeit at
-	// expiry and the bill that drew on it cannot be reversed through quota.
-	if pack.Status == StatusExpired {
-		return pack, Entry{}, ErrPackExpired
-	}
-	newRemaining := pack.Remaining.Add(amount)
-	if newRemaining > pack.FaceValue {
-		return pack, Entry{}, fmt.Errorf("%w: %s > %s", ErrRefundExceedsFace, newRemaining, pack.FaceValue)
-	}
-	next := pack
-	next.Remaining = newRemaining
-	// A refund can revive an exhausted pack back to active.
-	if next.Status == StatusExhausted && !newRemaining.IsZero() {
-		next.Status = StatusActive
-	}
-	next.Version = pack.Version + 1
+	var lastErr error
+	for attempt := 0; attempt < commitAttempts; attempt++ {
+		pack, ok, err := l.store.GetPack(packID)
+		if err != nil {
+			return Pack{}, Entry{}, err
+		}
+		if !ok {
+			return Pack{}, Entry{}, ErrPackNotFound
+		}
+		// An expired pack does not accept refunds: its quota was forfeit at
+		// expiry and the bill that drew on it cannot be reversed through quota.
+		if pack.Status == StatusExpired {
+			return pack, Entry{}, ErrPackExpired
+		}
+		// The deadline is authoritative, not the status: a pack past its ExpireAt
+		// is dead even before the sweep flips the row, and crediting quota back
+		// to it would report a refund the customer cannot spend.
+		if !pack.ExpireAt.IsZero() && !l.now().Before(pack.ExpireAt) {
+			return pack, Entry{}, ErrPackExpired
+		}
+		newRemaining := pack.Remaining.Add(amount)
+		if newRemaining > pack.FaceValue {
+			return pack, Entry{}, fmt.Errorf("%w: %s > %s", ErrRefundExceedsFace, newRemaining, pack.FaceValue)
+		}
+		next := pack
+		next.Remaining = newRemaining
+		// A refund can revive an exhausted pack back to active.
+		if next.Status == StatusExhausted && !newRemaining.IsZero() {
+			next.Status = StatusActive
+		}
+		next.Version = pack.Version + 1
 
-	entry := Entry{
-		EntryID:        l.nextEntryID(),
-		PackID:         packID,
-		Type:           EntryRefund,
-		Amount:         amount,
-		Balance:        newRemaining,
-		BizKey:         bizKey,
-		IdempotencyKey: refundKey,
-		CreatedAt:      l.now(),
+		entry := Entry{
+			EntryID:        l.nextEntryID(),
+			PackID:         packID,
+			Type:           EntryRefund,
+			Amount:         amount,
+			Balance:        newRemaining,
+			BizKey:         bizKey,
+			IdempotencyKey: refundKey,
+			CreatedAt:      l.now(),
+		}
+		switch err := l.store.Apply(entry, next, pack.Version); {
+		case err == nil:
+			return next, entry, nil
+		case errors.Is(err, ErrVersionConflict):
+			lastErr = err
+			continue
+		case errors.Is(err, ErrDuplicateEntry):
+			if prior, ok, ferr := l.store.FindByIdempotencyKey(packID, refundKey); ferr == nil && ok {
+				p, _, gerr := l.store.GetPack(packID)
+				return p, prior, gerr
+			}
+			return Pack{}, Entry{}, err
+		default:
+			return Pack{}, Entry{}, err
+		}
 	}
-	if err := l.store.Apply(entry, next, pack.Version); err != nil {
-		return Pack{}, Entry{}, err
-	}
-	return next, entry, nil
+	return Pack{}, Entry{}, lastErr
 }
 
 // Expire forfeits any residual quota at the deadline. Idempotent. A pack whose
@@ -231,41 +302,56 @@ func (l *Ledger) Expire(packID string, expireKey string) (Pack, Entry, error) {
 		return p, existing, gerr
 	}
 
-	pack, ok, err := l.store.GetPack(packID)
-	if err != nil {
-		return Pack{}, Entry{}, err
-	}
-	if !ok {
-		return Pack{}, Entry{}, ErrPackNotFound
-	}
-	now := l.now()
-	if !pack.ExpireAt.IsZero() && now.Before(pack.ExpireAt) {
-		return pack, Entry{}, fmt.Errorf("%w: expires at %s", ErrPackExpired, pack.ExpireAt.Format(time.RFC3339))
-	}
-	if pack.Status.IsTerminal() {
-		// Already exhausted or expired — idempotent no-op.
-		return pack, Entry{}, nil
-	}
-	forfeited := pack.Remaining
-	next := pack
-	next.Remaining = 0
-	next.Status = StatusExpired
-	next.Version = pack.Version + 1
+	var lastErr error
+	for attempt := 0; attempt < commitAttempts; attempt++ {
+		pack, ok, err := l.store.GetPack(packID)
+		if err != nil {
+			return Pack{}, Entry{}, err
+		}
+		if !ok {
+			return Pack{}, Entry{}, ErrPackNotFound
+		}
+		now := l.now()
+		if !pack.ExpireAt.IsZero() && now.Before(pack.ExpireAt) {
+			return pack, Entry{}, fmt.Errorf("%w: expires at %s", ErrPackExpired, pack.ExpireAt.Format(time.RFC3339))
+		}
+		if pack.Status.IsTerminal() {
+			// Already exhausted or expired — idempotent no-op.
+			return pack, Entry{}, nil
+		}
+		forfeited := pack.Remaining
+		next := pack
+		next.Remaining = 0
+		next.Status = StatusExpired
+		next.Version = pack.Version + 1
 
-	entry := Entry{
-		EntryID:        l.nextEntryID(),
-		PackID:         packID,
-		Type:           EntryExpire,
-		Amount:         forfeited,
-		Balance:        0,
-		BizKey:         expireKey,
-		IdempotencyKey: expireKey,
-		CreatedAt:      now,
+		entry := Entry{
+			EntryID:        l.nextEntryID(),
+			PackID:         packID,
+			Type:           EntryExpire,
+			Amount:         forfeited,
+			Balance:        0,
+			BizKey:         expireKey,
+			IdempotencyKey: expireKey,
+			CreatedAt:      now,
+		}
+		switch err := l.store.Apply(entry, next, pack.Version); {
+		case err == nil:
+			return next, entry, nil
+		case errors.Is(err, ErrVersionConflict):
+			lastErr = err
+			continue
+		case errors.Is(err, ErrDuplicateEntry):
+			if prior, ok, ferr := l.store.FindByIdempotencyKey(packID, expireKey); ferr == nil && ok {
+				p, _, gerr := l.store.GetPack(packID)
+				return p, prior, gerr
+			}
+			return Pack{}, Entry{}, err
+		default:
+			return Pack{}, Entry{}, err
+		}
 	}
-	if err := l.store.Apply(entry, next, pack.Version); err != nil {
-		return Pack{}, Entry{}, err
-	}
-	return next, entry, nil
+	return Pack{}, Entry{}, lastErr
 }
 
 // SweepExpired expires every active pack whose deadline has passed, returning

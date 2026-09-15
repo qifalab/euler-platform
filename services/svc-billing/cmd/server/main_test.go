@@ -49,7 +49,7 @@ func settleBody(aggID string) map[string]any {
 // TestSettleIdempotent verifies a retried settlement replays the original
 // result (200) and deducts the ledger and pools exactly once.
 func TestSettleIdempotent(t *testing.T) {
-	a := newApp()
+	a := newInMemoryApp()
 	const acct = int64(1001)
 	if _, _, err := a.ledger.Recharge(acct, pricing.MustParseAmount("100"), "seed", "seed-1", "seed"); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestSettleIdempotent(t *testing.T) {
 // TestSettleConcurrentDuplicates hammers the same aggregate from many
 // goroutines; run with -race. The ledger must be debited exactly once.
 func TestSettleConcurrentDuplicates(t *testing.T) {
-	a := newApp()
+	a := newInMemoryApp()
 	const acct = int64(1002)
 	if _, _, err := a.ledger.Recharge(acct, pricing.MustParseAmount("100"), "seed", "seed-1", "seed"); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestPoolForAccountReturnsCopy(t *testing.T) {
 // TestInvoiceIssueVoidIDOR verifies Issue/Void reject invoices owned by a
 // different account with 404.
 func TestInvoiceIssueVoidIDOR(t *testing.T) {
-	a := newApp()
+	a := newInMemoryApp()
 	draft := map[string]any{
 		"invoiceId":  "inv-a",
 		"billPeriod": "2026-08",
@@ -168,7 +168,7 @@ func TestInvoiceIssueVoidIDOR(t *testing.T) {
 // TestSeqClosuresConcurrent drafts invoices from many goroutines; run with
 // -race to verify the seq closure locking.
 func TestSeqClosuresConcurrent(t *testing.T) {
-	a := newApp()
+	a := newInMemoryApp()
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -190,7 +190,7 @@ func TestSeqClosuresConcurrent(t *testing.T) {
 
 // TestBodyLimit verifies oversized request bodies are rejected, not decoded.
 func TestBodyLimit(t *testing.T) {
-	a := newApp()
+	a := newInMemoryApp()
 	big := bytes.Repeat([]byte("a"), maxBodyBytes+16)
 	req := httptest.NewRequest(http.MethodPost, "/internal/settle", bytes.NewReader(big))
 	req.Header.Set("X-Sc-Account-Id", "1")

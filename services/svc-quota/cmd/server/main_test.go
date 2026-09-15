@@ -28,7 +28,7 @@ func doOccupy(t *testing.T, s *quotaStore, body occupyRequest) *httptest.Respons
 // idempotencyKey returns the original reservation and does not accumulate
 // Occupying twice.
 func TestOccupyIdempotencyKey(t *testing.T) {
-	s := newQuotaStore()
+	s := newInMemoryQuotaStore()
 	req := occupyRequest{ProductCode: "scecs", Region: "cn-north-1", Count: 3, BizKey: "order-1", IdempotencyKey: "idem-1"}
 
 	rec1 := doOccupy(t, s, req)
@@ -48,9 +48,12 @@ func TestOccupyIdempotencyKey(t *testing.T) {
 		t.Fatalf("retry returned %q, want %q", d2.Data.ReservationId, d1.Data.ReservationId)
 	}
 
-	s.mu.Lock()
-	u := s.usage[usageKey(100123, "quota_scecs_instance", "cn-north-1")]
-	s.mu.Unlock()
+	// Read the counter through the store API rather than the in-memory map: the
+	// assertion then holds for whichever backend the service is wired to.
+	u, err := s.GetUsage(100123, "quota_scecs_instance", "cn-north-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if u.Occupying != 3 {
 		t.Fatalf("Occupying = %d, want 3 (no double count)", u.Occupying)
 	}
@@ -59,16 +62,17 @@ func TestOccupyIdempotencyKey(t *testing.T) {
 // TestOccupyDistinctKeysAccumulate verifies different keys still reserve
 // separately.
 func TestOccupyDistinctKeysAccumulate(t *testing.T) {
-	s := newQuotaStore()
+	s := newInMemoryQuotaStore()
 	if rec := doOccupy(t, s, occupyRequest{ProductCode: "scecs", Count: 2, IdempotencyKey: "a"}); rec.Code != 200 {
 		t.Fatalf("occupy a: %d", rec.Code)
 	}
 	if rec := doOccupy(t, s, occupyRequest{ProductCode: "scecs", Count: 2, IdempotencyKey: "b"}); rec.Code != 200 {
 		t.Fatalf("occupy b: %d", rec.Code)
 	}
-	s.mu.Lock()
-	u := s.usage[usageKey(100123, "quota_scecs_instance", "cn-north-1")]
-	s.mu.Unlock()
+	u, err := s.GetUsage(100123, "quota_scecs_instance", "cn-north-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if u.Occupying != 4 {
 		t.Fatalf("Occupying = %d, want 4", u.Occupying)
 	}

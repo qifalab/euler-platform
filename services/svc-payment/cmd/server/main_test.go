@@ -29,7 +29,7 @@ func payData(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 }
 
 func TestRechargeRequiresIdempotencyKey(t *testing.T) {
-	ps := newPaymentServer()
+	ps := newInMemoryPaymentServer()
 	w := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", `{"amountMinor":100}`)
 	if w.Code != 400 {
 		t.Fatalf("want 400 without idempotency key, got %d: %s", w.Code, w.Body.String())
@@ -37,7 +37,7 @@ func TestRechargeRequiresIdempotencyKey(t *testing.T) {
 }
 
 func TestRechargeOutTradeNoAsIdempotencyKey(t *testing.T) {
-	ps := newPaymentServer()
+	ps := newInMemoryPaymentServer()
 	w := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", `{"amountMinor":100,"outTradeNo":"ch-001"}`)
 	if w.Code != 200 {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
@@ -45,7 +45,7 @@ func TestRechargeOutTradeNoAsIdempotencyKey(t *testing.T) {
 }
 
 func TestRechargeDuplicateIsIdempotentSuccess(t *testing.T) {
-	ps := newPaymentServer()
+	ps := newInMemoryPaymentServer()
 	body := `{"amountMinor":100,"idempotencyKey":"idem-1"}`
 	first := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", body)
 	if first.Code != 200 {
@@ -67,7 +67,7 @@ func TestRechargeDuplicateIsIdempotentSuccess(t *testing.T) {
 }
 
 func TestConsumeDuplicateIsIdempotentSuccess(t *testing.T) {
-	ps := newPaymentServer()
+	ps := newInMemoryPaymentServer()
 	body := `{"amountMinor":500,"idempotencyKey":"order-42"}`
 	doPost(t, ps.handleConsume, "/api/v1/payment/consume", body)
 	second := doPost(t, ps.handleConsume, "/api/v1/payment/consume", body)
@@ -80,7 +80,7 @@ func TestConsumeDuplicateIsIdempotentSuccess(t *testing.T) {
 }
 
 func TestFreezeDuplicateIsIdempotentSuccess(t *testing.T) {
-	ps := newPaymentServer()
+	ps := newInMemoryPaymentServer()
 	body := `{"amountMinor":300,"idempotencyKey":"freeze-42"}`
 	doPost(t, ps.handleFreeze, "/api/v1/payment/freeze", body)
 	second := doPost(t, ps.handleFreeze, "/api/v1/payment/freeze", body)
@@ -93,7 +93,7 @@ func TestFreezeDuplicateIsIdempotentSuccess(t *testing.T) {
 }
 
 func TestConsumeInsufficientBalanceStableError(t *testing.T) {
-	ps := newPaymentServer()
+	ps := newInMemoryPaymentServer()
 	w := doPost(t, ps.handleConsume, "/api/v1/payment/consume", `{"amountMinor":99999999,"idempotencyKey":"big-1"}`)
 	if w.Code != 422 {
 		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
