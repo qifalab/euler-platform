@@ -40,8 +40,8 @@ const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTa
     { key: "status", title: "状态" },
     { key: "operation", title: "操作" },
   ],
-  // Polling only fires while a transitional state (评估中) exists (02§7.2).
-  polling: { interval: 10_000, when: (r) => r.some((x) => x.status === "Evaluating") },
+  // No polling: a rule's status is Enabled/Disabled (r.status 1/0) and has no
+  // transitional phase, so the previous "Evaluating" predicate could never fire.
   pageSize: 20,
 });
 
@@ -52,7 +52,9 @@ const tableColumns = computed(() =>
     c.key === "status"
       ? { ...c, render: (row: RuleRow) => h(StatusBadge, { status: String(row.status ?? "") }) }
       : c.key === "operation"
-        ? { ...c, render: (row: RuleRow) => (String(row.status) === "Active" ? "编辑 · 禁用" : "编辑 · 启用") }
+        // The mapped status is "Enabled"/"Disabled"; testing for "Active" made
+        // this branch unreachable and always rendered the enable wording.
+        ? { ...c, render: (row: RuleRow) => (String(row.status) === "Enabled" ? "编辑 · 禁用" : "编辑 · 启用") }
         : c,
   ),
 );

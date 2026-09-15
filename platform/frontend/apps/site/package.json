@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@sc/tokens": "workspace:*",
-    "nuxt": "^3.13.0",
+    "nuxt": "^3.21.11",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0"
   }

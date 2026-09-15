@@ -13,6 +13,18 @@ import { useAuthStore } from "./stores/auth";
 import { useRegionStore } from "./stores/region";
 
 /**
+ * The theme in force when a sub-app is set up. The shell writes data-theme on
+ * <html> and the --sc-* token set is CSS-variable based, so a live toggle
+ * reaches sub-apps through the cascade; this value only seeds the `theme` prop
+ * (which used to be hardcoded "light" even in dark mode).
+ */
+function currentTheme(): "light" | "dark" {
+  const saved = localStorage.getItem("sc:theme");
+  if (saved === "dark" || saved === "light") return saved;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+/**
  * Shared deps the base injects into every sub-app (02§6.5).
  * token/regionId are exposed as getters (getToken/getRegion) so sub-apps read
  * the LIVE store value per request — a plain `token` prop would be a snapshot
@@ -26,8 +38,15 @@ function createSharedProps() {
     getToken: () => auth.accessToken || undefined,
     /** Live region getter (see region store; changes also emit region:changed). */
     getRegion: () => region.regionId,
+    /**
+     * Refresh entry point for sub-apps: a sub-app's 401 asks the base to run
+     * its single-flight silent refresh (the refresh cookie lives on the base's
+     * origin and the store de-duplicates concurrent calls), then replays with
+     * the returned token.
+     */
+    refreshToken: () => auth.silentRefresh(),
     regionId: region.regionId,
-    theme: "light" as const,
+    theme: currentTheme(),
     shared: {
       vue: Vue,
       "vue-router": VueRouter,

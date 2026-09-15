@@ -192,3 +192,18 @@ export function createSDK(options: SdkOptions = {}) {
 }
 
 export type SDK = ReturnType<typeof createSDK>;
+
+/**
+ * Convert a yuan amount — the pricing engine's `payableAmount` decimal string,
+ * or a number of yuan — into minor units (分).
+ *
+ * The platform's money wire contract is fixed and one-way: svc-order and
+ * svc-payment read `amountMinor` in 分 (1 分 = 0.01 元) and convert to
+ * micro-units internally (pricing.Amount, 1/1e6). Sending a yuan integer where
+ * 分 is expected under-states an amount by 100×, which is silently accepted —
+ * so every order-creation site MUST convert through this helper rather than
+ * rounding the quote to a whole yuan.
+ */
+export function yuanToMinor(yuan: string | number): number {
+  return Math.round(Number(yuan) * 100);
+}

@@ -43,8 +43,11 @@ onMounted(async () => {
     const res = await sdk.get<ResourceDetail>(`/api/v1/orchestrator/resources/${id.value}`);
     inst.value = res.data;
   } catch (e) {
-    error.value = (e as Error).message ?? "加载失败";
-    if (error.value.includes("404") || error.value.includes("不存在")) {
+    // Branch on the structured error the SDK attaches (status/code): matching
+    // the message TEXT missed 404s whose wording differs from those literals.
+    const err = e as { status?: number; code?: string; message?: string };
+    error.value = err.message ?? "加载失败";
+    if (err.status === 404 || err.code === "Resource.NotFound") {
       ElMessage.error("实例不存在");
       router.push("/instances");
     }

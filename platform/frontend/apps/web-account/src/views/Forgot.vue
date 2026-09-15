@@ -7,7 +7,7 @@
  * 验证码由后端下发并在后端比对（前端绝不比对验证码）；后端接口未上线时,
  * 提交会得到「暂未开放」提示。
  */
-import { reactive, ref, computed } from "vue";
+import { reactive, ref, computed, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import {
   ElSteps,
@@ -94,6 +94,15 @@ function startCountdown() {
     }
   }, 1000);
 }
+
+// Leaving the page mid-countdown must stop the ticker: a component-unmounted
+// interval keeps writing to a dead ref (leak) and would resume on re-entry.
+onBeforeUnmount(() => {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+});
 
 /** 统一调用找回密码后端接口；接口尚未实现时抛出「暂未开放」。 */
 async function forgotApi(path: string, body: Record<string, unknown>): Promise<void> {

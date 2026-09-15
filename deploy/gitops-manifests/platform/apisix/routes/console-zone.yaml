@@ -102,8 +102,12 @@ routes:
   - id: console-trade
     name: console-trade-orders
     hosts: [console.starcloud.cn]
+    # console-bff serves /console/* and the BFF-backed console views call
+    # exactly these paths. The route previously declared /api/trade/* with no
+    # rewrite, so every request reached the BFF as /api/trade/... — a path it
+    # does not register (404), while /console/* itself had no route at all.
     uris:
-      - /api/trade/*
+      - /console/*
     upstream:
       # Real cluster Service (console-bff listens :9200; namespace from the
       # ApplicationSet: starcloud-console-bff).
@@ -124,8 +128,11 @@ routes:
         mode: jwt
         jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
       sc-authorize:
-        action_from_query: Action
-        action_prefix: sctrade
+        # The BFF's endpoints are plain REST (no RPC-style Action query
+        # parameter), so the action is pinned per route: action_from_query
+        # would resolve to nil and reject every call with
+        # "missing or malformed Action" (400) before it reached the BFF.
+        action: sctrade:ConsoleApi
         region: cn-north-1
       sc-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
@@ -136,8 +143,14 @@ routes:
   - id: console-resource
     name: console-resource-list
     hosts: [console.starcloud.cn]
+    # Same contract as console-trade: the BFF serves /console/resources, and
+    # that is the path the console views call. (/api/resource/* was declared
+    # here but is not a path any service registers.)
     uris:
-      - /api/resource/*
+      - /console/resources
+      - /console/search
+      - /console/overview
+      - /console/bills
     upstream:
       # Real cluster Service (console-bff listens :9200; namespace from the
       # ApplicationSet: starcloud-console-bff).
@@ -158,8 +171,8 @@ routes:
         mode: jwt
         jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
       sc-authorize:
-        action_from_query: Action
-        action_prefix: scres
+        # Fixed action, like console-trade: the BFF is plain REST.
+        action: scres:ConsoleApi
         region: cn-north-1
       sc-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]

@@ -16,10 +16,10 @@
  * payableAmount; the managed ECS/ECI instances bill separately under their own
  * products. Price is server-trial-computed; the client never invents a price.
  */
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { createSDK, yuanToMinor } from "@sc/sdk";
 import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
@@ -114,6 +114,11 @@ const perHour = computed(() => {
 });
 
 let quoteTimer: ReturnType<typeof setTimeout> | null = null;
+// Leaving the wizard mid-debounce must not fire a quote request against an
+// unmounted component (its failure toast would flash over the next page).
+onUnmounted(() => {
+  if (quoteTimer) clearTimeout(quoteTimer);
+});
 async function refreshQuote() {
   const specCode = form.value.spec;
   if (!specCode) { quote.value = null; return; }
@@ -166,7 +171,7 @@ async function submit() {
     // 2) Create the order — svc-order issues the real orderId/orderNo. The
     // scaling-group management fee is per-hour; the managed instances bill
     // separately under their own products.
-    const amountMinor = Math.max(1, Math.round(Number(q.data.payableAmount)));
+    const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
@@ -177,7 +182,10 @@ async function submit() {
     );
 
     // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`);
+    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
+      paymentId: `pay-${created.data.orderId}`,
+      paidAmountMinor: amountMinor,
+    });
 
     // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
     // resource CREATING→RUNNING) and returns the new resource id. productCode=scas

@@ -21,6 +21,12 @@ export interface SharedProps {
   regionId?: string;
   /** Live region getter injected by the base (reads the region store per call). */
   getRegion?: () => string | undefined;
+  /**
+   * Ask the base to run its single-flight silent refresh and return the new
+   * access token. The base owns the refresh cookie; a sub-app cannot refresh
+   * itself, so a 401 in a sub-app must go through this.
+   */
+  refreshToken?: () => Promise<string | undefined>;
   /** Theme token set on :root by the base. */
   theme?: "light" | "dark";
   /** Shared dependency instances (Vue/Pinia/Element Plus) — externals, not MF. */
@@ -133,7 +139,20 @@ export function subAppAuthOptions(): {
   };
   return {
     getToken,
-    onUnauthorized: async () => getToken(),
+    // A 401 means the access token expired: ask the base to run its
+    // single-flight silent refresh and replay with the fresh token. Returning
+    // the current token here (as this used to) made the SDK replay the very
+    // credential that was just rejected, so the retry could only fail.
+    onUnauthorized: async () => {
+      const props = readSharedProps();
+      if (props.refreshToken) {
+        const fresh = await props.refreshToken();
+        if (fresh) return fresh;
+      }
+      // Standalone (no base) or the refresh was rejected: hand back what we
+      // have — the caller will surface the 401 rather than silently looping.
+      return getToken();
+    },
   };
 }
 

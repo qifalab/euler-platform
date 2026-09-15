@@ -72,6 +72,16 @@ async function runSearch(q: string) {
 watch(query, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer);
   const trimmed = q.trim();
+  if (!trimmed) {
+    // Closing the palette clears the query. Firing a request for "" would fan
+    // out to the backends for nothing and leave a stale result set to flash on
+    // the next open; clear the state instead.
+    searchSeq++; // invalidate any in-flight search
+    backend.value = null;
+    searchFailed.value = false;
+    searching.value = false;
+    return;
+  }
   debounceTimer = setTimeout(() => void runSearch(trimmed), 250);
 });
 

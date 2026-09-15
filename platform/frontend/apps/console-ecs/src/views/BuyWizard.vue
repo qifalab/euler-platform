@@ -12,10 +12,11 @@
  * Price is server-trial-computed (目录价 → 促销 → 代金券, 01§12.3); the client
  * never invents a unit price. The order id is issued by svc-order, not Date.now().
  */
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
 import { sdk } from "../sdk";
+import { yuanToMinor } from "@sc/sdk";
 import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
@@ -145,6 +146,11 @@ const total = computed(() => {
 });
 
 let quoteTimer: ReturnType<typeof setTimeout> | null = null;
+// Leaving the wizard mid-debounce must not fire a quote request against an
+// unmounted component (its failure toast would flash over the next page).
+onUnmounted(() => {
+  if (quoteTimer) clearTimeout(quoteTimer);
+});
 async function refreshQuote() {
   const specCode = skuForCurrent();
   if (!specCode) { quote.value = null; return; }
@@ -230,9 +236,10 @@ async function submit() {
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
       quantity: 1, regionId: form.value.region,
     });
-    // svc-order treats amountMinor as a yuan integer (store.go:104 parses it as
-    // a whole-yuan Amount), so round the catalogue's payableAmount to yuan.
-    const amountMinor = Math.round(Number(q.data.payableAmount));
+    // svc-order takes amountMinor in 分 (1 分 = 0.01 元); the quote is a yuan
+    // decimal. Converting (not rounding to yuan) is what keeps the order's
+    // payable equal to the price the customer was shown.
+    const amountMinor = yuanToMinor(q.data.payableAmount);
 
     // 2) Create the order — svc-order issues the real orderId/orderNo.
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(

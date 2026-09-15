@@ -17,10 +17,10 @@
  * sckafka is ZONAL, so the AZ picker is present and the quote enforces the
  * zone (M-6). Price is server-trial-computed; the client never invents a unit price.
  */
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElSwitch, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { createSDK, yuanToMinor } from "@sc/sdk";
 import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
@@ -159,11 +159,18 @@ const total = computed(() => {
   if (!quote.value) return null;
   const per = Number(quote.value.payableAmount);
   if (!Number.isFinite(per)) return null;
-  // Prepaid: catalogue quotes per-month payable × duration. Postpaid: per-hour.
-  return form.value.chargeType === "prepaid" ? per * form.value.period : per;
+  // The quote request already carries `duration`, so payableAmount IS the full
+  // payable for the chosen term (prepaid) or the per-hour price (postpaid).
+  // Multiplying by `period` here double-counted the term.
+  return per;
 });
 
 let quoteTimer: ReturnType<typeof setTimeout> | null = null;
+// Leaving the wizard mid-debounce must not fire a quote request against an
+// unmounted component (its failure toast would flash over the next page).
+onUnmounted(() => {
+  if (quoteTimer) clearTimeout(quoteTimer);
+});
 async function refreshQuote() {
   const specCode = skuForCurrent();
   if (!specCode) { quote.value = null; return; }
@@ -212,9 +219,9 @@ async function submit() {
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
       quantity: 1, regionId: form.value.region, zoneId: form.value.zone,
     });
-    // svc-order treats amountMinor as a yuan integer (store.go:104 parses it as
-    // a whole-yuan Amount), so round the catalogue's payableAmount to yuan.
-    const amountMinor = Math.round(Number(q.data.payableAmount) * (form.value.chargeType === "prepaid" ? form.value.period : 1));
+    // The quote already includes the prepaid term — never multiply by period
+    // again (that inflated the order by the term). amountMinor is 分.
+    const amountMinor = yuanToMinor(q.data.payableAmount);
 
     // 2) Create the order — svc-order issues the real orderId/orderNo.
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
@@ -228,7 +235,10 @@ async function submit() {
     );
 
     // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`);
+    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
+      paymentId: `pay-${created.data.orderId}`,
+      paidAmountMinor: amountMinor,
+    });
 
     // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
     // resource CREATING→RUNNING) and returns the new resource id. The

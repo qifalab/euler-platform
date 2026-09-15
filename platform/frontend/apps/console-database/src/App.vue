@@ -5,12 +5,28 @@
  * from @sc/console-kit with unified StatusBadge, polling on transitional
  * states (Restoring), and EmptyGuide when empty.
  */
-import { computed, h } from "vue";
+import { computed, h, onMounted, onUnmounted, ref } from "vue";
 import { ElButton } from "element-plus";
 import { ResourceTable, useResourceTable } from "@sc/console-kit";
 import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
 import { createSDK, type ScError } from "@sc/sdk";
+import InstanceDetail from "./views/InstanceDetail.vue";
 import "@sc/tokens/style.css";
+
+// Internal hash routing (no vue-router instance in this sub-app, mirroring the
+// console-network reference 02§3.4). The list links to
+// #/scrds/instances/<id>; when the hash matches that shape the detail page
+// takes over. Before this the link only changed the URL — InstanceDetail
+// existed but was never rendered, so every instance link was a dead end.
+const hashRoute = ref(location.hash);
+function onHash() { hashRoute.value = location.hash; }
+onMounted(() => window.addEventListener("hashchange", onHash));
+onUnmounted(() => window.removeEventListener("hashchange", onHash));
+const detailInstanceId = computed(() => {
+  const m = hashRoute.value.match(/scrds\/instances\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+});
+const showDetail = computed(() => detailInstanceId.value !== null);
 
 type InstanceRow = Record<string, unknown>;
 
@@ -72,6 +88,8 @@ void sdk; void (null as unknown as ScError);
 
 <template>
   <section class="rds-app">
+    <InstanceDetail v-if="showDetail" :key="detailInstanceId ?? ''" />
+    <template v-else>
     <PageHeader title="云数据库 RDS">
       <template #actions>
         <ElButton type="primary">创建</ElButton>
@@ -95,6 +113,7 @@ void sdk; void (null as unknown as ScError);
       action-label="创建实例"
       action-href="#/scrds/buy"
     />
+    </template>
   </section>
 </template>
 

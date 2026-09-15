@@ -94,10 +94,13 @@ const {
     const items = (res.data ?? [])
       .filter((r) => r.ProductCode === "sceip")
       .map((r) => ({
+        // The shared resource list carries no public IP field (prod: the sceip
+        // detail API returns it). The old mapping put the SKU in the IP column
+        // and the REGION in the bandwidth column — a dash is honest, a
+        // mislabelled spec is not.
         eipId: r.ResourceId,
-        eipName: r.ResourceId,
-        ipAddress: r.SpecCode,
-        bandwidth: r.Region,
+        ipAddress: "—",
+        bandwidth: r.SpecCode ?? "—",
         bindInstance: "—",
         status: String(r.State ?? "").charAt(0).toUpperCase() + String(r.State ?? "").slice(1).toLowerCase(),
       }));
@@ -105,6 +108,7 @@ const {
   },
   columns: [
     { key: "eipId", title: "弹性公网IP ID/名称", link: (r) => `#/sceip/eips/${r.eipId}` },
+    { key: "ipAddress", title: "公网 IP" },
     { key: "status", title: "状态" },
     { key: "bandwidth", title: "规格" },
     { key: "bindInstance", title: "绑定实例" },
@@ -116,9 +120,7 @@ const eipTableColumns = computed(() =>
   eipColumns.value.map((c) =>
     c.key === "status"
       ? { ...c, render: (row: EipRow) => h(StatusBadge, { status: String(row.status ?? "") }) }
-      : c.key === "eipName"
-        ? { ...c, render: (row: EipRow) => row.eipName }
-        : c,
+      : c,
   ),
 );
 

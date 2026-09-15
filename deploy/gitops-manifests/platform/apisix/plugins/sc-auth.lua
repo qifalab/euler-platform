@@ -148,14 +148,41 @@ local function verify_signature(conf, ctx)
     httpc:set_timeout(conf.timeout_ms)
 
     -- Read the body: it participates in the signature via
-    -- x-cps-content-sha256, so the verifier needs the exact bytes.
+    -- x-cps-content-sha256, so the verifier needs the exact bytes. A body
+    -- larger than nginx's client_body_buffer_size is spooled to a temp file and
+    -- get_body_data() returns nil — treating that as an empty body would fail
+    -- every large request with a signature mismatch, so read the file too.
     ngx.req.read_body()
-    local body = ngx.req.get_body_data() or ""
+    local body = ngx.req.get_body_data()
+    if not body then
+        local body_file = ngx.req.get_body_file()
+        if body_file then
+            local f = io.open(body_file, "rb")
+            if f then
+                body = f:read("*a")
+                f:close()
+            end
+        end
+    end
+    if not body then
+        core.log.error("sc-auth: cannot read request body for signature verification")
+        return deny(ctx, 503, "Common.InternalError", "cannot read request body")
+    end
+
+    -- Sign the RAW request target, not nginx's normalized $uri: $uri is
+    -- percent-decoded and path-normalized, while cps1 canonicalises the path
+    -- the client actually signed (strict RFC 3986, encoding preserved). A path
+    -- containing an encoded octet would otherwise never verify.
+    local raw_target = ngx.var.request_uri or ctx.var.uri or "/"
+    local raw_path = string.match(raw_target, "^[^?]*") or raw_target
+    if raw_path == "" then
+        raw_path = "/"
+    end
 
     local payload = {
         method  = ngx.req.get_method(),
         host    = ctx.var.host,
-        path    = ctx.var.uri,
+        path    = raw_path,
         query   = ngx.req.get_uri_args(),
         headers = ngx.req.get_headers(),
         body    = body,

@@ -21,14 +21,42 @@ const error = ref<string | null>(null);
 // the project docs (02§2.4 / 部署文档), not in the page source.
 const DEV_SEED_HINT = "开发环境测试账号请查阅项目部署文档";
 
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+
+/**
+ * Resolve the post-login target, refusing anything off-origin.
+ *
+ * `?redirect=` is attacker-controllable, so using it raw is an open redirect:
+ * a phishing link to the real login page that lands on the attacker's site
+ * inherits the page's trust. Only same-origin paths/URLs are accepted; dev
+ * loopback hosts are additionally allowed so the console shell on its own dev
+ * port keeps working.
+ */
+function safeRedirect(raw: unknown): string {
+  const here = window.location;
+  const loopbackDev = isLoopbackHost(here.hostname);
+  const fallback = loopbackDev ? "http://localhost:5173/" : "/";
+  if (typeof raw !== "string" || raw === "") return fallback;
+  if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
+  try {
+    const url = new URL(raw, here.origin);
+    if (url.origin === here.origin) return url.toString();
+    if (loopbackDev && isLoopbackHost(url.hostname)) return url.toString();
+  } catch {
+    /* malformed URL: fall through to the safe default */
+  }
+  return fallback;
+}
+
 async function onSubmit() {
   error.value = null;
   loading.value = true;
   try {
     await auth.login(email.value, password.value);
-    // Dev: redirect to the local console shell; prod: console.starcloud.cn.
-    const redirect = (route.query.redirect as string) || "http://localhost:5173/";
-    window.location.href = redirect;
+    // Only a same-origin (or dev-loopback) target may be used; see safeRedirect.
+    window.location.href = safeRedirect(route.query.redirect);
   } catch (e) {
     error.value = (e as Error).message;
   } finally {

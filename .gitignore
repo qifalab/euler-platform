@@ -35,6 +35,7 @@ __pycache__/
 # IDE
 .idea/
 .vscode/
+.workbuddy/
 .trae-html-share-packages/
 roadmap-review/
 *.swp

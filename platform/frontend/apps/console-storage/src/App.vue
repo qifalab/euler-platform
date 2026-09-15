@@ -14,12 +14,29 @@
  * the list IS the ResourceId, so the dialog collects region + storage class
  * only, never a fabricated name.
  */
-import { ref, computed, h, onMounted, watch } from "vue";
+import { ref, computed, h, onMounted, onUnmounted, watch } from "vue";
 import { ElButton, ElDialog, ElForm, ElFormItem, ElSelect, ElOption, ElMessage } from "element-plus";
 import { ResourceTable, useResourceTable, useCatalogMeta } from "@sc/console-kit";
 import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
 import { sdk } from "./sdk";
+import { yuanToMinor } from "@sc/sdk";
+import BucketDetail from "./views/BucketDetail.vue";
 import "@sc/tokens/style.css";
+
+// Internal hash routing (no vue-router instance in this sub-app, mirroring the
+// console-network reference 02§3.4). The list links to #/scoss/buckets/<id>;
+// when the hash matches that shape the detail page takes over. Before this the
+// link only changed the URL — BucketDetail existed but was never rendered, so
+// every bucket link was a dead end.
+const hashRoute = ref(location.hash);
+function onHash() { hashRoute.value = location.hash; }
+onMounted(() => window.addEventListener("hashchange", onHash));
+onUnmounted(() => window.removeEventListener("hashchange", onHash));
+const detailBucketId = computed(() => {
+  const m = hashRoute.value.match(/scoss\/buckets\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+});
+const showDetail = computed(() => detailBucketId.value !== null);
 
 type BucketRow = Record<string, unknown>;
 
@@ -134,9 +151,9 @@ async function submitCreate() {
       productCode: "scoss", specCode: form.value.sku, chargeType: "POSTPAID",
       quantity: 1, regionId: form.value.region,
     });
-    // svc-order treats amountMinor as a yuan integer (store.go), so round the
-    // catalogue's payableAmount to yuan — same conversion as BuyWizard.
-    const amountMinor = Math.round(Number(q.data.payableAmount));
+    // svc-order takes amountMinor in 分 (1 分 = 0.01 元) — same conversion as
+    // BuyWizard; the quote's payableAmount is a yuan decimal.
+    const amountMinor = yuanToMinor(q.data.payableAmount);
 
     // 2) Create the order — svc-order issues the real orderId/orderNo.
     const created = await sdk.post<{ orderId: number; orderNo: string }>("/api/v1/orders", {
@@ -145,7 +162,10 @@ async function submitCreate() {
     });
 
     // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`);
+    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
+      paymentId: `pay-${created.data.orderId}`,
+      paidAmountMinor: amountMinor,
+    });
 
     // 4) Fulfill — saga opens the bucket; the ResourceId IS the bucket id.
     const fulfilled = await sdk.post<{ resourceId: string; state: string }>("/api/v1/orchestrator/fulfill", {
@@ -177,6 +197,8 @@ function onGuideAction(e: MouseEvent) {
 
 <template>
   <section class="oss-app">
+    <BucketDetail v-if="showDetail" :key="detailBucketId ?? ''" />
+    <template v-else>
     <PageHeader title="对象存储 OSS">
       <template #actions>
         <ElButton type="primary" @click="openCreate">创建存储桶</ElButton>
@@ -224,6 +246,7 @@ function onGuideAction(e: MouseEvent) {
         <ElButton type="primary" :loading="creating" @click="submitCreate">创建</ElButton>
       </template>
     </ElDialog>
+    </template>
   </section>
 </template>
 

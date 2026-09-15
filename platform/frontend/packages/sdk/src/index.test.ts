@@ -13,7 +13,7 @@
  * provides native Headers / AbortController / Response used by the client.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createSDK } from "./index";
+import { createSDK, yuanToMinor } from "./index";
 import type { ScError } from "./index";
 
 /** Build a JSON Response whose body will be res.json(). */
@@ -333,5 +333,26 @@ describe("createSDK — token injection into Authorization", () => {
 
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toBe("https://api.starcloud.cn/v1/clusters");
+  });
+});
+
+// The money wire contract: svc-order/svc-payment read amountMinor in 分, so the
+// yuan decimal a quote returns must be scaled by 100 — never rounded to yuan.
+// (Every BuyWizard did the latter and under-billed by 100×.)
+describe("yuanToMinor", () => {
+  it("converts a yuan decimal to 分", () => {
+    expect(yuanToMinor("180.50")).toBe(18050);
+    expect(yuanToMinor("21.6")).toBe(2160);
+    expect(yuanToMinor(0.01)).toBe(1);
+  });
+
+  it("rounds to the nearest 分 rather than truncating", () => {
+    expect(yuanToMinor("0.005")).toBe(1); // half-up
+    expect(yuanToMinor("1.004")).toBe(100);
+    expect(yuanToMinor("1.995")).toBe(200);
+  });
+
+  it("is not a yuan passthrough (the 100× under-billing regression)", () => {
+    expect(yuanToMinor("180.50")).not.toBe(181);
   });
 });

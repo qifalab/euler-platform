@@ -17,10 +17,10 @@
  * server-trial-computed; the client never invents a unit price. The order id is
  * issued by svc-order.
  */
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElButton, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { createSDK, yuanToMinor } from "@sc/sdk";
 import { useCatalogMeta } from "@sc/console-kit";
 
 const router = useRouter();
@@ -125,6 +125,11 @@ const perHour = computed(() => {
 });
 
 let quoteTimer: ReturnType<typeof setTimeout> | null = null;
+// Leaving the wizard mid-debounce must not fire a quote request against an
+// unmounted component (its failure toast would flash over the next page).
+onUnmounted(() => {
+  if (quoteTimer) clearTimeout(quoteTimer);
+});
 async function refreshQuote() {
   const specCode = form.value.spec;
   if (!specCode) { quote.value = null; return; }
@@ -184,9 +189,9 @@ async function submit() {
 
     // 2) Create the order — svc-order issues the real orderId/orderNo. SCLB is
     // usage-billed postpaid; the initial amount is the per-hour unit (rounded
-    // to yuan for the order's whole-yuan amountMinor field); actual billing
-    // accrues from metering (lcu_hour/traffic_gb), settled hourly.
-    const amountMinor = Math.max(1, Math.round(Number(q.data.payableAmount)));
+    // in 分 (yuanToMinor); actual billing accrues from metering
+    // (lcu_hour/traffic_gb), settled hourly.
+    const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
@@ -197,7 +202,10 @@ async function submit() {
     );
 
     // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`);
+    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
+      paymentId: `pay-${created.data.orderId}`,
+      paidAmountMinor: amountMinor,
+    });
 
     // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
     // resource CREATING→RUNNING) and returns the new resource id. The
