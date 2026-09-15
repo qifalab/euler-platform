@@ -10,7 +10,9 @@
 stages: [verify, build, scan, publish, trigger]
 
 variables:
-  GO_IMAGE: golang:1.26
+  # Pinned patch: stdlib fixes for GO-2026-6218/6090/5972/5856/5039/... land in
+  # go1.26.6 — a floating 1.26 tag can resolve an older cached image.
+  GO_IMAGE: golang:1.26.6
   # harbor.internal/cloudplatform/<svc> — set per-service in CI/CD settings
   IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
 
