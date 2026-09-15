@@ -69,7 +69,7 @@ const resetRules: FormRules = {
   confirm: [
     { required: true, message: "请再次输入密码", trigger: "blur" },
     {
-      validator: (_rule, value, callback) => {
+      validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
         if (value !== resetForm.password) {
           callback(new Error("两次输入的密码不一致"));
         } else {

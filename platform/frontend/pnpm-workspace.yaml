@@ -18,3 +18,17 @@ overrides:
   svgo: 4.1.0
   esbuild: 0.25.12
   vite: 6.4.3
+# pnpm 11 reads linker/layout settings from THIS file (project .npmrc is no longer
+# consulted for these). hoisted = npm-style flat node_modules.
+# Why: on this repo's Windows dev box, pnpm's default isolated(.pnpm) linker deadlocks
+# during the store->project import step, and leaves empty dirs instead of links in
+# per-package node_modules. hoisted needs almost no junctions and is the most
+# GitHub/onboarding-friendly layout (single `node_modules/` ignore, no .pnpm noise).
+nodeLinker: hoisted
+# Flatten transitive deps into the root node_modules too, so packages that assume
+# classic "walk up to node_modules" resolution keep working under hoisted.
+shamefullyHoist: true
+# Do NOT auto-run a dependency-status check (which spawns a nested `pnpm install`)
+# before every `pnpm run`/`pnpm -r` command. On this Windows dev box that nested
+# install intermittently deadlocks, which makes even `pnpm -r typecheck` hang.
+verifyDepsBeforeRun: false
