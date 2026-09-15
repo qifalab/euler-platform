@@ -2,16 +2,16 @@
 /**
  * Buy wizard (02§7.4): step form + live price summary on the right.
  *
- * Wired to the real backend chain (same shape as console-ecs/eci, productCode=scas):
- *  - GET  /api/v1/catalog/skus?productCode=scas — spec catalogue
+ * Wired to the real backend chain (same shape as console-ecs/eci, productCode=euas):
+ *  - GET  /api/v1/catalog/skus?productCode=euas — spec catalogue
  *  - POST /api/v1/catalog/quote                  — 询价 (real pricing engine)
  *  - POST /api/v1/orders                         — create order (real orderId)
  *  - POST /api/v1/orders/{id}/pay                — mark PAID
  *  - POST /api/v1/orchestrator/fulfill           — saga → resource RUNNING
  *
- * SCAS is POSTPAID ONLY. It is REGIONAL (a scaling group spans a region's
+ * EUAS is POSTPAID ONLY. It is REGIONAL (a scaling group spans a region's
  * compute, not pinned to one AZ), so there is NO zone picker — unlike the
- * ZONAL products (scecs/sceci), the quote does not carry a zoneId. The
+ * ZONAL products (euecs/eueci), the quote does not carry a zoneId. The
  * catalogue's per-HOUR pricing rule returns the per-hour management fee as
  * payableAmount; the managed ECS/ECI instances bill separately under their own
  * products. Price is server-trial-computed; the client never invents a price.
@@ -19,8 +19,8 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@sc/sdk";
-import { useCatalogMeta } from "@sc/console-kit";
+import { createSDK, yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta } from "@eu/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -38,9 +38,9 @@ const form = ref({
   cooldownSeconds: 300,
 });
 
-// --- region metadata (catalogue-driven, no hardcoded lists). SCAS is
+// --- region metadata (catalogue-driven, no hardcoded lists). EUAS is
 // REGIONAL: no zone picker at all, so only the region list is needed. ---
-const { regions, load } = useCatalogMeta("scas");
+const { regions, load } = useCatalogMeta("euas");
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -74,7 +74,7 @@ function parseSpec(json: string): SkuSpec {
 
 onMounted(async () => {
   try {
-    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=scas");
+    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euas");
     skus.value = res.data ?? [];
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
@@ -125,12 +125,12 @@ async function refreshQuote() {
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "scas",
+      productCode: "euas",
       specCode,
       chargeType: "POSTPAID",
       quantity: 1,
       regionId: form.value.region,
-      // No zoneId: SCAS is REGIONAL, the quote path does not require one (M-6).
+      // No zoneId: EUAS is REGIONAL, the quote path does not require one (M-6).
     });
     quote.value = res.data;
   } catch (e) {
@@ -163,7 +163,7 @@ async function submit() {
   try {
     // 1) Quote — the authoritative per-hour management fee from the pricing engine.
     const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "scas", specCode,
+      productCode: "euas", specCode,
       chargeType: "POSTPAID", quantity: 1,
       regionId: form.value.region,
     });
@@ -175,7 +175,7 @@ async function submit() {
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
-        type: "NEW", productCode: "scas", skuCode: specCode,
+        type: "NEW", productCode: "euas", skuCode: specCode,
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
       },
@@ -188,13 +188,13 @@ async function submit() {
     });
 
     // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-    // resource CREATING→RUNNING) and returns the new resource id. productCode=scas
+    // resource CREATING→RUNNING) and returns the new resource id. productCode=euas
     // routes it to the DriverK8s binding (the policy layer over HPA/VPA/CA).
     const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
       "/api/v1/orchestrator/fulfill",
       {
         orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "scas", region: form.value.region,
+        productCode: "euas", region: form.value.region,
         specCode, chargeType: "POSTPAID",
         managedType: form.value.managedType,
         minReplicas: form.value.minReplicas, maxReplicas: form.value.maxReplicas,
@@ -291,36 +291,36 @@ async function submit() {
 .buy-layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
 .buy-steps { margin-bottom: 24px; }
 .buy-form, .buy-confirm {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 24px;
 }
 .buy-confirm h2 { font-size: 16px; margin: 0 0 16px; }
 .confirm-list { list-style: none; padding: 0; margin: 0; }
-.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--sc-border); font-size: 13px; }
-.form-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 4px 0 0; }
+.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px; }
+.form-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 4px 0 0; }
 .buy-nav { margin-top: 24px; display: flex; gap: 12px; }
 .buy-summary {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 20px;
   height: fit-content;
   position: sticky;
-  top: var(--sc-spacing-6);
+  top: var(--eu-spacing-6);
 }
 .buy-summary h2 { font-size: 15px; margin: 0 0 16px; }
 .sum-list { margin: 0; }
-.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--sc-border); }
-.sum-list dt { color: var(--sc-text-secondary); }
+.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--eu-border); }
+.sum-list dt { color: var(--eu-text-secondary); }
 .sum-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 16px; }
-.sum-total strong { font-size: 22px; color: var(--sc-color-danger); }
-.sum-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 8px 0 0; }
+.sum-total strong { font-size: 22px; color: var(--eu-color-danger); }
+.sum-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 8px 0 0; }
 </style>

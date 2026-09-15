@@ -15,7 +15,7 @@
 | 事实域 | 唯一事实源 | 说明 |
 |---|---|---|
 | 对标启示/选型决策/兼容性坑清单 | **10-research-and-selection-decisions.md** | 全书"对标启示 N""选型坑清单 #N"等编号引用均指向本文件锚点(§3.4/§4.2/§4.4) |
-| 产品 code/命名/品牌前缀 | **01-product-catalog.md §1.1 决策 D0** | `sc` 前缀体系(scecs/scoss/scrds…) |
+| 产品 code/命名/品牌前缀 | **01-product-catalog.md §1.1 决策 D0** | `sc` 前缀体系(euecs/euoss/eurds…) |
 | 一期产品集/批次排期/部署阶段映射/一期 GA 验收/一期规模基线 | **09-roadmap.md**(经本裁决书 §5/§4 修订后) | D-01(原编号 R-01)一期产品集被本裁决书推翻重定(见 C1+S1) |
 | 欠费生命周期参数 | **01-product-catalog.md §5.4 决策 D8 参数表** | 宽限 24h/72h、锁定保留 30 天、包年包月保留 15 天、提醒 30/15/7/3/1、释放前 24h |
 | Kafka topic 命名/分区/保留/环境隔离 | **04-middleware-infrastructure.md §5.4** | `cloud.{domain}.{aggregate}.{event}` 规范,topic 不含环境,集群隔离 |
@@ -37,7 +37,7 @@
 
 | issueIds | 裁决结论 | 事实源 | 涉及文件与改法 |
 |---|---|---|---|
-| **C1+S1** | 一期 MVP 可售产品集统一为:**IAM/计费骨架/商品化中台 + SCVPC(网络) + SCECS(云服务器 VM) + SCBS(块存储) + SCOSS(对象存储) + SCRDS(托管 MySQL) + SCMON(监控) + SCEIP(弹性公网 IP)**;**SCECI(弹性容器实例)后置二期**。理由:VPC 是 ECS 前置依赖、ECS 需块存储做系统盘、VM 是用户预期旗舰产品、ECI 依赖 K8s 调度难度高;同时满足 00§1.1 最小可售闭环(计算+存储+网络+托管数据库)与 01§3.2 第一批矩阵。**09 D-01(原编号 R-01)"ECI 替代 VM、VPC 后置"被否决。** | 01§3.2 第一批 + 00§1.1 | 09:改写 D-01/D-02/§3.1/§2.1 甘特/§3.3"产品×3"→"产品×7";09§3.2 决策 D-01 备选方案 A(VM+块存储+VPC)转为正选结论;01§3.2 维持(确认为事实源);02§1.2 MVP 子应用已含 console-rds/ecs/vpc 等,确认无需改;03§11 一期上线顺序补 rc-network/rc-database(现仅 rc-compute/rc-storage);00§1.1 确认维持 |
+| **C1+S1** | 一期 MVP 可售产品集统一为:**IAM/计费骨架/商品化中台 + EUVPC(网络) + EUECS(云服务器 VM) + EUBS(块存储) + EUOSS(对象存储) + EURDS(托管 MySQL) + EUMON(监控) + EUEIP(弹性公网 IP)**;**EUECI(弹性容器实例)后置二期**。理由:VPC 是 ECS 前置依赖、ECS 需块存储做系统盘、VM 是用户预期旗舰产品、ECI 依赖 K8s 调度难度高;同时满足 00§1.1 最小可售闭环(计算+存储+网络+托管数据库)与 01§3.2 第一批矩阵。**09 D-01(原编号 R-01)"ECI 替代 VM、VPC 后置"被否决。** | 01§3.2 第一批 + 00§1.1 | 09:改写 D-01/D-02/§3.1/§2.1 甘特/§3.3"产品×3"→"产品×7";09§3.2 决策 D-01 备选方案 A(VM+块存储+VPC)转为正选结论;01§3.2 维持(确认为事实源);02§1.2 MVP 子应用已含 console-rds/ecs/vpc 等,确认无需改;03§11 一期上线顺序补 rc-network/rc-database(现仅 rc-compute/rc-storage);00§1.1 确认维持 |
 | **C6+S30** | 计费形态节奏统一:**一期 Day1 = 包年包月 + 按量(两形态);资源包 + 抢占式 后置二期**。免费试用 = 试用代金券,**一期落地**(由 svc-catalog 提供代金券最小实现);**满减/折扣券后置二期**。**01 D6 改为"Day1 支持包年包月+按量,资源包二期"**;**09 §4.1 与 §6.1 自相矛盾修正为:免费试用(代金券)一期内测上线,资源包二期**;03§4.2.1"优惠券后置"改为"代金券一期最小实现,满减/折扣券后置";00§1.2 计费四形态行改为"四形态模型 Day1 预留,抢占式售卖后置(见 01 D6)" | 01 D6/D7 | 01:改 D6/D7 表述;09:改 §4.1 免费试用表述、§6.1 timeline 免费试用条目、§4.3 M-4 资源包排期确认二期;03:改 §4.2.1;00:改 §1.2 照搬档计费四形态行 |
 
 ### 2.2 Kafka topic / 计量服务 / 命名 / 分片键
@@ -67,7 +67,7 @@
 
 | issueIds | 裁决结论 | 事实源 | 涉及文件与改法 |
 |---|---|---|---|
-| **C9** | 00 附录A 术语表增设"全局标识规范"小节,冻结:① **主域名 starcloud.cn**(各章 cloud.example/xxx.com 统一替换);② **产品 code 前缀 sc**(scecs/scoss/scrds/scvpc/scbs/sceip/scmon/sceci/sccert 等);③ **资源 ID 格式 `{productCode}-{regionId}-{分片因子2位}-{随机8位}`**,如 `scecs-cn-north-1-01-a1b2c3d4`;④ **region 命名 cn-north-1/cn-east-1**(短横线风格,00 的 `cn-north1` 补横线);⑤ **品牌/平台前缀统一 sc**(02 的 `cldp`、07 的 `cps`/`CPSA` 改为 `sc`);⑥ **账号主键 account_id**(见 C5)。注:**OpenAPI 签名头前缀 `x-cps-` 保留为安全域专用头名**(与品牌前缀解耦,不冲突,见 S4) | 00 附录A(新增)+ 01 D0 | 00附录A:新增"全局标识规范"小节(含上述 6 项 + account_id 映射);00§4.1:`cn-north1`→`cn-north-1`;01§1.4:资源 ID 格式 `{productCode}-{regionId}-{12位随机}` 改为含 2 位分片因子格式(对齐 04§6.6);02:`cldp-frontend-platform`→`sc-frontend-platform`、`@cldp/*`→`@sc/*`、`--cldp-*` CSS 变量→`--sc-*`、`cldp:{appCode}:` 前缀→`sc:{appCode}:`;03:示例统一替换(见 S3);04:示例统一替换(见 S3/S6);06:示例 region `cn-north-1`(已符合)、cloud.platform 品牌标签保留(为 K8s 标签,不属品牌前缀);07:`cps`→`sc`、`CPSA`→`SC`、ARN `cps:ecs`→`sc:ecs`、Condition 键 `cps:SourceIp`→`sc:SourceIp`(但签名头 `x-cps-*` 保留) |
+| **C9** | 00 附录A 术语表增设"全局标识规范"小节,冻结:① **主域名 euler.emoera.com**(各章 cloud.example/xxx.com 统一替换);② **产品 code 前缀 sc**(euecs/euoss/eurds/euvpc/eubs/eueip/eumon/eueci/eucert 等);③ **资源 ID 格式 `{productCode}-{regionId}-{分片因子2位}-{随机8位}`**,如 `euecs-cn-north-1-01-a1b2c3d4`;④ **region 命名 cn-north-1/cn-east-1**(短横线风格,00 的 `cn-north1` 补横线);⑤ **品牌/平台前缀统一 sc**(02 的 `cldp`、07 的 `cps`/`CPSA` 改为 `sc`);⑥ **账号主键 account_id**(见 C5)。注:**OpenAPI 签名头前缀 `x-cps-` 保留为安全域专用头名**(与品牌前缀解耦,不冲突,见 S4) | 00 附录A(新增)+ 01 D0 | 00附录A:新增"全局标识规范"小节(含上述 6 项 + account_id 映射);00§4.1:`cn-north1`→`cn-north-1`;01§1.4:资源 ID 格式 `{productCode}-{regionId}-{12位随机}` 改为含 2 位分片因子格式(对齐 04§6.6);02:`cldp-frontend-platform`→`eu-frontend-platform`、`@cldp/*`→`@eu/*`、`--cldp-*` CSS 变量→`--eu-*`、`cldp:{appCode}:` 前缀→`eu:{appCode}:`;03:示例统一替换(见 S3);04:示例统一替换(见 S3/S6);06:示例 region `cn-north-1`(已符合)、cloud.platform 品牌标签保留(为 K8s 标签,不属品牌前缀);07:`cps`→`sc`、`CPSA`→`EU`、ARN `cps:ecs`→`eu:ecs`、Condition 键 `cps:SourceIp`→`eu:SourceIp`(但签名头 `x-cps-*` 保留) |
 | **C10** | 00§3.2 应用视图服务清单改为直接引用 03§4.0 总表口径,服务数量写"**17 个核心服务(详见 03§4.0)**",删除虚构的"OpenAPI BFF",说明 OpenAPI 入口由 APISIX+svc-api-meta 承担 | 03§4.0 | 00§3.2:"约 20 个"→"17 个核心服务(详见《03-backend-services.md》§4.0)";删除"OpenAPI BFF"行;在"接入"分组说明"OpenAPI 入口由 APISIX + svc-api-meta 承担,不单设 OpenAPI BFF 服务" |
 
 ### 2.6 欠费生命周期 / 产品 code / 签名 / SK 存储 / OpenAPI 形态
@@ -75,10 +75,10 @@
 | issueIds | 裁决结论 | 事实源 | 涉及文件与改法 |
 |---|---|---|---|
 | **S2** | 欠费生命周期参数以 **01 D8 参数表**为唯一事实源:宽限期 24h(大客户 72h)、停服锁定保留 30 天、包年包月到期保留 15 天、续费提醒 30/15/7/3/1 天、释放前 24h 终版通知。03§5.2/§5.4 状态机默认值与注释全部对齐 01 D8;02§7.4 释放交互文案对齐;所有参数声明为 Nacos 可配的产品级配置 | 01§5.4 D8 | 01§5.4:维持(事实源);03§5.2/§5.4:已声明"以 01 D8 为唯一事实源"并配 Nacos 键(确认);02§7.4:释放文案对齐"释放前 24h 终版通知"(确认) |
-| **S3** | 产品 code/命名以 **01 D0 的 SC 前缀体系**为唯一规范:产品 code 全小写 sc 前缀,权限 action `scecs:CreateInstance`,资源 ID 前缀 `scecs-`(非 `i-`),错误码 `Quota.Exceeded.ScecsInstance`(非 IcsInstance),ARN `sc:ecs:...`(非 `cps:ecs`)。批量替换 03/04/07/02 中的 ics/ecs/cps:ecs 等示例 | 01 D0 | 03§5.1 资源注册表:`ics`→`scecs`、`i-`→`scecs-`、`Quota.Exceeded.IcsInstance`→`Quota.Exceeded.ScecsInstance`、`quota_ics_instance`→`quota_scecs_instance`、`i-cn1-...`→`scecs-cn-north-1-...`;03§6.2 resource_id 注释 `i-cn1-xxxx`→`scecs-cn-north-1-xxxx`;04§3.2/§3.8:已用 scecs/svc-scecs(确认);07§3.1/§3.2:`cps:ecs`→`sc:ecs`、`ecs:StartInstance`→`scecs:StartInstance`、ARN 示例 `cps:ecs:...`→`sc:ecs:...`、系统策略 `CpsECSFullAccess`→`ScECSFullAccess`;02§7.5:已用 `Scecs.QuotaExceeded.Instance`(确认) |
+| **S3** | 产品 code/命名以 **01 D0 的 EU 前缀体系**为唯一规范:产品 code 全小写 sc 前缀,权限 action `euecs:CreateInstance`,资源 ID 前缀 `euecs-`(非 `i-`),错误码 `Quota.Exceeded.EuecsInstance`(非 IcsInstance),ARN `eu:ecs:...`(非 `cps:ecs`)。批量替换 03/04/07/02 中的 ics/ecs/cps:ecs 等示例 | 01 D0 | 03§5.1 资源注册表:`ics`→`euecs`、`i-`→`euecs-`、`Quota.Exceeded.IcsInstance`→`Quota.Exceeded.EuecsInstance`、`quota_ics_instance`→`quota_euecs_instance`、`i-cn1-...`→`euecs-cn-north-1-...`;03§6.2 resource_id 注释 `i-cn1-xxxx`→`euecs-cn-north-1-xxxx`;04§3.2/§3.8:已用 euecs/svc-euecs(确认);07§3.1/§3.2:`cps:ecs`→`eu:ecs`、`ecs:StartInstance`→`euecs:StartInstance`、ARN 示例 `cps:ecs:...`→`eu:ecs:...`、系统策略 `CpsECSFullAccess`→`EuECSFullAccess`;02§7.5:已用 `Euecs.QuotaExceeded.Instance`(确认) |
 | **S4** | OpenAPI 签名算法唯一契约 = **07§4.1 的 CPS1-HMAC-SHA256**(SigV4 风格:Authorization 头/CanonicalRequest/分域派生密钥链/x-cps-* 头/body 哈希绑定)。03§9.2 签名节已重写为引用 07 CPS1 契约(确认);04§3.8 forward-auth 插件 request_headers 已改为 `x-cps-*` 头集(确认);SDK 生成与文档同步。注:`x-cps-` 头前缀为签名协议专用,与品牌前缀 `sc` 解耦,保留不改(见 C9) | 07§4.1 | 07§4.1:维持(事实源);03§9.2:已引用 07 CPS1(确认);04§3.8:已用 x-cps-* 头(确认) |
 | **S5** | SK 存储统一为 **07 的 KMS 信封加密方案**:access_key 表结构以 07§2.2 为准(`sk_cipher` + `sk_key_version`,SK 可逆解密用于验签,二级缓存)。删除 03§6.1 的 `sk_hash` 单向哈希设计(03§6.1 已改为 sk_cipher,确认)。03§9.2 验签流程"按 AK 取 SK"保持(依赖可逆 SK,现已自洽) | 07§2.2 | 07§2.2:维持(事实源);03§6.1:已用 sk_cipher(确认);03§9.2:验签链路保持(确认) |
-| **S6** | **OpenAPI 域名与路由形态裁决(部分推翻推荐)**:① **域名形态锁定"一产品一子域名 `{productCode}.api.starcloud.cn`"**(如 `scecs.api.starcloud.cn`)——采纳推荐;② **版本载体维持 04§3.2 现状锁定"RPC 风格 `Action` + 日期型 `Version` 参数,URI 不承载版本号"**(不使用 `/v1/` 前缀式版本)——**推翻推荐裁决的"URI 路径版本 /v1/"**。**推翻理由**:推荐裁决的 `/v1/` URI 版本与权威源 10-research 启示 5("控制面 OpenAPI 以命令式操作为主 CreateXxx/DescribeXxx/DeleteXxx,RPC 风格参数显式、签名简单、文档模板统一")及 03§9.1 已论证的"RPC 风格(Action+Version),与阿里云生态习惯对齐"产生**阻塞性矛盾**;且 04§3.2(本裁决书认定的事实源)已锁定"Action+日期型 Version,URI 不承载版本号",03§9.1/04§3.8 已按此实现。采纳 `/v1/` 将迫使 03§9.1 放弃 RPC 风格论证、与"对标阿里云"全书策略及 10-research 启示 5 冲突。回写:03§9.1 入口域名由 `api.{domain}` 改为产品子域名 `scecs.api.starcloud.cn`(版本载体维持 Action+日期型 Version);07§4.3 的 `api.<domain>.com/v1/{service}/*` 改为 `{productCode}.api.starcloud.cn` + Action/日期型 Version(去掉 `/v1/{service}` 路径段);04§3.2/§3.3 路由表维持现状(已符合) | 04§3.2(事实源)+ 10-research 启示 5 | 04§3.2/§3.3:维持(事实源);03§9.1:入口 `api.{domain}/?Action=...&Version=...`→`{productCode}.api.starcloud.cn/?Action=...&Version=...`(Version 维持日期型);07§4.3:`api.<domain>.com/v1/{service}/*`→`{productCode}.api.starcloud.cn` + Action/日期型 Version(去 /v1/{service} 段);00/01 无需改 |
+| **S6** | **OpenAPI 域名与路由形态裁决(部分推翻推荐)**:① **域名形态锁定"一产品一子域名 `{productCode}.api.euler.emoera.com`"**(如 `euecs.api.euler.emoera.com`)——采纳推荐;② **版本载体维持 04§3.2 现状锁定"RPC 风格 `Action` + 日期型 `Version` 参数,URI 不承载版本号"**(不使用 `/v1/` 前缀式版本)——**推翻推荐裁决的"URI 路径版本 /v1/"**。**推翻理由**:推荐裁决的 `/v1/` URI 版本与权威源 10-research 启示 5("控制面 OpenAPI 以命令式操作为主 CreateXxx/DescribeXxx/DeleteXxx,RPC 风格参数显式、签名简单、文档模板统一")及 03§9.1 已论证的"RPC 风格(Action+Version),与阿里云生态习惯对齐"产生**阻塞性矛盾**;且 04§3.2(本裁决书认定的事实源)已锁定"Action+日期型 Version,URI 不承载版本号",03§9.1/04§3.8 已按此实现。采纳 `/v1/` 将迫使 03§9.1 放弃 RPC 风格论证、与"对标阿里云"全书策略及 10-research 启示 5 冲突。回写:03§9.1 入口域名由 `api.{domain}` 改为产品子域名 `euecs.api.euler.emoera.com`(版本载体维持 Action+日期型 Version);07§4.3 的 `api.<domain>.com/v1/{service}/*` 改为 `{productCode}.api.euler.emoera.com` + Action/日期型 Version(去掉 `/v1/{service}` 路径段);04§3.2/§3.3 路由表维持现状(已符合) | 04§3.2(事实源)+ 10-research 启示 5 | 04§3.2/§3.3:维持(事实源);03§9.1:入口 `api.{domain}/?Action=...&Version=...`→`{productCode}.api.euler.emoera.com/?Action=...&Version=...`(Version 维持日期型);07§4.3:`api.<domain>.com/v1/{service}/*`→`{productCode}.api.euler.emoera.com` + Action/日期型 Version(去 /v1/{service} 段);00/01 无需改 |
 
 ### 2.7 前端站点 / 子应用 / 令牌 / 告警 / ES / MySQL HA / 履约链路
 
@@ -113,9 +113,9 @@
 
 | 规范项 | 取值 | 示例 | 事实源 |
 |---|---|---|---|
-| 主域名 | `starcloud.cn` | www.starcloud.cn / console.starcloud.cn / scecs.api.starcloud.cn | 01 D0 + 00 附录A |
-| 品牌/平台前缀 | `sc`(替代 cldp/cps/CPSA) | sc-frontend-platform、@sc/ui、--sc-* CSS 变量、sc:ecs ARN | 00 附录A |
-| 产品 code 前缀 | `sc` + 品类缩写(全小写) | scecs、scoss、scrds、scvpc、scbs、sceip、scmon、sceci、sccert | 01 D0 |
+| 主域名 | `euler.emoera.com` | www.euler.emoera.com / console.euler.emoera.com / euecs.api.euler.emoera.com | 01 D0 + 00 附录A |
+| 品牌/平台前缀 | `sc`(替代 cldp/cps/CPSA) | eu-frontend-platform、@eu/ui、--eu-* CSS 变量、eu:ecs ARN | 00 附录A |
+| 产品 code 前缀 | `sc` + 品类缩写(全小写) | euecs、euoss、eurds、euvpc、eubs、eueip、eumon、eueci、eucert | 01 D0 |
 | 服务名 | `svc-{domain}`(统一 Go) | svc-iam、svc-order、svc-billing、svc-metering、svc-orchestrator、svc-kms | 03§4.0 |
 | 接入层 BFF | `{场景}-bff` | console-bff、site-bff、auth-console-bff | 03§4.0 + 04§4.3 |
 | 数据面控制器 | `rc-*` | rc-compute、rc-storage、rc-network | 03§4.0 + 06§4.0 |
@@ -124,17 +124,17 @@
 | 租户标识字段 | `account_id`(≡ uid ≡ user_id ≡ tenant_id) | 全书物理列/Vitess vindex 分片键/Kafka 分区键一律 account_id | 00 附录A + 04§6.3 |
 | 分片键 | account_id 单键(四库统一) | 否决 region+account_id 组合路由 | 04§6.4 |
 | 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(实现承载 Vitess,口径不变) | 库×表口径;Reshard 承载水平扩容 | 04§6.3 |
-| 资源 ID 格式 | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | scecs-cn-north-1-01-a1b2c3d4 | 00 附录A + 04§6.6 |
+| 资源 ID 格式 | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | euecs-cn-north-1-01-a1b2c3d4 | 00 附录A + 04§6.6 |
 | region 命名 | `cn-north-1`/`cn-east-1`(短横线风格) | cn-north-1-a | 00 附录A |
 | 可用区命名 | `{region}-{a/b/...}` | cn-north-1-a | 00§4.1 |
-| OpenAPI 域名 | `{productCode}.api.starcloud.cn` | scecs.api.starcloud.cn | 04§3.2 |
+| OpenAPI 域名 | `{productCode}.api.euler.emoera.com` | euecs.api.euler.emoera.com | 04§3.2 |
 | OpenAPI 版本载体 | RPC 风格 `Action` + 日期型 `Version` 参数(URI 不承载版本) | ?Action=RunInstances&Version=2026-08-01 | 04§3.2 + 10-research 启示 5 |
-| 权限 action | `{productCode}:{Operation}` | scecs:CreateInstance | 01 D0 |
-| ARN | `sc:{service}:{region}:{account_id}:{relative-resource}` | sc:ecs:cn-east-1:100123:instance/i-xxx | 07§3.1(改 cps→sc) |
-| 系统策略名 | `Sc{Product}FullAccess`/`Sc{Product}ReadOnlyAccess` | ScECSFullAccess | 07§3.2(改 Cps→Sc) |
-| 错误码 | `{Product}.{Module}.{Reason}`(PascalCase) | Quota.Exceeded.ScecsInstance | 03§9.3 |
+| 权限 action | `{productCode}:{Operation}` | euecs:CreateInstance | 01 D0 |
+| ARN | `eu:{service}:{region}:{account_id}:{relative-resource}` | eu:ecs:cn-east-1:100123:instance/i-xxx | 07§3.1(改 cps→sc) |
+| 系统策略名 | `Sc{Product}FullAccess`/`Sc{Product}ReadOnlyAccess` | EuECSFullAccess | 07§3.2(改 Cps→Sc) |
+| 错误码 | `{Product}.{Module}.{Reason}`(PascalCase) | Quota.Exceeded.EuecsInstance | 03§9.3 |
 | OpenAPI 签名头前缀 | `x-cps-`(签名协议专用,与品牌前缀解耦,保留不改) | x-cps-date、x-cps-content-sha256、x-cps-nonce | 07§4.1 |
-| AK 前缀 | `SC` | SC****3F(替代 LTAI/CPSA) | 07§2.5(改 CPSA→SC) |
+| AK 前缀 | `EU` | EU****3F(替代 LTAI/CPSA) | 07§2.5(改 CPSA→EU) |
 | Kafka topic 命名 | `cloud.{domain}.{aggregate}.{event}` | cloud.metering.usage.raw、cloud.trade.order.event | 04§5.3 |
 | Kafka topic 环境隔离 | topic 不含环境,集群隔离 | — | 04§5.3 |
 

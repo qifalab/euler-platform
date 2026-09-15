@@ -165,7 +165,7 @@ async function submitCreate() {
               >
                 {{ p }}
               </ElTag>
-              <span v-if="(row as RamRole).policies.length === 0" style="color: var(--sc-text-disabled)">—</span>
+              <span v-if="(row as RamRole).policies.length === 0" style="color: var(--eu-text-disabled)">—</span>
             </template>
           </ElTableColumn>
           <ElTableColumn prop="createdAt" label="创建时间" min-width="160" />
@@ -185,7 +185,7 @@ async function submitCreate() {
               v-model="form.policiesText"
               type="textarea"
               :rows="3"
-              placeholder="策略名，逗号或换行分隔，如 ScEcsFullAccess"
+              placeholder="策略名，逗号或换行分隔，如 EuEcsFullAccess"
             />
           </ElFormItem>
         </ElForm>
@@ -200,27 +200,27 @@ async function submitCreate() {
 
 <style scoped>
 .ram-roles-page {
-  padding: var(--sc-spacing-6);
-  min-height: calc(100vh - var(--sc-topbar-height));
+  padding: var(--eu-spacing-6);
+  min-height: calc(100vh - var(--eu-topbar-height));
 }
 .page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--sc-spacing-4);
-  margin-bottom: var(--sc-spacing-6);
+  gap: var(--eu-spacing-4);
+  margin-bottom: var(--eu-spacing-6);
 }
 .heading { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.page-title { margin: 0; font-size: 22px; font-weight: 600; color: var(--sc-text-primary); }
-.page-desc { margin: 0; font-size: 13px; color: var(--sc-text-secondary); line-height: 1.5; }
+.page-title { margin: 0; font-size: 22px; font-weight: 600; color: var(--eu-text-primary); }
+.page-desc { margin: 0; font-size: 13px; color: var(--eu-text-secondary); line-height: 1.5; }
 .table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-4);
   overflow: hidden;
 }
 .table-card :deep(.el-table),

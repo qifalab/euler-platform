@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * console-storage — OSS Bucket detail page (SCOSS), the storage category sub-app (02§7.3).
+ * console-storage — OSS Bucket detail page (EUOSS), the storage category sub-app (02§7.3).
  * Resource info header (editable name / id-copy / status / expiry) + tab group
  * (概览/对象管理/权限管理/操作日志). Route target reached via the list's bucket link.
  *
@@ -11,9 +11,9 @@
  */
 import { ref, computed, onMounted } from "vue";
 import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElEmpty, ElTag } from "element-plus";
-import { StatusBadge } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
-import "@sc/tokens/style.css";
+import { StatusBadge } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
+import "@eu/tokens/style.css";
 
 interface ResourceItem {
   ResourceId: string;
@@ -142,18 +142,18 @@ const chargeLabel = computed(() => resource.value?.ChargeType === "PREPAID" ? "�
 
 <style scoped>
 .bucket-detail { padding: 16px 24px; }
-.bucket-header { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--sc-border); }
+.bucket-header { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--eu-border); }
 .bucket-title { display: flex; align-items: center; gap: 12px; }
 .bucket-name { font-size: 20px; margin: 0; }
-.name-edit { color: var(--sc-color-brand); font-size: var(--sc-font-size-sm); cursor: pointer; }
-.name-edit:hover { color: var(--sc-color-brand-hover); }
+.name-edit { color: var(--eu-color-brand); font-size: var(--eu-font-size-sm); cursor: pointer; }
+.name-edit:hover { color: var(--eu-color-brand-hover); }
 .name-edit-group { display: inline-flex; align-items: center; gap: 8px; }
 .bucket-id-row { margin-top: 6px; display: flex; align-items: center; gap: 8px; }
-.bucket-id { font-size: var(--sc-font-size-sm); color: var(--sc-text-secondary); font-family: ui-monospace, monospace; }
-.id-copy { color: var(--sc-color-brand); font-size: var(--sc-font-size-sm); cursor: pointer; }
-.id-copy:hover { color: var(--sc-color-brand-hover); }
+.bucket-id { font-size: var(--eu-font-size-sm); color: var(--eu-text-secondary); font-family: ui-monospace, monospace; }
+.id-copy { color: var(--eu-color-brand); font-size: var(--eu-font-size-sm); cursor: pointer; }
+.id-copy:hover { color: var(--eu-color-brand-hover); }
 .bucket-meta { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
 .bucket-tabs { margin-top: 8px; }
-.bucket-error { color: var(--sc-color-danger); padding: 24px 0; }
-.bucket-loading { color: var(--sc-text-secondary); padding: 24px 0; }
+.bucket-error { color: var(--eu-color-danger); padding: 24px 0; }
+.bucket-loading { color: var(--eu-text-secondary); padding: 24px 0; }
 </style>

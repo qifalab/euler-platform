@@ -80,23 +80,23 @@ nginx_config:
   error_log_level: warn
   http:
     lua_shared_dict:
-      # sc-authorize L1 decision cache (07§3.5, 30s TTL).
-      sc_authz_cache: 64m
+      # eu-authorize L1 decision cache (07§3.5, 30s TTL).
+      eu_authz_cache: 64m
       # Standard APISIX dictionaries.
       prometheus-metrics: 20m
 
 plugins:
   # Order here does not set execution order — that comes from each plugin's
   # priority field. Listed in chain order for readability (07§5):
-  #   ip-restriction → limit-req → sc-auth → sc-authorize → sc-audit → upstream
+  #   ip-restriction → limit-req → eu-auth → eu-authorize → eu-audit → upstream
   - real-ip
   - request-id
   - ip-restriction
   - limit-req
   - limit-count
-  - sc-auth              # custom: CPS1 signature / JWT authentication
-  - sc-authorize         # custom: action-level authorization via svc-iam
-  - sc-audit             # custom: audit side-stream to Kafka
+  - eu-auth              # custom: CPS1 signature / JWT authentication
+  - eu-authorize         # custom: action-level authorization via svc-iam
+  - eu-audit             # custom: audit side-stream to Kafka
   - request-validation
   - proxy-rewrite
   - traffic-split        # canary by weight (04§3.6)
@@ -114,4 +114,4 @@ plugin_attr:
 # Custom plugins live on a mounted path; the ConfigMap in
 # platform/apisix/apisix-deployment.yaml projects them here.
 apisix_lua_home: /usr/local/apisix
-extra_lua_path: "/opt/sc-plugins/?.lua"
+extra_lua_path: "/opt/eu-plugins/?.lua"

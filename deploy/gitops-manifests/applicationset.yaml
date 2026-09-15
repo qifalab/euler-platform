@@ -16,7 +16,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: starcloud-services
+  name: euler-services
   namespace: argocd
 spec:
   goTemplate: false
@@ -25,7 +25,7 @@ spec:
     - matrix:
         generators:
           - git:
-              repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+              repoURL: https://gitlab.internal/euler/platform-manifests.git
               targetRevision: main
               directories:
                 - path: deploy/gitops-manifests/apps/*
@@ -50,14 +50,14 @@ spec:
                   server: https://kubernetes.default.svc   # TODO: standby prod cluster API URL
   template:
     metadata:
-      # e.g. starcloud-svc-iam-cn-north-1-dev
-      name: 'starcloud-{{path.basename}}-{{region}}-{{env}}'
+      # e.g. euler-svc-iam-cn-north-1-dev
+      name: 'euler-{{path.basename}}-{{region}}-{{env}}'
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
       project: default
       source:
-        repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+        repoURL: https://gitlab.internal/euler/platform-manifests.git
         targetRevision: main
         path: '{{path}}'
         helm:
@@ -68,7 +68,7 @@ spec:
             - '../../envs/{{region}}/{{env}}/values-overrides/{{path.basename}}.yaml'
       destination:
         server: '{{server}}'
-        namespace: starcloud-{{path.basename}}
+        namespace: euler-{{path.basename}}
       syncPolicy:
         automated:
           prune: true

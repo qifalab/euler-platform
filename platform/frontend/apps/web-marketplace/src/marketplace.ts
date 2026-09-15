@@ -1,5 +1,5 @@
 /** Shared marketplace client + DTO types (svc-marketplace :9212). */
-import { createSDK } from "@sc/sdk";
+import { createSDK } from "@eu/sdk";
 
 export const sdk = createSDK({ baseURL: "" });
 

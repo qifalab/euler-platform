@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/order"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/order"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // newSQLTestRepo wires the SQL repo to a throwaway trade_db. Two DDL directories
@@ -33,7 +33,7 @@ func testOrder(id int64, token string) (*order.Order, order.Event) {
 	o := &order.Order{
 		OrderID: id, OrderNo: "SO20260915000001", AccountID: 100123,
 		Type: order.TypeNew, State: order.StatePendingPayment,
-		ProductCode: "scecs", ChargeType: pricing.ChargePrepaid,
+		ProductCode: "euecs", ChargeType: pricing.ChargePrepaid,
 		SnapshotID: "", OriginalAmount: pricing.MustParseAmount("100"),
 		DiscountAmount: pricing.MustParseAmount("0"), PayableAmount: pricing.MustParseAmount("100"),
 		ClientToken: token, Version: 0,
@@ -169,7 +169,7 @@ func TestSQLRepoAutoRenewSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.SetAutoRenew(100123, autoRenewSetting{ResourceID: "scecs-01", ProductCode: "scecs", Enabled: true}); err != nil {
+	if err := first.SetAutoRenew(100123, autoRenewSetting{ResourceID: "euecs-01", ProductCode: "euecs", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -181,13 +181,13 @@ func TestSQLRepoAutoRenewSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].ResourceID != "scecs-01" || !list[0].Enabled {
+	if len(list) != 1 || list[0].ResourceID != "euecs-01" || !list[0].Enabled {
 		t.Fatalf("auto-renew did not survive the restart: %+v", list)
 	}
 
 	// Turning it off stores the off state rather than forgetting the row: the
 	// console renders the customer's actual choice.
-	if err := restarted.SetAutoRenew(100123, autoRenewSetting{ResourceID: "scecs-01", ProductCode: "scecs", Enabled: false}); err != nil {
+	if err := restarted.SetAutoRenew(100123, autoRenewSetting{ResourceID: "euecs-01", ProductCode: "euecs", Enabled: false}); err != nil {
 		t.Fatal(err)
 	}
 	list, err = restarted.ListAutoRenew(100123)

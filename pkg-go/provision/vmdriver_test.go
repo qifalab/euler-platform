@@ -55,7 +55,7 @@ func TestVMDriverLifecycle(t *testing.T) {
 	// The CR coordinates follow the 06§4.2 conventions: resource id verbatim
 	// as the object name, shared product namespace, four mandatory labels.
 	ref := d.state.refs[validSpec().ResourceID]
-	if ref.Name != "scecs-cn-north-1-01-a1b2c3d4" || ref.Namespace != "plat-scecs" {
+	if ref.Name != "euecs-cn-north-1-01-a1b2c3d4" || ref.Namespace != "plat-euecs" {
 		t.Fatalf("CR coordinates wrong: %s/%s", ref.Namespace, ref.Name)
 	}
 
@@ -192,7 +192,7 @@ func TestVMDriverDeleteIdempotent(t *testing.T) {
 		}
 	}
 	// Deleting a resource the driver never saw also succeeds.
-	if err := d.Delete("scecs-cn-north-1-01-ffffffff"); err != nil {
+	if err := d.Delete("euecs-cn-north-1-01-ffffffff"); err != nil {
 		t.Fatalf("delete unknown: %v", err)
 	}
 	if _, err := d.Query(s.ResourceID); !errors.Is(err, ErrNotFound) {
@@ -226,19 +226,19 @@ func TestVMDriverDefaultsResources(t *testing.T) {
 }
 
 func TestVMRegistrySwitchesBackend(t *testing.T) {
-	// 06§6.2: switching SCECS from containers to VMs is one catalogue line,
+	// 06§6.2: switching EUECS from containers to VMs is one catalogue line,
 	// and the VM driver now actually works.
 	r := NewRegistry()
 	vmDriver, _ := newVMTestDriver(0)
 	r.Register(NewMockDriver(func() time.Time { return vmTestNow }))
 	r.Register(vmDriver)
 
-	r.BindProduct("scecs", DriverMock)
-	if d, err := r.DriverFor("scecs"); err != nil || d.Type() != DriverMock {
+	r.BindProduct("euecs", DriverMock)
+	if d, err := r.DriverFor("euecs"); err != nil || d.Type() != DriverMock {
 		t.Fatalf("mock binding broken: %v %v", d, err)
 	}
-	r.BindProduct("scecs", DriverVM)
-	d, err := r.DriverFor("scecs")
+	r.BindProduct("euecs", DriverVM)
+	d, err := r.DriverFor("euecs")
 	if err != nil || d.Type() != DriverVM {
 		t.Fatalf("vm binding broken: %v %v", d, err)
 	}

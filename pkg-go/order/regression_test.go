@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // An expired quote must not become an order even when the caller omits At.
@@ -18,7 +18,7 @@ func TestCreateRejectsExpiredSnapshotWithZeroAt(t *testing.T) {
 	req := CreateRequest{
 		AccountID:   100123,
 		Type:        TypeNew,
-		ProductCode: "scecs",
+		ProductCode: "euecs",
 		ChargeType:  pricing.ChargePrepaid,
 		ClientToken: "tok-expired",
 		Quote:       pricing.Result{PayableAmount: pricing.MustParseAmount("10")},

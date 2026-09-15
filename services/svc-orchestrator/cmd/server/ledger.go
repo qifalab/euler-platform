@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/resource"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/resource"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // resourceLedger is the persistence boundary for the resource ledger
@@ -174,7 +174,7 @@ func newSQLLedger(_ context.Context, db *sql.DB) *sqlLedger {
 }
 
 // newLedger picks the backend. Persistence is opt-in (pkg-go/storage doc): with
-// SC_DB_DSN set, the resource ledger lives in resource_db, so a restart keeps
+// EULER_DB_DSN set, the resource ledger lives in resource_db, so a restart keeps
 // every instance, its state history and its provision tasks; unset, the
 // in-memory ledger keeps the demo and `go test` dependency-free.
 //

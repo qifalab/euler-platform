@@ -33,8 +33,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/provision"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/provision"
 )
 
 // ReclaimNoticeWindow re-exports the provision constant so spot-package callers

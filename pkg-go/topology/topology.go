@@ -31,7 +31,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // RegionScope is the per-product placement scope (00§4.4 point 1; 09§4.2).

@@ -319,7 +319,7 @@ const (
 	DurationYear   DurationUnit = "YEAR"
 	DurationHour   DurationUnit = "HOUR"
 	DurationMinute DurationUnit = "MINUTE" // phase 2: spot/preemptible per-minute cycles
-	DurationSecond DurationUnit = "SECOND" // phase 2: SCECI per-second metering (09 §4.2)
+	DurationSecond DurationUnit = "SECOND" // phase 2: EUECI per-second metering (09 §4.2)
 	DurationUsage  DurationUnit = "USAGE"  // metered, quantity supplied by 计量
 )
 

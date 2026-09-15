@@ -139,10 +139,10 @@
       <div class="container footer-grid">
         <div class="footer-col">
           <h4>产品</h4>
-          <a href="https://docs.eulercloud.cn/scecs">云服务器</a>
-          <a href="https://docs.eulercloud.cn/scoss">对象存储</a>
-          <a href="https://docs.eulercloud.cn/scbs">块存储</a>
-          <a href="https://docs.eulercloud.cn/scrds">云数据库</a>
+          <a href="https://docs.eulercloud.cn/euecs">云服务器</a>
+          <a href="https://docs.eulercloud.cn/euoss">对象存储</a>
+          <a href="https://docs.eulercloud.cn/eubs">块存储</a>
+          <a href="https://docs.eulercloud.cn/eurds">云数据库</a>
         </div>
         <div class="footer-col">
           <h4>解决方案</h4>
@@ -266,7 +266,7 @@ const activeTab = ref(0);
 <style>
 /* ---------------------------------------------------------------------------
  * Google Cloud homepage style — clean white surfaces, NOT glass/blur.
- * Global tokens (--sc-* vars, font stack) are consumed from @sc/tokens,
+ * Global tokens (--eu-* vars, font stack) are consumed from @eu/tokens,
  * but the mesh background and glass effects are intentionally overridden.
  * ------------------------------------------------------------------------- */
 * { box-sizing: border-box; }
@@ -291,7 +291,7 @@ body {
   text-decoration: none;
   font-weight: 500;
   font-size: 14px;
-  font-family: var(--sc-font-family);
+  font-family: var(--eu-font-family);
   border: 1px solid transparent;
   cursor: pointer;
   transition: box-shadow 180ms cubic-bezier(0.4, 0, 0.2, 1),
@@ -300,12 +300,12 @@ body {
 }
 .btn-sm { padding: 8px 24px; font-size: 13px; }
 .btn-lg { padding: 16px 40px; font-size: 16px; }
-.btn-primary { background: var(--sc-color-brand); color: #fff; }
-.btn-primary:hover { background: var(--sc-color-brand-hover); box-shadow: 0 1px 3px rgba(60, 64, 67, 0.3), 0 4px 8px rgba(60, 64, 67, 0.15); }
-.btn-secondary { background: transparent; color: var(--sc-color-brand); border-color: var(--sc-color-brand); }
-.btn-secondary:hover { background: var(--sc-color-brand-soft); box-shadow: 0 1px 2px rgba(60, 64, 67, 0.1); }
+.btn-primary { background: var(--eu-color-brand); color: #fff; }
+.btn-primary:hover { background: var(--eu-color-brand-hover); box-shadow: 0 1px 3px rgba(60, 64, 67, 0.3), 0 4px 8px rgba(60, 64, 67, 0.15); }
+.btn-secondary { background: transparent; color: var(--eu-color-brand); border-color: var(--eu-color-brand); }
+.btn-secondary:hover { background: var(--eu-color-brand-soft); box-shadow: 0 1px 2px rgba(60, 64, 67, 0.1); }
 
-.text-link { color: var(--sc-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
+.text-link { color: var(--eu-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
 .text-link:hover { text-decoration: underline; }
 
 /* ---- Header ---- */
@@ -319,10 +319,10 @@ body {
 .header-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 32px; }
 .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
 .logo-mark { flex-shrink: 0; }
-.logo-text { font-weight: 500; font-size: 18px; color: var(--sc-text-primary); }
+.logo-text { font-weight: 500; font-size: 18px; color: var(--eu-text-primary); }
 .main-nav { display: flex; gap: 8px; flex: 1; }
 .main-nav a {
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 400;
@@ -332,7 +332,7 @@ body {
 }
 .main-nav a:hover { background: #f1f3f4; }
 .header-actions { display: flex; align-items: center; gap: 16px; }
-.header-link { color: var(--sc-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
+.header-link { color: var(--eu-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
 .header-link:hover { text-decoration: underline; }
 
 /* ---- Hero ---- */
@@ -348,20 +348,20 @@ body {
   line-height: 1.15;
   letter-spacing: -0.5px;
   margin: 0 0 20px;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .hero-sub {
   font-size: 18px;
   line-height: 1.6;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
   margin: 0 0 32px;
 }
-.hero-sub strong { color: var(--sc-text-primary); font-weight: 500; }
+.hero-sub strong { color: var(--eu-text-primary); font-weight: 500; }
 .hero-actions { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
 
 /* ---- Section common ---- */
-.section-title { font-size: 36px; font-weight: 400; color: var(--sc-text-primary); margin: 0 0 12px; letter-spacing: -0.3px; }
-.section-sub { font-size: 16px; color: var(--sc-text-secondary); margin: 0 0 32px; }
+.section-title { font-size: 36px; font-weight: 400; color: var(--eu-text-primary); margin: 0 0 12px; letter-spacing: -0.3px; }
+.section-sub { font-size: 16px; color: var(--eu-text-secondary); margin: 0 0 32px; }
 .cta-row { display: flex; align-items: center; gap: 24px; margin-bottom: 48px; flex-wrap: wrap; }
 
 /* ---- Updates carousel ---- */
@@ -395,15 +395,15 @@ body {
   bottom: 12px;
   left: 12px;
   background: rgba(255, 255, 255, 0.95);
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
   font-size: 12px;
   font-weight: 500;
   padding: 4px 10px;
   border-radius: 4px;
 }
 .update-body { padding: 20px; }
-.update-body h3 { font-size: 16px; font-weight: 500; margin: 0 0 8px; color: var(--sc-text-primary); line-height: 1.4; }
-.update-body p { font-size: 14px; color: var(--sc-text-secondary); margin: 0; line-height: 1.5; }
+.update-body h3 { font-size: 16px; font-weight: 500; margin: 0 0 8px; color: var(--eu-text-primary); line-height: 1.4; }
+.update-body p { font-size: 14px; color: var(--eu-text-secondary); margin: 0; line-height: 1.5; }
 
 /* ---- Programs / tabs ---- */
 .programs { padding: 64px 0; background: #f8f9fa; }
@@ -415,13 +415,13 @@ body {
   padding: 16px 32px;
   font-size: 15px;
   font-weight: 500;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
   cursor: pointer;
-  font-family: var(--sc-font-family);
+  font-family: var(--eu-font-family);
   transition: color 180ms, border-color 180ms;
 }
-.tabs button:hover { color: var(--sc-text-primary); }
-.tabs button.active { color: var(--sc-color-brand); border-bottom-color: var(--sc-color-brand); }
+.tabs button:hover { color: var(--eu-text-primary); }
+.tabs button.active { color: var(--eu-color-brand); border-bottom-color: var(--eu-color-brand); }
 .tab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px; }
 .program-card {
   background: #fff;
@@ -435,15 +435,15 @@ body {
   display: inline-block;
   font-size: 12px;
   font-weight: 500;
-  color: var(--sc-color-brand);
-  background: var(--sc-color-brand-soft);
+  color: var(--eu-color-brand);
+  background: var(--eu-color-brand-soft);
   padding: 4px 10px;
   border-radius: 4px;
   margin-bottom: 16px;
 }
-.program-card h3 { font-size: 18px; font-weight: 500; margin: 0 0 12px; color: var(--sc-text-primary); line-height: 1.4; }
-.program-card p { font-size: 14px; color: var(--sc-text-secondary); margin: 0 0 16px; line-height: 1.6; }
-.program-link { color: var(--sc-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
+.program-card h3 { font-size: 18px; font-weight: 500; margin: 0 0 12px; color: var(--eu-text-primary); line-height: 1.4; }
+.program-card p { font-size: 14px; color: var(--eu-text-secondary); margin: 0 0 16px; line-height: 1.6; }
+.program-link { color: var(--eu-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
 .program-link:hover { text-decoration: underline; }
 
 /* ---- Product categories ---- */
@@ -457,11 +457,11 @@ body {
   transition: box-shadow 180ms;
 }
 .category-card:hover { box-shadow: 0 1px 3px rgba(60, 64, 67, 0.1), 0 4px 12px rgba(60, 64, 67, 0.08); }
-.category-card h3 { font-size: 20px; font-weight: 500; margin: 0 0 20px; color: var(--sc-text-primary); }
+.category-card h3 { font-size: 20px; font-weight: 500; margin: 0 0 20px; color: var(--eu-text-primary); }
 .category-card ul { list-style: none; padding: 0; margin: 0 0 20px; }
 .category-card li {
   font-size: 14px;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
   line-height: 1.6;
   padding: 6px 0 6px 24px;
   position: relative;
@@ -474,9 +474,9 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--sc-color-brand);
+  background: var(--eu-color-brand);
 }
-.category-link { color: var(--sc-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
+.category-link { color: var(--eu-color-brand); text-decoration: none; font-size: 14px; font-weight: 500; }
 .category-link:hover { text-decoration: underline; }
 
 /* ---- Dark highlight section ---- */
@@ -526,8 +526,8 @@ body {
 /* ---- CTA section ---- */
 .cta-section { padding: 80px 0; background: linear-gradient(180deg, #f8fbff 0%, #e8f0fe 100%); text-align: center; }
 .cta-inner { max-width: 600px; margin: 0 auto; }
-.cta-section h2 { font-size: 36px; font-weight: 400; margin: 0 0 16px; color: var(--sc-text-primary); letter-spacing: -0.3px; }
-.cta-section p { font-size: 16px; color: var(--sc-text-secondary); margin: 0 0 32px; }
+.cta-section h2 { font-size: 36px; font-weight: 400; margin: 0 0 16px; color: var(--eu-text-primary); letter-spacing: -0.3px; }
+.cta-section p { font-size: 16px; color: var(--eu-text-secondary); margin: 0 0 32px; }
 
 /* ---- Footer ---- */
 .site-footer { background: #1a1a2e; color: #9aa0a6; padding: 64px 0 32px; }

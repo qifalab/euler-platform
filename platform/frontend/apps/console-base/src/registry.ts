@@ -25,7 +25,7 @@ export interface Registry {
   ttl: number;
 }
 
-const CACHE_KEY = "sc:console:registry";
+const CACHE_KEY = "eu:console:registry";
 const CACHE_TTL = 5 * 60 * 1000;
 
 // Built-in fallback (production pulls this from svc-api-meta). Mirrors the
@@ -34,18 +34,18 @@ const fallback: Registry = {
   revision: 1,
   ttl: 300,
   apps: [
-    { appCode: "console-ecs", appTitle: "云服务器 ECS", productCodes: ["scecs"], activeRules: ["/scecs"], entryUrl: "http://localhost:5174/", version: "0.1.0", keepAlive: true, preload: true, status: "online" },
-    { appCode: "console-eci", appTitle: "弹性容器实例 ECI", productCodes: ["sceci"], activeRules: ["/sceci"], entryUrl: "http://localhost:5183/", version: "0.1.0", keepAlive: true, preload: false, status: "online" },
-    { appCode: "console-lb", appTitle: "负载均衡 SLB", productCodes: ["sclb"], activeRules: ["/sclb"], entryUrl: "http://localhost:5184/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-autoscaling", appTitle: "弹性伸缩 AS", productCodes: ["scas"], activeRules: ["/scas"], entryUrl: "http://localhost:5185/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-backup", appTitle: "云备份", productCodes: ["scbackup"], activeRules: ["/scbackup"], entryUrl: "http://localhost:5186/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-redis", appTitle: "云数据库 Redis", productCodes: ["scredis"], activeRules: ["/scredis"], entryUrl: "http://localhost:5187/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-kafka", appTitle: "消息队列 Kafka", productCodes: ["sckafka"], activeRules: ["/sckafka"], entryUrl: "http://localhost:5188/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-logservice", appTitle: "日志服务", productCodes: ["sclog"], activeRules: ["/sclog"], entryUrl: "http://localhost:5189/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-storage", appTitle: "对象存储 OSS", productCodes: ["scoss"], activeRules: ["/scoss"], entryUrl: "http://localhost:5176/", version: "0.1.0", keepAlive: true, preload: false, status: "online" },
-    { appCode: "console-network", appTitle: "专有网络 VPC", productCodes: ["scvpc", "sceip"], activeRules: ["/scvpc", "/sceip"], entryUrl: "http://localhost:5177/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-database", appTitle: "云数据库 RDS", productCodes: ["scrds"], activeRules: ["/scrds"], entryUrl: "http://localhost:5178/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
-    { appCode: "console-monitor", appTitle: "云监控", productCodes: ["scmon"], activeRules: ["/scmon"], entryUrl: "http://localhost:5179/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-ecs", appTitle: "云服务器 ECS", productCodes: ["euecs"], activeRules: ["/euecs"], entryUrl: "http://localhost:5174/", version: "0.1.0", keepAlive: true, preload: true, status: "online" },
+    { appCode: "console-eci", appTitle: "弹性容器实例 ECI", productCodes: ["eueci"], activeRules: ["/eueci"], entryUrl: "http://localhost:5183/", version: "0.1.0", keepAlive: true, preload: false, status: "online" },
+    { appCode: "console-lb", appTitle: "负载均衡 SLB", productCodes: ["eulb"], activeRules: ["/eulb"], entryUrl: "http://localhost:5184/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-autoscaling", appTitle: "弹性伸缩 AS", productCodes: ["euas"], activeRules: ["/euas"], entryUrl: "http://localhost:5185/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-backup", appTitle: "云备份", productCodes: ["eubackup"], activeRules: ["/eubackup"], entryUrl: "http://localhost:5186/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-redis", appTitle: "云数据库 Redis", productCodes: ["euredis"], activeRules: ["/euredis"], entryUrl: "http://localhost:5187/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-kafka", appTitle: "消息队列 Kafka", productCodes: ["eukafka"], activeRules: ["/eukafka"], entryUrl: "http://localhost:5188/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-logservice", appTitle: "日志服务", productCodes: ["eulog"], activeRules: ["/eulog"], entryUrl: "http://localhost:5189/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-storage", appTitle: "对象存储 OSS", productCodes: ["euoss"], activeRules: ["/euoss"], entryUrl: "http://localhost:5176/", version: "0.1.0", keepAlive: true, preload: false, status: "online" },
+    { appCode: "console-network", appTitle: "专有网络 VPC", productCodes: ["euvpc", "eueip"], activeRules: ["/euvpc", "/eueip"], entryUrl: "http://localhost:5177/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-database", appTitle: "云数据库 RDS", productCodes: ["eurds"], activeRules: ["/eurds"], entryUrl: "http://localhost:5178/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
+    { appCode: "console-monitor", appTitle: "云监控", productCodes: ["eumon"], activeRules: ["/eumon"], entryUrl: "http://localhost:5179/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
     { appCode: "web-billing", appTitle: "费用中心", productCodes: [], activeRules: ["/billing"], entryUrl: "http://localhost:5180/", version: "0.1.0", keepAlive: false, preload: true, status: "online" },
     { appCode: "web-account", appTitle: "账号与访问控制", productCodes: [], activeRules: ["/account"], entryUrl: "http://localhost:5175/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
     { appCode: "web-ticket", appTitle: "工单支持", productCodes: [], activeRules: ["/ticket"], entryUrl: "http://localhost:5181/", version: "0.1.0", keepAlive: false, preload: false, status: "online" },
@@ -106,9 +106,9 @@ export const useRegistry = defineStore("registry", {
       return this.apps.find((a) => a.activeRules.includes(seg));
     },
     /**
-     * Real productCode for the path (RAM action prefix, e.g. "scecs").
+     * Real productCode for the path (RAM action prefix, e.g. "euecs").
      * Maps the matched activeRule to the productCode at the same index; the
-     * previous version returned the activeRule itself ("/scecs"), which broke
+     * previous version returned the activeRule itself ("/euecs"), which broke
      * `${productCode}:Read` permission strings.
      */
     productCodeOf(path: string): string | undefined {

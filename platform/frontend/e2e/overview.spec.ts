@@ -11,7 +11,7 @@ test("overview shows real balance/resources/orders from BFF", async ({ page }) =
   await expect(page.getByText("¥500.00")).toBeVisible();
   await expect(page.getByText("待支付订单")).toBeVisible();
   // Real resources from the BFF seed.
-  await expect(page.getByText("scecs-cn-north-1-01-a1b2c3d4")).toBeVisible();
+  await expect(page.getByText("euecs-cn-north-1-01-a1b2c3d4")).toBeVisible();
 });
 
 test("product menu lists the registry sub-apps", async ({ page }) => {

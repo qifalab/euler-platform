@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 var testNow = time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
@@ -27,9 +27,9 @@ func validCreateReq() CreateRequest {
 	return CreateRequest{
 		AccountID:    100123,
 		Type:         TypeNew,
-		ProductCode:  "scecs",
+		ProductCode:  "euecs",
 		ChargeType:   pricing.ChargePrepaid,
-		SKUCode:      "scecs.s2.large.prepaid",
+		SKUCode:      "euecs.s2.large.prepaid",
 		RegionID:     "cn-north-1",
 		Quantity:     1,
 		Duration:     1,
@@ -101,7 +101,7 @@ func TestNonNewTypesRequireResourceID(t *testing.T) {
 			t.Errorf("%s without ResourceID: expected ErrMissingResource, got %v", typ, err)
 		}
 		// With a resource id it succeeds.
-		req.ResourceID = "scecs-cn-north-1-01-a1b2c3d4"
+		req.ResourceID = "euecs-cn-north-1-01-a1b2c3d4"
 		if _, _, err := m.Create(req, 1, "x"); err != nil {
 			t.Errorf("%s with ResourceID should succeed: %v", typ, err)
 		}
@@ -164,14 +164,14 @@ func TestHappyPathNewOrder(t *testing.T) {
 		t.Fatal("paid → fulfilling must trigger provisioning")
 	}
 
-	doneEvt, err := m.CompleteFulfilment(o, "scecs-cn-north-1-01-a1b2c3d4", 2)
+	doneEvt, err := m.CompleteFulfilment(o, "euecs-cn-north-1-01-a1b2c3d4", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.State != StateCompleted {
 		t.Fatalf("final state = %s, want COMPLETED", o.State)
 	}
-	if o.ResourceID != "scecs-cn-north-1-01-a1b2c3d4" {
+	if o.ResourceID != "euecs-cn-north-1-01-a1b2c3d4" {
 		t.Fatalf("resource id not captured: %q", o.ResourceID)
 	}
 	if doneEvt.ResourceID != o.ResourceID {
@@ -317,7 +317,7 @@ func TestRefundBlockedUntilResourceReleased(t *testing.T) {
 	if _, err := m.StartFulfilment(o, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.CompleteFulfilment(o, "scecs-cn-north-1-01-a1b2c3d4", 2); err != nil {
+	if _, err := m.CompleteFulfilment(o, "euecs-cn-north-1-01-a1b2c3d4", 2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,7 +427,7 @@ func TestAllFiveTransactionTypesSupported(t *testing.T) {
 		req := validCreateReq()
 		req.Type = typ
 		if typ.RequiresExistingResource() {
-			req.ResourceID = "scecs-cn-north-1-01-a1b2c3d4"
+			req.ResourceID = "euecs-cn-north-1-01-a1b2c3d4"
 		}
 		o, _, err := m.Create(req, 1, "x")
 		if err != nil {

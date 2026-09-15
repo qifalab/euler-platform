@@ -33,7 +33,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // Status is the lifecycle state of a resource pack.
@@ -62,7 +62,7 @@ type Pack struct {
 	// ProductCode restricts which product's charges this pack may offset.
 	// Empty means universal; D6 packs are typically product-scoped.
 	ProductCode string
-	// SKUCode is the pack SKU purchased (e.g. "scecs.pack.1000cpu.hour").
+	// SKUCode is the pack SKU purchased (e.g. "euecs.pack.1000cpu.hour").
 	SKUCode string
 	// FaceValue is the quota purchased. Fixed-point, never float.
 	FaceValue pricing.Amount

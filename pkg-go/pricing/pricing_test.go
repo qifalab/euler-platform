@@ -157,7 +157,7 @@ func TestCalculateRejectsGatedChargeType(t *testing.T) {
 	// fires before any rule lookup, so no pricing rule is needed.
 	e := Engine{}
 	_, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargeType("UNKNOWN"),
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, nil)
@@ -189,7 +189,7 @@ func basicRules() []PricingRule {
 func TestRegionalRuleBeatsWildcard(t *testing.T) {
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-east-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, nil)
@@ -204,7 +204,7 @@ func TestRegionalRuleBeatsWildcard(t *testing.T) {
 func TestCustomerLevelRuleBeatsUnscoped(t *testing.T) {
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth,
 		CustomerLevel: "ENTERPRISE", At: now,
@@ -222,7 +222,7 @@ func TestNoRuleIsAnError(t *testing.T) {
 	// product away for free.
 	e := Engine{}
 	_, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "unknown-sku",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "unknown-sku",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, nil)
@@ -249,7 +249,7 @@ func TestExpiredRuleIgnored(t *testing.T) {
 	}
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, rules, nil, nil)
@@ -266,7 +266,7 @@ func TestExpiredRuleIgnored(t *testing.T) {
 func TestQuantityAndDurationMultiply(t *testing.T) {
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 12, DurationUnit: DurationMonth, Quantity: 3, At: now,
 	}, basicRules(), nil, nil)
@@ -282,7 +282,7 @@ func TestQuantityAndDurationMultiply(t *testing.T) {
 func TestPrepaidRequiresDuration(t *testing.T) {
 	e := Engine{}
 	_, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 0, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, nil)
@@ -298,7 +298,7 @@ func TestPostpaidNeedsNoDuration(t *testing.T) {
 	}}
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePostpaid,
 		DurationUnit: DurationHour, At: now,
 	}, rules, nil, nil)
@@ -318,11 +318,11 @@ func TestPromotionsDoNotStack(t *testing.T) {
 		{PromoID: "p-9折", PromoType: PromoDiscountRate, ScopeType: "SKU",
 			ScopeRef: "s2.large", RateBasisPoints: 9000},
 		{PromoID: "p-7折", PromoType: PromoDiscountRate, ScopeType: "PRODUCT",
-			ScopeRef: "scecs", RateBasisPoints: 7000},
+			ScopeRef: "euecs", RateBasisPoints: 7000},
 	}
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), promos, nil)
@@ -344,11 +344,11 @@ func TestPromotionsDoNotStack(t *testing.T) {
 func TestPromotionUserTagGate(t *testing.T) {
 	promos := []Promotion{{
 		PromoID: "p-new-user", PromoType: PromoDiscountRate, ScopeType: "PRODUCT",
-		ScopeRef: "scecs", RateBasisPoints: 3000, UserTag: "new",
+		ScopeRef: "euecs", RateBasisPoints: 3000, UserTag: "new",
 	}}
 	e := Engine{}
 	base := Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}
@@ -379,7 +379,7 @@ func TestExpiredPromotionIgnored(t *testing.T) {
 	}}
 	e := Engine{}
 	res, _ := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), promos, nil)
@@ -396,7 +396,7 @@ func TestFixedPricePromotionCannotRaisePrice(t *testing.T) {
 	}}
 	e := Engine{}
 	res, _ := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), promos, nil)
@@ -417,7 +417,7 @@ func TestCouponsConsumedByExpiryAscending(t *testing.T) {
 	}
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, coupons)
@@ -448,11 +448,11 @@ func TestCouponsConsumedByExpiryAscending(t *testing.T) {
 func TestCouponScopeRestriction(t *testing.T) {
 	coupons := []Coupon{
 		{CouponID: "c-storage-only", AccountID: 1, RemainValue: MustParseAmount("100"),
-			ProductCodes: []string{"scoss"}},
+			ProductCodes: []string{"euoss"}},
 	}
 	e := Engine{}
 	res, _ := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, coupons)
@@ -468,7 +468,7 @@ func TestExpiredCouponNotUsed(t *testing.T) {
 	}
 	e := Engine{}
 	res, _ := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, coupons)
@@ -485,7 +485,7 @@ func TestCouponsOfOtherAccountsIgnored(t *testing.T) {
 	}
 	e := Engine{}
 	res, _ := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, coupons)
@@ -505,7 +505,7 @@ func TestQuotingDoesNotSpendCoupons(t *testing.T) {
 	e := Engine{}
 	for i := 0; i < 5; i++ {
 		if _, err := e.Calculate(Request{
-			AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+			AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 			RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 			Duration: 1, DurationUnit: DurationMonth, At: now,
 		}, basicRules(), nil, coupons); err != nil {
@@ -531,7 +531,7 @@ func TestFullPipelineOrdering(t *testing.T) {
 	}
 	e := Engine{}
 	res, err := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), promos, coupons)
@@ -568,7 +568,7 @@ func TestPayableNeverNegative(t *testing.T) {
 	}
 	e := Engine{}
 	res, _ := e.Calculate(Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}, basicRules(), nil, coupons)
@@ -585,7 +585,7 @@ func TestPayableNeverNegative(t *testing.T) {
 // baseReq is the standard 180-yuan quote every coupon-kind test builds on.
 func baseReq() Request {
 	return Request{
-		AccountID: 1, ProductCode: "scecs", SKUCode: "s2.large",
+		AccountID: 1, ProductCode: "euecs", SKUCode: "s2.large",
 		RegionID: "cn-north-1", ChargeType: ChargePrepaid,
 		Duration: 1, DurationUnit: DurationMonth, At: now,
 	}

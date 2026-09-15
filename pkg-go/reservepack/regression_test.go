@@ -12,10 +12,10 @@ import (
 func TestConsumeReplayKeepsOriginalShortfall(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("100"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("100"), expire, "ord-1"); err != nil {
 		t.Fatal(err)
 	}
-	_, _, shortfall, err := l.Consume("pk-1", "scecs", yuan("250"), "bill-1", "c-1")
+	_, _, shortfall, err := l.Consume("pk-1", "euecs", yuan("250"), "bill-1", "c-1")
 	if err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestConsumeReplayKeepsOriginalShortfall(t *testing.T) {
 		t.Fatalf("shortfall = %s, want 150", shortfall)
 	}
 
-	_, _, replayShortfall, err := l.Consume("pk-1", "scecs", yuan("250"), "bill-1", "c-1")
+	_, _, replayShortfall, err := l.Consume("pk-1", "euecs", yuan("250"), "bill-1", "c-1")
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -63,10 +63,10 @@ func TestStoreApplyReportsVersionConflict(t *testing.T) {
 // refund into it would report success while the customer gets nothing usable.
 func TestRefundAfterDeadlineIsRefused(t *testing.T) {
 	l, store := newTestLedger()
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("100"), testNow.Add(time.Minute), "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("100"), testNow.Add(time.Minute), "ord-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := l.Consume("pk-1", "scecs", yuan("40"), "bill-1", "c-1"); err != nil {
+	if _, _, _, err := l.Consume("pk-1", "euecs", yuan("40"), "bill-1", "c-1"); err != nil {
 		t.Fatal(err)
 	}
 	later := New(store, func() time.Time { return testNow.Add(time.Hour) }, nil)
@@ -79,10 +79,10 @@ func TestRefundAfterDeadlineIsRefused(t *testing.T) {
 // Min() as a negative take and credit quota instead of spending it.
 func TestNonPositiveAmountsAreRejected(t *testing.T) {
 	l, _ := newTestLedger()
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("100"), testNow.Add(time.Hour), "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("100"), testNow.Add(time.Hour), "ord-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := l.Consume("pk-1", "scecs", yuan("-5"), "bill-1", "c-1"); !errors.Is(err, ErrInvalidAmount) {
+	if _, _, _, err := l.Consume("pk-1", "euecs", yuan("-5"), "bill-1", "c-1"); !errors.Is(err, ErrInvalidAmount) {
 		t.Fatalf("negative consume: err = %v, want ErrInvalidAmount", err)
 	}
 	if _, _, err := l.Refund("pk-1", yuan("-5"), "bill-1", "r-1"); !errors.Is(err, ErrInvalidAmount) {

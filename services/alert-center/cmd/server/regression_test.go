@@ -16,7 +16,7 @@ func TestFlushIsTenantScoped(t *testing.T) {
 
 	ingest := func(tenant int64, alertID string) {
 		t.Helper()
-		body := `{"alertId":"` + alertID + `","product":"scecs","metric":"cpu_util","severity":"CRITICAL"}`
+		body := `{"alertId":"` + alertID + `","product":"euecs","metric":"cpu_util","severity":"CRITICAL"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/alertcenter/ingest", strings.NewReader(body))
 		req.Header.Set(accountIDHeader, fmt.Sprintf("%d", tenant))
 		rr := httptest.NewRecorder()

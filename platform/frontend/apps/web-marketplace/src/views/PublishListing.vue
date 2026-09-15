@@ -3,7 +3,7 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { PageHeader } from "@sc/ui";
+import { PageHeader } from "@eu/ui";
 import { sdk, type ListingDTO } from "@/marketplace";
 
 const router = useRouter();
@@ -60,33 +60,33 @@ async function submit() {
 </template>
 
 <style scoped>
-.publish { padding: var(--sc-spacing-6); max-width: 720px; }
-.pb-hint { color: var(--sc-text-secondary); font-size: 13px; margin: 0 0 var(--sc-spacing-4); }
+.publish { padding: var(--eu-spacing-6); max-width: 720px; }
+.pb-hint { color: var(--eu-text-secondary); font-size: 13px; margin: 0 0 var(--eu-spacing-4); }
 .pb-form {
-  display: flex; flex-direction: column; gap: var(--sc-spacing-4);
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-6);
+  display: flex; flex-direction: column; gap: var(--eu-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-6);
 }
-.pb-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--sc-text-secondary); }
+.pb-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--eu-text-secondary); }
 .pb-field input, .pb-field select {
-  padding: 10px 12px; background: var(--sc-bg-container); border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-md); font-size: 14px; color: var(--sc-text-primary);
+  padding: 10px 12px; background: var(--eu-bg-container); border: 1px solid var(--eu-border);
+  border-radius: var(--eu-radius-md); font-size: 14px; color: var(--eu-text-primary);
   outline: none; font-family: inherit;
-  transition: border-color var(--sc-transition), box-shadow var(--sc-transition);
+  transition: border-color var(--eu-transition), box-shadow var(--eu-transition);
 }
 .pb-field input:focus, .pb-field select:focus {
-  border-color: var(--sc-color-brand); box-shadow: 0 0 0 3px var(--sc-color-brand-soft);
+  border-color: var(--eu-color-brand); box-shadow: 0 0 0 3px var(--eu-color-brand-soft);
 }
 .pb-submit {
-  align-self: flex-start; padding: 11px 24px; border: none; border-radius: var(--sc-radius-md);
-  background: var(--sc-color-brand); color: var(--sc-color-on-brand); font-size: 14px; cursor: pointer;
-  transition: background var(--sc-transition);
+  align-self: flex-start; padding: 11px 24px; border: none; border-radius: var(--eu-radius-md);
+  background: var(--eu-color-brand); color: var(--eu-color-on-brand); font-size: 14px; cursor: pointer;
+  transition: background var(--eu-transition);
 }
-.pb-submit:hover { background: var(--sc-color-brand-hover); }
+.pb-submit:hover { background: var(--eu-color-brand-hover); }
 .pb-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>

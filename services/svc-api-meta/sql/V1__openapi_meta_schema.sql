@@ -26,7 +26,7 @@
 -- -----------------------------------------------------------------------------
 CREATE TABLE `api_action` (
   `action_id`        BIGINT UNSIGNED NOT NULL,
-  `product_code`     VARCHAR(32) NOT NULL COMMENT '产品代号: scecs 等(01§1.1 D0)',
+  `product_code`     VARCHAR(32) NOT NULL COMMENT '产品代号: euecs 等(01§1.1 D0)',
   `action_name`      VARCHAR(64) NOT NULL COMMENT 'Action: DescribeInstances 等',
   `param_schema_json` JSON NOT NULL COMMENT '参数 schema;驱动 SDK 生成与网关校验',
   `error_codes_json` JSON NOT NULL COMMENT '错误码字典;驱动文档与错误映射',

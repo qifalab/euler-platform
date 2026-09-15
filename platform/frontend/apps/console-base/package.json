@@ -2,7 +2,7 @@
   "name": "console-base",
   "version": "0.1.0",
   "private": true,
-  "description": "StarCloud console shell — Wujie micro-frontend base (02§4).",
+  "description": "Euler console shell — Wujie micro-frontend base (02§4).",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,11 +11,11 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@sc/tokens": "workspace:*",
-    "@sc/sdk": "workspace:*",
-    "@sc/ui": "workspace:*",
-    "@sc/console-kit": "workspace:*",
-    "@sc/wujie-bridge": "workspace:*",
+    "@eu/tokens": "workspace:*",
+    "@eu/sdk": "workspace:*",
+    "@eu/ui": "workspace:*",
+    "@eu/console-kit": "workspace:*",
+    "@eu/wujie-bridge": "workspace:*",
     "element-plus": "^2.7.0",
     "pinia": "^2.1.0",
     "vue": "^3.4.0",

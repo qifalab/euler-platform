@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // ServiceScope classifies a control-plane service as either a global singleton

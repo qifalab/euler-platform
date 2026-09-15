@@ -6,7 +6,7 @@
 // 409 state conflict, 429 throttling, 500/503 internal/unavailable.
 //
 // Business error code format: {Product}.{Module}.{Reason} (PascalCase),
-// e.g. Quota.Exceeded.ScecsInstance. Codes are registered in svc-api-meta;
+// e.g. Quota.Exceeded.EuecsInstance. Codes are registered in svc-api-meta;
 // unregistered codes are blocked at CI time (03§9.3).
 package errorsx
 

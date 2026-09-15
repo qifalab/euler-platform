@@ -11,7 +11,7 @@ import (
 func TestConvergeKeepsSeverityEscalation(t *testing.T) {
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	warn := Alert{
-		TenantID: 100123, Product: "scecs", Metric: "cpu_util",
+		TenantID: 100123, Product: "euecs", Metric: "cpu_util",
 		Severity: SeverityWarning, Labels: map[string]string{"resource_id": "r-1"},
 		OccurredAt: at,
 	}
@@ -41,7 +41,7 @@ func TestConvergeKeepsSeverityEscalation(t *testing.T) {
 func TestConvergeStillDedupsIdenticalFires(t *testing.T) {
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	a := Alert{
-		TenantID: 100123, Product: "scecs", Metric: "cpu_util",
+		TenantID: 100123, Product: "euecs", Metric: "cpu_util",
 		Severity: SeverityWarning, Labels: map[string]string{"resource_id": "r-1"},
 		OccurredAt: at,
 	}

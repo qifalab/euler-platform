@@ -37,7 +37,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // EntryType classifies a journal entry. The set is closed: an unclassified

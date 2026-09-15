@@ -2,14 +2,14 @@
 /**
  * Buy wizard (02§7.4): step form + live price summary on the right.
  *
- * Wired to the real backend chain (same shape as console-backup, productCode=sclog):
- *  - GET  /api/v1/catalog/skus?productCode=sclog — spec catalogue
+ * Wired to the real backend chain (same shape as console-backup, productCode=eulog):
+ *  - GET  /api/v1/catalog/skus?productCode=eulog — spec catalogue
  *  - POST /api/v1/catalog/quote                  — 询价 (real pricing engine)
  *  - POST /api/v1/orders                         — create order (real orderId)
  *  - POST /api/v1/orders/{id}/pay                — mark PAID
  *  - POST /api/v1/orchestrator/fulfill           — saga → resource RUNNING
  *
- * SCLOG is POSTPAID ONLY and REGIONAL (log ingestion is global within a region;
+ * EULOG is POSTPAID ONLY and REGIONAL (log ingestion is global within a region;
  * cross-AZ storage is a replica flag, not a placement constraint), so there is
  * NO zone picker. The catalogue's per-HOUR pricing rule returns the hourly
  * payable as payableAmount; the summary shows 预估每小时. Price is
@@ -19,8 +19,8 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInputNumber, ElSwitch, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@sc/sdk";
-import { useCatalogMeta } from "@sc/console-kit";
+import { createSDK, yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta } from "@eu/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -35,16 +35,16 @@ const form = ref({
   crossAz: false,
 });
 
-// --- region metadata (catalogue-driven, no hardcoded lists). SCLOG is
+// --- region metadata (catalogue-driven, no hardcoded lists). EULOG is
 // REGIONAL: no zone picker at all, so only the region list is needed. ---
-const { regions, load } = useCatalogMeta("sclog");
+const { regions, load } = useCatalogMeta("eulog");
 
 // --- spec catalogue (real, from svc-catalog) ---
 
 interface Sku {
   skuCode: string;
   productCode: string;
-  chargeType: string; // POSTPAID only for SCLOG
+  chargeType: string; // POSTPAID only for EULOG
   specJson: string;
   status: string;
 }
@@ -53,7 +53,7 @@ interface SkuSpec { tier?: string; cross_az?: boolean }
 const skus = ref<Sku[]>([]);
 
 const specs = computed(() => {
-  // SCLOG has only postpaid SKUs. The spec list is the SKU list, labelled
+  // EULOG has only postpaid SKUs. The spec list is the SKU list, labelled
   // by edition (standard / pro).
   return skus.value.map((s) => {
     const spec = parseSpec(s.specJson);
@@ -72,7 +72,7 @@ function parseSpec(json: string): SkuSpec {
 
 onMounted(async () => {
   try {
-    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=sclog");
+    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=eulog");
     skus.value = res.data ?? [];
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
@@ -128,7 +128,7 @@ async function refreshQuote() {
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "sclog",
+      productCode: "eulog",
       specCode,
       chargeType: "POSTPAID",
       quantity: 1,
@@ -165,7 +165,7 @@ async function submit() {
   try {
     // 1) Quote — the authoritative per-hour payable comes from the pricing engine.
     const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "sclog", specCode,
+      productCode: "eulog", specCode,
       chargeType: "POSTPAID", quantity: 1,
       regionId: form.value.region,
     });
@@ -175,7 +175,7 @@ async function submit() {
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
-        type: "NEW", productCode: "sclog", skuCode: specCode,
+        type: "NEW", productCode: "eulog", skuCode: specCode,
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
       },
@@ -188,13 +188,13 @@ async function submit() {
     });
 
     // 4) Fulfill — the orchestrator runs the saga and returns the new resource id.
-    // The productCode=sclog routes it to the DriverK8s binding. The instance
+    // The productCode=eulog routes it to the DriverK8s binding. The instance
     // params (retention/storage/crossAz) flow through to the reconcile loop.
     const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
       "/api/v1/orchestrator/fulfill",
       {
         orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "sclog", region: form.value.region,
+        productCode: "eulog", region: form.value.region,
         specCode, chargeType: "POSTPAID",
         retentionDays: form.value.retentionDays,
         storageGb: form.value.storageGb,
@@ -284,37 +284,37 @@ async function submit() {
 .buy-layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
 .buy-steps { margin-bottom: 24px; }
 .buy-form, .buy-confirm {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 24px;
 }
 .buy-confirm h2 { font-size: 16px; margin: 0 0 16px; }
 .confirm-list { list-style: none; padding: 0; margin: 0; }
-.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--sc-border); font-size: 13px; }
-.form-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 4px 0 0; }
-.form-hint-inline { font-size: 12px; color: var(--sc-text-secondary); margin-left: 12px; }
+.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px; }
+.form-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 4px 0 0; }
+.form-hint-inline { font-size: 12px; color: var(--eu-text-secondary); margin-left: 12px; }
 .buy-nav { margin-top: 24px; display: flex; gap: 12px; }
 .buy-summary {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 20px;
   height: fit-content;
   position: sticky;
-  top: var(--sc-spacing-6);
+  top: var(--eu-spacing-6);
 }
 .buy-summary h2 { font-size: 15px; margin: 0 0 16px; }
 .sum-list { margin: 0; }
-.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--sc-border); }
-.sum-list dt { color: var(--sc-text-secondary); }
+.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--eu-border); }
+.sum-list dt { color: var(--eu-text-secondary); }
 .sum-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 16px; }
-.sum-total strong { font-size: 22px; color: var(--sc-color-danger); }
-.sum-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 8px 0 0; }
+.sum-total strong { font-size: 22px; color: var(--eu-color-danger); }
+.sum-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 8px 0 0; }
 </style>

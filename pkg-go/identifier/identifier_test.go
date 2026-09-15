@@ -3,12 +3,12 @@ package identifier
 import "testing"
 
 func TestResourceIDRoundTrip(t *testing.T) {
-	const raw = "scecs-cn-north-1-01-a1b2c3d4"
+	const raw = "euecs-cn-north-1-01-a1b2c3d4"
 	rid, err := ParseResourceID(raw)
 	if err != nil {
 		t.Fatalf("ParseResourceID: %v", err)
 	}
-	if rid.ProductCode != "scecs" || rid.RegionID != "cn-north-1" ||
+	if rid.ProductCode != "euecs" || rid.RegionID != "cn-north-1" ||
 		rid.ShardFactor != "01" || rid.Random != "a1b2c3d4" {
 		t.Fatalf("parsed fields wrong: %+v", rid)
 	}
@@ -27,11 +27,11 @@ func TestResourceIDRoundTrip(t *testing.T) {
 func TestParseResourceIDRejectsBad(t *testing.T) {
 	cases := []string{
 		"",                         // empty
-		"scecs-cn-north-1-01-",     // missing random
-		"scecs-cnnorth1-01-a1b2c3d4", // region not hyphen-style
-		"SCECS-cn-north-1-01-a1b2c3d4", // uppercase product
-		"scecs-cn-north-1-1-a1b2c3d4",  // 1-digit shard
-		"scecs-cn-north-1-01-A1B2C3D4", // uppercase random
+		"euecs-cn-north-1-01-",     // missing random
+		"euecs-cnnorth1-01-a1b2c3d4", // region not hyphen-style
+		"EUECS-cn-north-1-01-a1b2c3d4", // uppercase product
+		"euecs-cn-north-1-1-a1b2c3d4",  // 1-digit shard
+		"euecs-cn-north-1-01-A1B2C3D4", // uppercase random
 	}
 	for _, c := range cases {
 		if _, err := ParseResourceID(c); err == nil {
@@ -52,7 +52,7 @@ func TestShardFactorFor(t *testing.T) {
 }
 
 func TestNewResourceID(t *testing.T) {
-	rid, err := NewResourceID("scecs", "cn-north-1", 100123, 8, 16)
+	rid, err := NewResourceID("euecs", "cn-north-1", 100123, 8, 16)
 	if err != nil {
 		t.Fatalf("NewResourceID: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestRegionAndAZ(t *testing.T) {
 // position and must parse like any other resource id (provision.ScopeGlobal
 // specs carry Region=global, and MockDriver ids must survive ParseResourceID).
 func TestGlobalResourceIDRoundTrip(t *testing.T) {
-	const raw = "scdomain-global-01-5e6f7a8b"
+	const raw = "eudomain-global-01-5e6f7a8b"
 	rid, err := ParseResourceID(raw)
 	if err != nil {
 		t.Fatalf("ParseResourceID(%q): %v", raw, err)
@@ -103,7 +103,7 @@ func TestGlobalResourceIDRoundTrip(t *testing.T) {
 		t.Fatalf("String() round-trip = %q, want %q", rid.String(), raw)
 	}
 
-	rid, err = NewResourceID("scdns", GlobalRegion, 100123, 8, 16)
+	rid, err = NewResourceID("eudns", GlobalRegion, 100123, 8, 16)
 	if err != nil {
 		t.Fatalf("NewResourceID with sentinel region: %v", err)
 	}
@@ -119,19 +119,19 @@ func TestNaming(t *testing.T) {
 	if got := BFFName("console"); got != "console-bff" {
 		t.Fatalf("BFFName = %q", got)
 	}
-	if got := OpenAPIDomain("scecs"); got != "scecs.api.starcloud.cn" {
+	if got := OpenAPIDomain("euecs"); got != "euecs.api.euler.emoera.com" {
 		t.Fatalf("OpenAPIDomain = %q", got)
 	}
-	if got := ConsoleRoute("scecs"); got != "/console/scecs" {
+	if got := ConsoleRoute("euecs"); got != "/console/euecs" {
 		t.Fatalf("ConsoleRoute = %q", got)
 	}
-	if got := PermissionAction("scecs", "CreateInstance"); got != "scecs:CreateInstance" {
+	if got := PermissionAction("euecs", "CreateInstance"); got != "euecs:CreateInstance" {
 		t.Fatalf("PermissionAction = %q", got)
 	}
-	if got := ARN("ecs", "cn-east-1", 100123, "instance/scecs-cn-east-1-01-a1b2c3d4"); got != "sc:ecs:cn-east-1:100123:instance/scecs-cn-east-1-01-a1b2c3d4" {
+	if got := ARN("ecs", "cn-east-1", 100123, "instance/euecs-cn-east-1-01-a1b2c3d4"); got != "eu:ecs:cn-east-1:100123:instance/euecs-cn-east-1-01-a1b2c3d4" {
 		t.Fatalf("ARN = %q", got)
 	}
-	if got := ErrorCode("Quota", "Exceeded", "ScecsInstance"); got != "Quota.Exceeded.ScecsInstance" {
+	if got := ErrorCode("Quota", "Exceeded", "EuecsInstance"); got != "Quota.Exceeded.EuecsInstance" {
 		t.Fatalf("ErrorCode = %q", got)
 	}
 	if got := KafkaTopic("metering", "usage", "raw"); got != "cloud.metering.usage.raw" {
@@ -140,10 +140,10 @@ func TestNaming(t *testing.T) {
 	if got := SystemKafkaTopic("audit.action"); got != "cloud.sys.audit.action" {
 		t.Fatalf("SystemKafkaTopic = %q", got)
 	}
-	if got := AKID("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); len(got) != 32 || got[:2] != "SC" {
+	if got := AKID("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); len(got) != 32 || got[:2] != "EU" {
 		t.Fatalf("AKID = %q", got)
 	}
-	if !IsValidProductCode("scecs") || IsValidProductCode("ecs") || IsValidProductCode("SCECS") {
+	if !IsValidProductCode("euecs") || IsValidProductCode("ecs") || IsValidProductCode("EUECS") {
 		t.Fatalf("IsValidProductCode wrong")
 	}
 	if got := NacosSubscriptionString("svc-order"); got != "svc-order@@svc-order" {
@@ -152,7 +152,7 @@ func TestNaming(t *testing.T) {
 	if got := NacosGroup("svc-order"); got != "svc-order" {
 		t.Fatalf("NacosGroup = %q", got)
 	}
-	if got := SystemPolicyName("Ecs", "FullAccess"); got != "ScEcsFullAccess" {
+	if got := SystemPolicyName("Ecs", "FullAccess"); got != "EuEcsFullAccess" {
 		t.Fatalf("SystemPolicyName = %q", got)
 	}
 }

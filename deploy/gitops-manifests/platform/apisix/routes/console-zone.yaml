@@ -1,4 +1,4 @@
-# APISIX route definitions — console zone (console.starcloud.cn)
+# APISIX route definitions — console zone (console.euler.emoera.com)
 #
 # Source of truth: 04-middleware-infrastructure.md §3.2/§3.3, 02-frontend §5.
 #
@@ -8,10 +8,10 @@
 #
 #   access_token   RS256 JWT, 15 min, held in memory only (never localStorage)
 #   refresh_token  opaque, 7 days, rotating — old revoked on each refresh
-#   cookie         HttpOnly; Secure; SameSite=Lax; Domain=.starcloud.cn
+#   cookie         HttpOnly; Secure; SameSite=Lax; Domain=.euler.emoera.com
 #
 # SameSite=Lax rather than Strict is deliberate: Strict blocks the cross-subdomain
-# SSO flow between account.starcloud.cn and console.starcloud.cn. The refresh
+# SSO flow between account.euler.emoera.com and console.euler.emoera.com. The refresh
 # cookie is scoped to Path=/api/auth so it is not sent on ordinary API calls.
 #
 # The JWT is issued by svc-iam in the account domain; the gateway verifies with
@@ -19,20 +19,20 @@
 
 routes:
   # ---------------------------------------------------------------------------
-  # Auth endpoints — deliberately NOT behind sc-auth (they mint the session).
+  # Auth endpoints — deliberately NOT behind eu-auth (they mint the session).
   # ---------------------------------------------------------------------------
   - id: console-auth
     name: console-account-auth
     desc: Login, refresh, logout. Rate limited hard; no auth plugin by design.
-    hosts: [console.starcloud.cn]
+    hosts: [console.euler.emoera.com]
     uris:
       - /api/auth/*
     upstream:
       # Real cluster Service: the auth endpoints are served by svc-iam's
       # web-auth server (services/svc-iam/cmd/web-auth, listens :9101),
-      # deployed by the ApplicationSet into namespace starcloud-svc-iam.
+      # deployed by the ApplicationSet into namespace euler-svc-iam.
       nodes:
-        "svc-iam.starcloud-svc-iam.svc:9101": 1
+        "svc-iam.euler-svc-iam.svc:9101": 1
       type: roundrobin
       timeout: { connect: 2, send: 5, read: 5 }
     plugins:
@@ -46,7 +46,7 @@ routes:
         key: remote_addr
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
+        redis_cluster_name: eu-redis-cluster
         rejected_code: 429
         rejected_msg: '{"Code":"Common.Throttling","Message":"too many attempts"}'
       # CSRF floor for the refresh endpoint: the browser client sets a custom
@@ -58,7 +58,7 @@ routes:
           properties:
             x-requested-with:
               type: string
-      sc-audit:
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
@@ -66,34 +66,34 @@ routes:
   # ---------------------------------------------------------------------------
   - id: console-account
     name: console-account-manage
-    hosts: [console.starcloud.cn]
+    hosts: [console.euler.emoera.com]
     uris:
       - /api/account/*
     upstream:
-      # Real cluster Service (namespace from the ApplicationSet: starcloud-svc-iam).
+      # Real cluster Service (namespace from the ApplicationSet: euler-svc-iam).
       nodes:
-        "svc-iam.starcloud-svc-iam.svc:9101": 1
+        "svc-iam.euler-svc-iam.svc:9101": 1
       type: roundrobin
     plugins:
       limit-count:
         count: 1800          # 30 req/s per logged-in user (04§3.2)
         time_window: 60
         key_type: var
-        key: http_x_sc_uid
+        key: http_x_eu_uid
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
+        redis_cluster_name: eu-redis-cluster
         rejected_code: 429
-      sc-auth:
+      eu-auth:
         mode: jwt
         # Public key is injected from Nacos config; rotation by kid.
-        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
-      sc-authorize:
-        check_access_endpoint: http://svc-iam.starcloud-svc-iam.svc:9101/internal/authz/check
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
         action_from_query: Action
-        action_prefix: sciam
+        action_prefix: euiam
         region: cn-north-1
-      sc-audit:
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ routes:
   # ---------------------------------------------------------------------------
   - id: console-trade
     name: console-trade-orders
-    hosts: [console.starcloud.cn]
+    hosts: [console.euler.emoera.com]
     # console-bff serves /console/* and the BFF-backed console views call
     # exactly these paths. The route previously declared /api/trade/* with no
     # rewrite, so every request reached the BFF as /api/trade/... — a path it
@@ -110,31 +110,31 @@ routes:
       - /console/*
     upstream:
       # Real cluster Service (console-bff listens :9200; namespace from the
-      # ApplicationSet: starcloud-console-bff).
+      # ApplicationSet: euler-console-bff).
       nodes:
-        "console-bff.starcloud-console-bff.svc:9200": 1
+        "console-bff.euler-console-bff.svc:9200": 1
       type: roundrobin
     plugins:
       limit-count:
         count: 1800
         time_window: 60
         key_type: var
-        key: http_x_sc_uid
+        key: http_x_eu_uid
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
+        redis_cluster_name: eu-redis-cluster
         rejected_code: 429
-      sc-auth:
+      eu-auth:
         mode: jwt
-        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
-      sc-authorize:
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
         # The BFF's endpoints are plain REST (no RPC-style Action query
         # parameter), so the action is pinned per route: action_from_query
         # would resolve to nil and reject every call with
         # "missing or malformed Action" (400) before it reached the BFF.
-        action: sctrade:ConsoleApi
+        action: eutrade:ConsoleApi
         region: cn-north-1
-      sc-audit:
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ routes:
   # ---------------------------------------------------------------------------
   - id: console-resource
     name: console-resource-list
-    hosts: [console.starcloud.cn]
+    hosts: [console.euler.emoera.com]
     # Same contract as console-trade: the BFF serves /console/resources, and
     # that is the path the console views call. (/api/resource/* was declared
     # here but is not a path any service registers.)
@@ -153,66 +153,66 @@ routes:
       - /console/bills
     upstream:
       # Real cluster Service (console-bff listens :9200; namespace from the
-      # ApplicationSet: starcloud-console-bff).
+      # ApplicationSet: euler-console-bff).
       nodes:
-        "console-bff.starcloud-console-bff.svc:9200": 1
+        "console-bff.euler-console-bff.svc:9200": 1
       type: roundrobin
     plugins:
       limit-count:
         count: 1800
         time_window: 60
         key_type: var
-        key: http_x_sc_uid
+        key: http_x_eu_uid
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
+        redis_cluster_name: eu-redis-cluster
         rejected_code: 429
-      sc-auth:
+      eu-auth:
         mode: jwt
-        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
-      sc-authorize:
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
         # Fixed action, like console-trade: the BFF is plain REST.
-        action: scres:ConsoleApi
+        action: eures:ConsoleApi
         region: cn-north-1
-      sc-audit:
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
   # ---------------------------------------------------------------------------
   # Per-product console backends: /api/{productCode}/**
   # Adding a product means adding one route here (01§7.3 step 5).
   # ---------------------------------------------------------------------------
-  - id: console-product-scecs
-    name: console-compute-scecs
-    hosts: [console.starcloud.cn]
+  - id: console-product-euecs
+    name: console-compute-euecs
+    hosts: [console.euler.emoera.com]
     uris:
-      - /api/scecs/*
+      - /api/euecs/*
     upstream:
-      # No standalone svc-scecs exists yet; the console product plane is
+      # No standalone svc-euecs exists yet; the console product plane is
       # aggregated by console-bff (real fan-out to catalog/order/orchestrator).
       nodes:
-        "console-bff.starcloud-console-bff.svc:9200": 1
+        "console-bff.euler-console-bff.svc:9200": 1
       type: roundrobin
     plugins:
       limit-count:
         count: 1800
         time_window: 60
         key_type: var
-        key: http_x_sc_uid
+        key: http_x_eu_uid
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
+        redis_cluster_name: eu-redis-cluster
         rejected_code: 429
-      sc-auth:
+      eu-auth:
         mode: jwt
-        jwt_public_key_file: /opt/sc-secrets/jwt/publicKey
-      sc-authorize:
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
         action_from_query: Action
-        action_prefix: scecs
+        action_prefix: euecs
         region: cn-north-1
         # High-risk operations get fine-grained ARN evaluation at the gateway
         # rather than relying solely on the service-layer owner check (07§3.4).
-        resource_arn_template: "sc:ecs:$region:$account_id:instance/$arg_InstanceId"
-      sc-audit:
+        resource_arn_template: "eu:ecs:$region:$account_id:instance/$arg_InstanceId"
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
 global_rules:

@@ -2,7 +2,7 @@
   "name": "console-storage",
   "version": "0.1.0",
   "private": true,
-  "description": "StarCloud storage sub-app (SCOSS object storage / SCBS block storage) — Wujie child.",
+  "description": "Euler storage sub-app (EUOSS object storage / EUBS block storage) — Wujie child.",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5176",
@@ -11,11 +11,11 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@sc/tokens": "workspace:*",
-    "@sc/ui": "workspace:*",
-    "@sc/console-kit": "workspace:*",
-    "@sc/sdk": "workspace:*",
-    "@sc/wujie-bridge": "workspace:*"
+    "@eu/tokens": "workspace:*",
+    "@eu/ui": "workspace:*",
+    "@eu/console-kit": "workspace:*",
+    "@eu/sdk": "workspace:*",
+    "@eu/wujie-bridge": "workspace:*"
   },
   "peerDependencies": {
     "vue": "^3.4.0",

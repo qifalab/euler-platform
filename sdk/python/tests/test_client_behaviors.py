@@ -99,7 +99,7 @@ def test_redirects_are_not_followed_and_surface_as_errors():
     try:
         client = _client(server)
         with pytest.raises(ApiError) as ei:
-            client.call(ApiRequest(product_code="scecs"))
+            client.call(ApiRequest(product_code="euecs"))
         assert ei.value.http_status == 302
         # Exactly one request: the redirect target was never fetched (which
         # would have replayed the Authorization header off-host).
@@ -123,7 +123,7 @@ def test_retries_on_429_respecting_retry_after_then_succeeds():
     server = _make_server(rec)
     try:
         client = _client(server, max_retries=3)
-        resp = client.call(ApiRequest(product_code="scecs"))
+        resp = client.call(ApiRequest(product_code="euecs"))
         assert resp.status_code == 200
         assert resp.body == b'{"ok":true}'
         assert len(rec.requests) == 3
@@ -144,7 +144,7 @@ def test_retry_exhaustion_on_5xx_raises_last_error_with_request_id():
     try:
         client = _client(server, max_retries=2)
         with pytest.raises(ApiError) as ei:
-            client.call(ApiRequest(product_code="scecs"))
+            client.call(ApiRequest(product_code="euecs"))
         assert ei.value.code == "Common.Unavailable"
         assert ei.value.http_status == 503
         assert ei.value.request_id == "req-abc"
@@ -162,7 +162,7 @@ def test_4xx_other_than_429_is_not_retried():
     try:
         client = _client(server, max_retries=3)
         with pytest.raises(ApiError) as ei:
-            client.call(ApiRequest(product_code="scecs"))
+            client.call(ApiRequest(product_code="euecs"))
         assert ei.value.code == "Iam.Denied"
         assert ei.value.request_id == "r-1"  # body RequestId preserved
         assert len(rec.requests) == 1
@@ -191,7 +191,7 @@ def test_url_path_and_query_use_rfc3986_encoding_matching_signature():
         client = _client(server)
         client.call(
             ApiRequest(
-                product_code="scecs",
+                product_code="euecs",
                 path="/a b/c",
                 query={"Action": "Run Instances", "T~": "x+y"},
             )
@@ -211,10 +211,10 @@ def test_endpoint_path_prefix_is_preserved_and_signed():
     server = _make_server(rec)
     try:
         client = _client(server, endpoint_path="/api/v1")
-        client.call(ApiRequest(product_code="scecs", path="/instances"))
+        client.call(ApiRequest(product_code="euecs", path="/instances"))
         assert rec.requests[0]["raw_path"] == "/api/v1/instances"
         # Root path: prefix alone.
-        client.call(ApiRequest(product_code="scecs", path="/"))
+        client.call(ApiRequest(product_code="euecs", path="/"))
         assert rec.requests[1]["raw_path"] == "/api/v1"
     finally:
         server.shutdown()
@@ -228,11 +228,11 @@ def test_sign_force_overwrites_x_cps_date():
     fresh = "20260804T093000Z"
     signed = sign(
         method="GET",
-        host="scecs.api.starcloud.cn",
+        host="euecs.api.euler.emoera.com",
         path="/",
         query={},
         headers={
-            "host": "scecs.api.starcloud.cn",
+            "host": "euecs.api.euler.emoera.com",
             "x-cps-date": stale,
             "x-cps-nonce": "n",
         },
@@ -249,8 +249,8 @@ def test_sign_force_overwrites_x_cps_date():
 
 
 def test_env_fallback_for_credentials(monkeypatch):
-    monkeypatch.setenv("SC_ACCESS_KEY_ID", "AKENV")
-    monkeypatch.setenv("SC_SECRET_ACCESS_KEY", "SKENV")
+    monkeypatch.setenv("EULER_ACCESS_KEY_ID", "AKENV")
+    monkeypatch.setenv("EULER_SECRET_ACCESS_KEY", "SKENV")
     creds = _resolve_credentials(Config(ak="", sk="", region="r"))
     assert creds.ak == "AKENV"
     assert creds.sk == "SKENV"

@@ -22,7 +22,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/starcloud/sc-platform/cps1"
+	"github.com/qifalab/euler-platform/cps1"
 )
 
 type vector struct {
@@ -122,11 +122,11 @@ func main() {
 	}
 
 	const (
-		ak      = "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+		ak      = "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 		sk      = "test-secret-key-0123456789"
 		region  = "cn-north-1"
 		service = "ecs"
-		host    = "scecs.api.starcloud.cn"
+		host    = "euecs.api.euler.emoera.com"
 		nonce   = "550e8400-e29b-41d4-a716-446655440000"
 	)
 

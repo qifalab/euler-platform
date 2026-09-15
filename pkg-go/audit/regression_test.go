@@ -15,13 +15,13 @@ func TestTamperingIdentityFieldsBreaksTheChain(t *testing.T) {
 	rec, err := c.Append(Event{
 		EventID:     EventID(now, 1),
 		EventTime:   now,
-		EventSource: "scecs.api.starcloud.cn",
+		EventSource: "euecs.api.euler.emoera.com",
 		EventName:   "StopInstance",
 		SourceIP:    "203.0.113.9",
-		UserAgent:   "sc-cli/1.0",
+		UserAgent:   "eu-cli/1.0",
 		Identity: Identity{
 			Type: "root", AccountID: 100123, Principal: "user/alice",
-			AKID: "SC****3F", MFAPresent: true,
+			AKID: "EU****3F", MFAPresent: true,
 		},
 		Decision:     DecisionAllow,
 		ResponseCode: 200,

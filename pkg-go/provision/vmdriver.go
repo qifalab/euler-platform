@@ -61,7 +61,7 @@ const (
 const (
 	DefaultVMCores   = 2
 	DefaultVMMemGB   = 2
-	meteringCPUItem  = "cpu_core_hour" // matches svc-catalog scecs metering items
+	meteringCPUItem  = "cpu_core_hour" // matches svc-catalog euecs metering items
 	meteringMemItem  = "mem_gb_hour"
 	usageSecondsHour = 3600
 )
@@ -300,7 +300,7 @@ func (d VMDriver) Query(resourceID string) (Status, error) {
 }
 
 // CollectUsage reports metering for the window since the previous collection:
-// cpu_core_hour and mem_gb_hour, per-second precision (the scecs metering
+// cpu_core_hour and mem_gb_hour, per-second precision (the euecs metering
 // items in svc-catalog, 01§5.2 — 计费起点为 RUNNING 时刻). Quantity is a
 // decimal string computed in integer arithmetic; a float here would drift the
 // exact way 09 A2 (无未解释差异) forbids.

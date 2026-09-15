@@ -27,37 +27,37 @@ const STATUS_KIND: Record<string, "success" | "info" | "warning" | "danger" | "p
 
 const kind = computed(() => STATUS_KIND[props.status.toLowerCase()] ?? "info");
 const KIND_VAR: Record<string, string> = {
-  success: "var(--sc-color-success)",
-  info: "var(--sc-text-secondary)",
-  warning: "var(--sc-color-warning)",
-  danger: "var(--sc-color-danger)",
-  primary: "var(--sc-color-brand)",
+  success: "var(--eu-color-success)",
+  info: "var(--eu-text-secondary)",
+  warning: "var(--eu-color-warning)",
+  danger: "var(--eu-color-danger)",
+  primary: "var(--eu-color-brand)",
 };
 </script>
 
 <template>
   <span
-    class="sc-status-badge"
-    :style="{ '--sc-badge-color': KIND_VAR[kind] }"
+    class="eu-status-badge"
+    :style="{ '--eu-badge-color': KIND_VAR[kind] }"
     :data-kind="kind"
   >
-    <i class="sc-status-dot" />
+    <i class="eu-status-dot" />
     {{ label ?? status }}
   </span>
 </template>
 
 <style>
-.sc-status-badge {
+.eu-status-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-badge-color, var(--sc-text-secondary));
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-badge-color, var(--eu-text-secondary));
 }
-.sc-status-dot {
+.eu-status-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--sc-badge-color, var(--sc-text-secondary));
+  background: var(--eu-badge-color, var(--eu-text-secondary));
 }
 </style>

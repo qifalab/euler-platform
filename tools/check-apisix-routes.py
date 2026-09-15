@@ -3,13 +3,13 @@
 YAML syntax validity is not enough: the failure modes that matter here are
 semantic, and every one of them is silent in production.
 
-  * a route missing sc-auth is an unauthenticated OpenAPI endpoint
+  * a route missing eu-auth is an unauthenticated OpenAPI endpoint
   * a plugin priority inversion breaks the chain order fixed by 07§5
   * a Nacos subscription string that is not {GROUP}@@{serviceName} silently
     resolves to zero upstreams (selection pit #2)
   * an action_prefix that does not match the route's product lets a caller
     name another product's action
-  * a product code outside the sc-prefixed set violates 01§1.1 D0
+  * a product code outside the eu-prefixed set violates 01§1.1 D0
 
 Run: python tools/check-apisix-routes.py
 """
@@ -20,19 +20,19 @@ import sys
 import yaml
 
 # Phase-1 sellable products (09-roadmap R-01 / adjudication C1+S1).
-PHASE1_PRODUCTS = {"scvpc", "scecs", "scbs", "scoss", "scrds", "scmon", "sceip"}
+PHASE1_PRODUCTS = {"euvpc", "euecs", "eubs", "euoss", "eurds", "eumon", "eueip"}
 
 # Plugin chain order (07-security §5). Lower priority runs later in APISIX,
 # so the declared order here must correspond to descending priority.
-CHAIN_ORDER = ["ip-restriction", "limit-req", "sc-auth", "sc-authorize", "sc-audit"]
+CHAIN_ORDER = ["ip-restriction", "limit-req", "eu-auth", "eu-authorize", "eu-audit"]
 
 # Priorities declared in the plugin sources; kept in sync deliberately.
-PLUGIN_PRIORITY = {"sc-auth": 2500, "sc-authorize": 2400, "sc-audit": 2300}
+PLUGIN_PRIORITY = {"eu-auth": 2500, "eu-authorize": 2400, "eu-audit": 2300}
 
 # Routes that legitimately carry no authentication, with the reason.
 AUTH_EXEMPT = {
     "console-auth": "mints the session; cannot require a session to obtain one",
-    "openapi-scoss-data": "S3 data plane uses MinIO SigV4, documented exemption (04§3.2)",
+    "openapi-euoss-data": "S3 data plane uses MinIO SigV4, documented exemption (04§3.2)",
 }
 
 
@@ -48,29 +48,29 @@ def check_route(route, path, problems):
     where = "{}:{}".format(path.split("/")[-1], rid)
 
     # 1. Authentication present, unless explicitly exempt.
-    if "sc-auth" not in plugins and rid not in AUTH_EXEMPT:
-        problems.append("{}: no sc-auth — endpoint would be unauthenticated".format(where))
+    if "eu-auth" not in plugins and rid not in AUTH_EXEMPT:
+        problems.append("{}: no eu-auth — endpoint would be unauthenticated".format(where))
 
     # 2. Signature mode must bind region and service to the route, since they
     #    feed the derived signing key and must never come from client input.
-    auth = plugins.get("sc-auth") or {}
+    auth = plugins.get("eu-auth") or {}
     if auth.get("mode") == "signature":
         if not auth.get("region"):
-            problems.append("{}: sc-auth signature mode missing region".format(where))
+            problems.append("{}: eu-auth signature mode missing region".format(where))
         if not auth.get("service"):
-            problems.append("{}: sc-auth signature mode missing service".format(where))
-    # jwt_public_key_file is the K8s form: the sc-auth plugin reads the
-    # mounted sc-jwt-public-key Secret (route files cannot interpolate env).
+            problems.append("{}: eu-auth signature mode missing service".format(where))
+    # jwt_public_key_file is the K8s form: the eu-auth plugin reads the
+    # mounted eu-jwt-public-key Secret (route files cannot interpolate env).
     if auth.get("mode") == "jwt" and not (
         auth.get("jwt_public_key") or auth.get("jwt_public_key_file")
     ):
         problems.append(
-            "{}: sc-auth jwt mode missing jwt_public_key/jwt_public_key_file".format(where)
+            "{}: eu-auth jwt mode missing jwt_public_key/jwt_public_key_file".format(where)
         )
 
     # 3. action_prefix must match the product this route serves, or a caller
     #    could name an action belonging to a different product.
-    authz = plugins.get("sc-authorize") or {}
+    authz = plugins.get("eu-authorize") or {}
     prefix = authz.get("action_prefix")
     if authz.get("action_from_query") and not prefix:
         problems.append("{}: action_from_query without action_prefix".format(where))
@@ -117,19 +117,19 @@ def check_route(route, path, problems):
 
     # 7. Per-AK limiting must key on the header the auth plugin injects.
     lc = plugins.get("limit-count") or {}
-    if lc.get("key") == "http_x_sc_ak_id" and "sc-auth" not in plugins:
-        problems.append("{}: limits on X-Sc-Ak-Id but sc-auth never sets it".format(where))
+    if lc.get("key") == "http_x_eu_ak_id" and "eu-auth" not in plugins:
+        problems.append("{}: limits on X-Euler-Ak-Id but eu-auth never sets it".format(where))
 
 
 def check_product_codes(routes, path, problems):
     """Every product-scoped route must reference a phase-1 product code."""
     for route in routes:
-        authz = route.get("plugins", {}).get("sc-authorize") or {}
+        authz = route.get("plugins", {}).get("eu-authorize") or {}
         prefix = authz.get("action_prefix")
-        if not prefix or not prefix.startswith("sc"):
+        if not prefix or not prefix.startswith("eu"):
             continue
-        # Platform-domain prefixes (sciam/sctrade/scres) are not products.
-        if prefix in {"sciam", "sctrade", "scres"}:
+        # Platform-domain prefixes (euiam/eutrade/eures) are not products.
+        if prefix in {"euiam", "eutrade", "eures"}:
             continue
         if prefix not in PHASE1_PRODUCTS:
             problems.append(

@@ -293,15 +293,15 @@ function accessText(a: RamUser["access"]) {
 
 <style scoped>
 .ram-users-page {
-  padding: var(--sc-spacing-6);
-  min-height: calc(100vh - var(--sc-topbar-height));
+  padding: var(--eu-spacing-6);
+  min-height: calc(100vh - var(--eu-topbar-height));
 }
 .page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--sc-spacing-4);
-  margin-bottom: var(--sc-spacing-6);
+  gap: var(--eu-spacing-4);
+  margin-bottom: var(--eu-spacing-6);
 }
 .heading {
   display: flex;
@@ -313,22 +313,22 @@ function accessText(a: RamUser["access"]) {
   margin: 0;
   font-size: 22px;
   font-weight: 600;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .page-desc {
   margin: 0;
   font-size: 13px;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
   line-height: 1.5;
 }
 .table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-4);
   overflow: hidden;
 }
 /* Let the glass card show through the Element Plus table body. */

@@ -2,14 +2,14 @@
 /**
  * Buy wizard (02§7.4): step form + live price summary on the right.
  *
- * Wired to the real backend chain (productCode=sclb):
- *  - GET  /api/v1/catalog/skus?productCode=sclb — spec catalogue
+ * Wired to the real backend chain (productCode=eulb):
+ *  - GET  /api/v1/catalog/skus?productCode=eulb — spec catalogue
  *  - POST /api/v1/catalog/quote                  — 询价 (real pricing engine)
  *  - POST /api/v1/orders                         — create order (real orderId)
  *  - POST /api/v1/orders/{id}/pay                — mark PAID
  *  - POST /api/v1/orchestrator/fulfill           — saga → resource RUNNING
  *
- * SCLB is POSTPAID ONLY (usage-billed: LCU + traffic). SCLB is REGIONAL (a load
+ * EULB is POSTPAID ONLY (usage-billed: LCU + traffic). EULB is REGIONAL (a load
  * balancer spans AZs — it is the cross-AZ entry point), so there is NO 可用区
  * zone selector: region only, and the quote request sends no zoneId (the M-6
  * gate requires zoneId only for ZONAL products). The catalogue's hourly pricing
@@ -20,8 +20,8 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@sc/sdk";
-import { useCatalogMeta } from "@sc/console-kit";
+import { createSDK, yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta } from "@eu/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -37,16 +37,16 @@ const form = ref({
   backends: "10.128.3.17:8080\n10.128.5.22:8080",
 });
 
-// --- region metadata (catalogue-driven, no hardcoded lists). SCLB is
+// --- region metadata (catalogue-driven, no hardcoded lists). EULB is
 // REGIONAL: no zone picker at all, so only the region list is needed. ---
-const { regions, load } = useCatalogMeta("sclb");
+const { regions, load } = useCatalogMeta("eulb");
 
 // --- spec catalogue (real, from svc-catalog) ---
 
 interface Sku {
   skuCode: string;
   productCode: string;
-  chargeType: string; // POSTPAID only for SCLB
+  chargeType: string; // POSTPAID only for EULB
   specJson: string;
   status: string;
 }
@@ -77,7 +77,7 @@ function specLabel(spec: SkuSpec): string {
 
 onMounted(async () => {
   try {
-    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=sclb");
+    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=eulb");
     skus.value = res.data ?? [];
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
@@ -106,9 +106,9 @@ watch(() => form.value.spec, (code) => {
 
 // --- live trial pricing (real, from svc-catalog 询价) ---
 //
-// SCLB's pricing rule is DurationHour (usage-billed postpaid), so payableAmount
+// EULB's pricing rule is DurationHour (usage-billed postpaid), so payableAmount
 // is the per-hour unit price directly — no per-second conversion needed (unlike
-// SCECI). The summary shows the 预估每小时 verbatim.
+// EUECI). The summary shows the 预估每小时 verbatim.
 
 interface QuoteResult {
   payableAmount: string; // per-hour yuan, decimal
@@ -136,12 +136,12 @@ async function refreshQuote() {
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "sclb",
+      productCode: "eulb",
       specCode,
       chargeType: "POSTPAID",
       quantity: 1,
       regionId: form.value.region,
-      // SCLB is REGIONAL: NO zoneId — the M-6 quote gate requires zoneId only
+      // EULB is REGIONAL: NO zoneId — the M-6 quote gate requires zoneId only
       // for ZONAL products. A REGIONAL product that sends zoneId is tolerated
       // but not required.
     });
@@ -182,12 +182,12 @@ async function submit() {
   try {
     // 1) Quote — the authoritative per-hour payable comes from the pricing engine.
     const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "sclb", specCode,
+      productCode: "eulb", specCode,
       chargeType: "POSTPAID", quantity: 1,
       regionId: form.value.region,
     });
 
-    // 2) Create the order — svc-order issues the real orderId/orderNo. SCLB is
+    // 2) Create the order — svc-order issues the real orderId/orderNo. EULB is
     // usage-billed postpaid; the initial amount is the per-hour unit (rounded
     // in 分 (yuanToMinor); actual billing accrues from metering
     // (lcu_hour/traffic_gb), settled hourly.
@@ -195,7 +195,7 @@ async function submit() {
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
-        type: "NEW", productCode: "sclb", skuCode: specCode,
+        type: "NEW", productCode: "eulb", skuCode: specCode,
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
       },
@@ -209,12 +209,12 @@ async function submit() {
 
     // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
     // resource CREATING→RUNNING) and returns the new resource id. The
-    // productCode=sclb routes it to the DriverK8s binding.
+    // productCode=eulb routes it to the DriverK8s binding.
     const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
       "/api/v1/orchestrator/fulfill",
       {
         orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "sclb", region: form.value.region,
+        productCode: "eulb", region: form.value.region,
         specCode, chargeType: "POSTPAID",
         lbType: form.value.lbType,
         listenPort: form.value.listenPort,
@@ -312,37 +312,37 @@ async function submit() {
 .buy-layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
 .buy-steps { margin-bottom: 24px; }
 .buy-form, .buy-confirm {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 24px;
 }
 .buy-confirm h2 { font-size: 16px; margin: 0 0 16px; }
 .confirm-list { list-style: none; padding: 0; margin: 0; }
-.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--sc-border); font-size: 13px; }
-.form-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 4px 0 0; }
-.readonly-spec { font-size: 14px; color: var(--sc-text-secondary); }
+.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px; }
+.form-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 4px 0 0; }
+.readonly-spec { font-size: 14px; color: var(--eu-text-secondary); }
 .buy-nav { margin-top: 24px; display: flex; gap: 12px; }
 .buy-summary {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 20px;
   height: fit-content;
   position: sticky;
-  top: var(--sc-spacing-6);
+  top: var(--eu-spacing-6);
 }
 .buy-summary h2 { font-size: 15px; margin: 0 0 16px; }
 .sum-list { margin: 0; }
-.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--sc-border); }
-.sum-list dt { color: var(--sc-text-secondary); }
+.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--eu-border); }
+.sum-list dt { color: var(--eu-text-secondary); }
 .sum-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 16px; }
-.sum-total strong { font-size: 22px; color: var(--sc-color-danger); }
-.sum-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 8px 0 0; }
+.sum-total strong { font-size: 22px; color: var(--eu-color-danger); }
+.sum-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 8px 0 0; }
 </style>

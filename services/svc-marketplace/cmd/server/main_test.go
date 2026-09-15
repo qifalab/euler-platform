@@ -19,7 +19,7 @@ func do(t *testing.T, h http.Handler, method, path string, body any) *httptest.R
 		}
 	}
 	req := httptest.NewRequest(method, path, &buf)
-	req.Header.Set("X-Sc-Account-Id", "100123")
+	req.Header.Set("X-Euler-Account-Id", "100123")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec

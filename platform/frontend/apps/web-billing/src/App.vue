@@ -4,8 +4,8 @@
  * with the billing nav; Wujie sandbox: shell-less (console owns the top bar).
  */
 import { RouterView } from "vue-router";
-import { inWujieSandbox } from "@sc/wujie-bridge";
-import { SiteTopbar } from "@sc/ui";
+import { inWujieSandbox } from "@eu/wujie-bridge";
+import { SiteTopbar } from "@eu/ui";
 
 const sandboxed = inWujieSandbox();
 </script>
@@ -22,7 +22,7 @@ const sandboxed = inWujieSandbox();
         <router-link to="/renew">续费管理</router-link>
       </template>
       <template #actions>
-        <a class="billing-console" href="https://console.starcloud.cn">返回控制台</a>
+        <a class="billing-console" href="https://console.euler.emoera.com">返回控制台</a>
       </template>
     </SiteTopbar>
     <main class="billing-body"><RouterView /></main>
@@ -31,8 +31,8 @@ const sandboxed = inWujieSandbox();
 
 <style>
 .billing-shell { min-height: 100vh; }
-.billing-console { color: var(--sc-color-brand); text-decoration: none; font-size: var(--sc-font-size-md); transition: color var(--sc-transition); }
-.billing-console:hover { color: var(--sc-color-brand-hover); }
-.billing-body { min-height: calc(100vh - var(--sc-topbar-height)); }
+.billing-console { color: var(--eu-color-brand); text-decoration: none; font-size: var(--eu-font-size-md); transition: color var(--eu-transition); }
+.billing-console:hover { color: var(--eu-color-brand-hover); }
+.billing-body { min-height: calc(100vh - var(--eu-topbar-height)); }
 .billing-subapp { min-height: 100vh; }
 </style>

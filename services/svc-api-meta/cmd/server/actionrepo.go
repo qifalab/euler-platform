@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // actionRepo persists Action metadata.
@@ -253,7 +253,7 @@ func splitActionID(id string) (product, action string, ok bool) {
 }
 
 // newActionRepo picks the backend. Persistence is opt-in (pkg-go/storage doc):
-// with SC_DB_DSN set, Action metadata lives in openapi_meta so the registry
+// with EULER_DB_DSN set, Action metadata lives in openapi_meta so the registry
 // survives a restart and stays identical for every reader; unset, the in-memory
 // repo keeps the demo and `go test` dependency-free.
 //

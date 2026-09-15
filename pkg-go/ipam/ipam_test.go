@@ -368,7 +368,7 @@ func TestIPAllocationStartsAfterReservedTrio(t *testing.T) {
 	}
 	want := []string{"10.0.5.2", "10.0.5.3", "10.0.5.4"}
 	for i, w := range want {
-		ip, err := a.Allocate("scecs-cn-north-1-01-aaaa")
+		ip, err := a.Allocate("euecs-cn-north-1-01-aaaa")
 		if err != nil {
 			t.Fatalf("allocate #%d: %v", i, err)
 		}
@@ -432,11 +432,11 @@ func TestIPAllocateSpecific(t *testing.T) {
 
 func TestIPOwnerAndRelease(t *testing.T) {
 	a := NewIPAllocator(mustParse("10.0.5.0/24"))
-	ip, err := a.Allocate("scecs-cn-north-1-01-a1b2c3d4")
+	ip, err := a.Allocate("euecs-cn-north-1-01-a1b2c3d4")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o, ok := a.Owner(ip); !ok || o != "scecs-cn-north-1-01-a1b2c3d4" {
+	if o, ok := a.Owner(ip); !ok || o != "euecs-cn-north-1-01-a1b2c3d4" {
 		t.Fatalf("owner = %q %v", o, ok)
 	}
 	// Release is idempotent and frees the address for reuse.
@@ -449,7 +449,7 @@ func TestIPOwnerAndRelease(t *testing.T) {
 	if _, ok := a.Owner(ip); ok {
 		t.Fatal("released address still owned")
 	}
-	again, err := a.Allocate("scecs-cn-north-1-01-b2c3d4e5")
+	again, err := a.Allocate("euecs-cn-north-1-01-b2c3d4e5")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func TestIPOwnerAndRelease(t *testing.T) {
 	}
 }
 
-// --- Composition: the SCVPC shape -----------------------------------------
+// --- Composition: the EUVPC shape -----------------------------------------
 
 func TestVPCComposition(t *testing.T) {
 	// The end-to-end shape of one VPC: a platform-reserved block, two customer

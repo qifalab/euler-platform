@@ -1,4 +1,4 @@
-# SCLB instance CRD (06-kubernetes-productization.md §4.2)
+# EULB instance CRD (06-kubernetes-productization.md §4.2)
 #
 # One cloud product = four artifacts (06§4.1):
 #   1. product definition (catalogue registration — svc-catalog, M-7.2)
@@ -6,13 +6,13 @@
 #   3. Operator         (rc-lb — provision/operate engine, Go)
 #   4. metering point   (status.usage → cloud.metering.usage.raw)
 #
-# SCLB 辰云负载均衡 (M-7.2, 09-roadmap §4.3 M-7, P0): a four-layer (TCP/UDP) +
+# EULB 辰云负载均衡 (M-7.2, 09-roadmap §4.3 M-7, P0): a four-layer (TCP/UDP) +
 # seven-layer (HTTP/HTTPS) load balancer that spans AZs — it is the cross-AZ
 # entry point (REGIONAL, unlike the ZONAL compute products). The kernel is
 # APISIX (L7) + LVS/IPVS (L4), abstracted behind one CR (09 §4.2), fulfilled by
-# DriverK8s (bound in provision.Registry.BindProduct("sclb", DriverK8s)).
+# DriverK8s (bound in provision.Registry.BindProduct("eulb", DriverK8s)).
 #
-# The four iron rules this schema enforces (same as scecs-instance-crd.yaml):
+# The four iron rules this schema enforces (same as euecs-instance-crd.yaml):
 #   * the CR is the only fact interface — no SSH, no reaching into internals
 #   * status is machine-readable: structured phase + conditions, never a log
 #     line to be parsed
@@ -37,12 +37,12 @@ spec:
     listKind: SlbInstanceList
     plural: slbinstances
     singular: slbinstance
-    shortNames: [sclb]
+    shortNames: [eulb]
   versions:
     - name: v1
       served: true
       storage: true
-      # Printer columns so `kubectl get sclb` answers the questions an
+      # Printer columns so `kubectl get eulb` answers the questions an
       # operator actually asks, without a describe.
       additionalPrinterColumns:
         - name: Phase
@@ -106,7 +106,7 @@ spec:
                             enum: [HTTP, HTTPS, TCP, UDP]
                     vpcId:
                       type: string
-                      description: SCVPC network boundary; an LB attaches to a VPC (decision R-02).
+                      description: EUVPC network boundary; an LB attaches to a VPC (decision R-02).
                     backendServers:
                       type: array
                       description: Backend endpoints the listener forwards to.
@@ -178,7 +178,7 @@ spec:
                   description: >
                     Metering readings, a FIRST-CLASS status field (06§4.1 rule
                     4). A product that cannot report usage cannot be launched.
-                    These are published to cloud.metering.usage.raw. SCLB is
+                    These are published to cloud.metering.usage.raw. EULB is
                     billed by usage: lcu_hour (LCU capacity unit) and traffic_gb
                     (egress). Hourly settlement, same as the phase-1 postpaid
                     products.
@@ -213,15 +213,15 @@ spec:
 apiVersion: products.cloud.platform/v1
 kind: SlbInstance
 metadata:
-  name: sclb-cn-north-1-01-9a0b1c2d
+  name: eulb-cn-north-1-01-9a0b1c2d
   namespace: plat-slb
   labels:
     # All four are mandatory. Without them a cluster object cannot be
     # attributed to a tenant, which breaks isolation, billing and audit at once.
     cloud.platform/tenant: "100123"
     cloud.platform/project: "1"
-    cloud.platform/product: sclb
-    cloud.platform/instance: sclb-cn-north-1-01-9a0b1c2d
+    cloud.platform/product: eulb
+    cloud.platform/instance: eulb-cn-north-1-01-9a0b1c2d
   finalizers:
     # The Operator reclaims backing resources and pushes a FINAL metering
     # reading before removing this. "CR truly gone" is the release-complete
@@ -238,7 +238,7 @@ spec:
     listeners:
       - port: 443
         protocol: HTTPS
-    vpcId: scvpc-cn-north-1-01-11223344
+    vpcId: euvpc-cn-north-1-01-11223344
     backendServers:
       - address: 10.128.3.17
         port: 8080
@@ -275,4 +275,4 @@ status:
       windowStart: "2026-08-16T03:11:00Z"
       windowSeconds: 3600
   endpoints:
-    - "sclb-cn-north-1.starcloud.cn"
+    - "eulb-cn-north-1.euler.emoera.com"

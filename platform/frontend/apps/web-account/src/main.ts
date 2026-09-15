@@ -1,7 +1,7 @@
 /**
  * web-account — SSO account center (02§5, §1.2).
  * Dual-form: standalone site (account.*) + console sub-app. Detected via
- * @sc/wujie-bridge: in the sandbox it renders shell-less; standalone it
+ * @eu/wujie-bridge: in the sandbox it renders shell-less; standalone it
  * renders its own top bar. Auth endpoints hit the real svc-iam web-auth
  * service (vite proxy → :9101 in dev; APISIX → svc-iam in prod).
  */
@@ -9,8 +9,8 @@ import { createApp, type App as VueApp } from "vue";
 import { createPinia } from "pinia";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
-import "@sc/tokens/style.css";
-import "@sc/ui/style.css";
+import "@eu/tokens/style.css";
+import "@eu/ui/style.css";
 
 import App from "./App.vue";
 import { router } from "./router";
@@ -35,7 +35,7 @@ export async function unmount() {
 }
 
 // Standalone mode (02§6.6 degradation path): self-mount when not in sandbox.
-import { inWujieSandbox } from "@sc/wujie-bridge";
+import { inWujieSandbox } from "@eu/wujie-bridge";
 if (!inWujieSandbox()) {
   document.addEventListener("DOMContentLoaded", () => void mount());
 }

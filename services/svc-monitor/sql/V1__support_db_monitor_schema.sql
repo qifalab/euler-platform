@@ -35,7 +35,7 @@
 CREATE TABLE `alert_rule` (
   `rule_id`                  BIGINT UNSIGNED NOT NULL,
   `account_id`               BIGINT UNSIGNED NOT NULL COMMENT '分片键(≡uid≡user_id≡tenant_id)',
-  `product_code`             VARCHAR(32) NOT NULL COMMENT '产品代号: scecs 等',
+  `product_code`             VARCHAR(32) NOT NULL COMMENT '产品代号: euecs 等',
   `resource_type`            VARCHAR(32) NOT NULL COMMENT '资源类型: instance 等',
   `metric`                   VARCHAR(64) NOT NULL COMMENT '指标: cpu_utilization 等',
   `threshold`                DECIMAL(18,4) NOT NULL COMMENT '阈值;评估值≥/≤阈值触发',

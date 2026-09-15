@@ -7,7 +7,7 @@
 // over-collection is safe and a failed aggregation job can be re-run without
 // compensating logic.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST /api/v1/metering/ingest    — record a usage point (resourceId,
 //	                                 productCode, metric, value) for the
@@ -39,25 +39,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/anomaly"
-	"github.com/starcloud/sc-platform/billing"
-	"github.com/starcloud/sc-platform/metering"
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/anomaly"
+	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/metering"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // maxBodyBytes caps request bodies before JSON decoding (defense against
 // oversized payloads).
 const maxBodyBytes = 1 << 20 // 1 MiB
 
 // internalToken is the optional shared secret for service-to-service calls.
-// When SC_INTERNAL_TOKEN is set, every request must carry a matching
-// X-Sc-Internal-Token header. Unset (dev default) disables the check.
-var internalToken = os.Getenv("SC_INTERNAL_TOKEN")
+// When EULER_INTERNAL_TOKEN is set, every request must carry a matching
+// X-Euler-Internal-Token header. Unset (dev default) disables the check.
+var internalToken = os.Getenv("EULER_INTERNAL_TOKEN")
 
 // seededResourceID matches the demo + console-bff seed for account 100123.
-const seededResourceID = "scecs-cn-north-1-01-a1b2c3d4"
+const seededResourceID = "euecs-cn-north-1-01-a1b2c3d4"
 
 // meteringStore holds raw usage records keyed by (resourceID, meteringItem) so
 // aggregation can be re-run over the same data. Hourly aggregates are cached by
@@ -109,7 +109,7 @@ func newMeteringStore() *meteringStore {
 	return s
 }
 
-// seed plants the seeded scecs resource with a few hours of CPU usage for
+// seed plants the seeded euecs resource with a few hours of CPU usage for
 // account 100123. A 2-core instance reports 2 core-minutes per minute window,
 // i.e. 0.033333 core-hours per window. Three complete hours (60 windows each)
 // are seeded so the monthly bill has real rows and reconciles.
@@ -121,7 +121,7 @@ func (s *meteringStore) seed() {
 	s.accounts[seededResourceID] = acct
 	s.regions[seededResourceID] = "cn-north-1"
 	s.types[seededResourceID] = "ecs"
-	s.products[seededResourceID] = "scecs"
+	s.products[seededResourceID] = "euecs"
 
 	// Price snapshot frozen at order time (01§12.3 rule 4): cpu_core_hour @
 	// 0.25 CNY. Historical bills must be reproducible against the snapshot.
@@ -543,37 +543,37 @@ func (s *meteringStore) handleAnomalyScan(w http.ResponseWriter, r *http.Request
 
 // accountIDFrom extracts the caller's account id.
 //
-// TRUST BOUNDARY: X-Sc-Account-Id is trusted only because these routes are
+// TRUST BOUNDARY: X-Euler-Account-Id is trusted only because these routes are
 // reachable exclusively via the APISIX gateway, which strips any
 // client-supplied copy and injects the authenticated account. Deployments that
-// cannot guarantee that network isolation should set SC_INTERNAL_TOKEN so
-// callers must also present the shared X-Sc-Internal-Token secret.
+// cannot guarantee that network isolation should set EULER_INTERNAL_TOKEN so
+// callers must also present the shared X-Euler-Internal-Token secret.
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	if internalToken != "" && r.Header.Get("X-Sc-Internal-Token") != internalToken {
+	if internalToken != "" && r.Header.Get("X-Euler-Internal-Token") != internalToken {
 		writeErr(w, "Common.Forbidden", 403, "invalid internal token")
 		return 0, false
 	}
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -581,11 +581,11 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("metering-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }

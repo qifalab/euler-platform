@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/accesskey"
-	"github.com/starcloud/sc-platform/cps1"
-	"github.com/starcloud/sc-platform/kms"
+	"github.com/qifalab/euler-platform/accesskey"
+	"github.com/qifalab/euler-platform/cps1"
+	"github.com/qifalab/euler-platform/kms"
 )
 
 var testNow = time.Date(2026, 8, 4, 9, 30, 0, 0, time.UTC)
@@ -15,7 +15,7 @@ var testNow = time.Date(2026, 8, 4, 9, 30, 0, 0, time.UTC)
 const (
 	testRegion  = "cn-north-1"
 	testService = "ecs"
-	testHost    = "scecs.api.starcloud.cn"
+	testHost    = "euecs.api.euler.emoera.com"
 )
 
 // --- test doubles ---

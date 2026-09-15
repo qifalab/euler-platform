@@ -1,8 +1,8 @@
 {
-  "name": "starcloud-frontend",
+  "name": "euler-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "StarCloud phase-1 frontend: shared @sc/* packages, Wujie micro-frontend base, console sub-apps, marketing portal.",
+  "description": "Euler phase-1 frontend: shared @eu/* packages, Wujie micro-frontend base, console sub-apps, marketing portal.",
   "license": "UNLICENSED",
   "packageManager": "pnpm@11.21.0",
   "engines": {

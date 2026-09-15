@@ -6,8 +6,8 @@
  */
 import { ref, onMounted } from "vue";
 import { ElButton, ElMessage } from "element-plus";
-import { PageHeader, StatusBadge } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
+import { PageHeader, StatusBadge } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
 
 const sdk = createSDK({ baseURL: "" });
 
@@ -44,11 +44,11 @@ async function simulate() {
   try {
     const stamp = Date.now().toString(36);
     await sdk.post("/api/v1/alertcenter/ingest", {
-      alertId: `sim-${stamp}-a`, product: "scecs", metric: "cpu_utilization",
+      alertId: `sim-${stamp}-a`, product: "euecs", metric: "cpu_utilization",
       severity: "warning", labels: { instance: "i-demo-1", region: "cn-north-1" },
     });
     await sdk.post("/api/v1/alertcenter/ingest", {
-      alertId: `sim-${stamp}-b`, product: "scecs", metric: "cpu_utilization",
+      alertId: `sim-${stamp}-b`, product: "euecs", metric: "cpu_utilization",
       severity: "warning", labels: { instance: "i-demo-1", region: "cn-north-1" },
     });
     const res = await sdk.post<{ notifications: NotificationDTO[] }>("/api/v1/alertcenter/flush");
@@ -102,24 +102,24 @@ onMounted(() => void load());
 
 <style scoped>
 .alert-center { padding: 0; }
-.ac-hint { color: var(--sc-text-secondary); font-size: 13px; margin: 0 0 12px; }
+.ac-hint { color: var(--eu-text-secondary); font-size: 13px; margin: 0 0 12px; }
 .ac-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
 .ac-table { width: 100%; border-collapse: collapse; background: transparent; }
-.ac-table th, .ac-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--sc-border); }
-.ac-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.ac-table td { font-size: 13px; color: var(--sc-text-primary); }
-.ac-table tbody tr { transition: background var(--sc-transition); }
-.ac-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.ac-table th, .ac-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--eu-border); }
+.ac-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.ac-table td { font-size: 13px; color: var(--eu-text-primary); }
+.ac-table tbody tr { transition: background var(--eu-transition); }
+.ac-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .ac-table tbody tr:last-child td { border-bottom: none; }
-.ac-id { font-family: var(--sc-font-family-mono, monospace); }
-.ac-error, .ac-loading, .ac-empty { color: var(--sc-text-secondary); padding: 24px; }
-.ac-error { color: var(--sc-color-danger); }
+.ac-id { font-family: var(--eu-font-family-mono, monospace); }
+.ac-error, .ac-loading, .ac-empty { color: var(--eu-text-secondary); padding: 24px; }
+.ac-error { color: var(--eu-color-danger); }
 </style>

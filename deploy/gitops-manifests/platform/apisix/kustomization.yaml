@@ -1,6 +1,6 @@
 # Kustomize entry for the APISIX gateway stack.
 #
-# The apisix-config and apisix-sc-plugins ConfigMaps are GENERATED from the
+# The apisix-config and apisix-eu-plugins ConfigMaps are GENERATED from the
 # real source files (config/config.yaml, plugins/*.lua) so the mounted config
 # can never drift from the reviewed sources. Name-suffix hashing is disabled
 # because the Deployments reference the ConfigMaps by fixed name.
@@ -17,8 +17,8 @@ configMapGenerator:
   - name: apisix-config
     files:
       - config.yaml=config/config.yaml
-  - name: apisix-sc-plugins
+  - name: apisix-eu-plugins
     files:
-      - sc-auth.lua=plugins/sc-auth.lua
-      - sc-authorize.lua=plugins/sc-authorize.lua
-      - sc-audit.lua=plugins/sc-audit.lua
+      - eu-auth.lua=plugins/eu-auth.lua
+      - eu-authorize.lua=plugins/eu-authorize.lua
+      - eu-audit.lua=plugins/eu-audit.lua

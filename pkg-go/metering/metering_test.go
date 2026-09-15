@@ -19,11 +19,11 @@ func newAgg() *Aggregator {
 func record(minute int, qty string) UsageRecord {
 	ws := hour.Add(time.Duration(minute) * time.Minute)
 	return UsageRecord{
-		RecordID:      RecordID("scecs-cn-north-1-01-a1b2c3d4", "cpu_core_hour", ws),
+		RecordID:      RecordID("euecs-cn-north-1-01-a1b2c3d4", "cpu_core_hour", ws),
 		AccountID:     100123,
 		Region:        "cn-north-1",
 		ResourceType:  "ecs",
-		ResourceID:    "scecs-cn-north-1-01-a1b2c3d4",
+		ResourceID:    "euecs-cn-north-1-01-a1b2c3d4",
 		MeteringItem:  "cpu_core_hour",
 		Quantity:      MustParseQuantity(qty),
 		WindowStart:   ws,
@@ -199,7 +199,7 @@ func TestMixedResourcesRejected(t *testing.T) {
 	a := newAgg()
 	records := []UsageRecord{record(0, "1")}
 	other := record(1, "1")
-	other.ResourceID = "scecs-cn-north-1-01-99999999"
+	other.ResourceID = "euecs-cn-north-1-01-99999999"
 	records = append(records, other)
 
 	if _, err := a.Aggregate(records, hour); !errors.Is(err, ErrMixedResource) {
@@ -344,7 +344,7 @@ func TestReconcileThresholds(t *testing.T) {
 // resource that ran but produced no metering data at all. No amount of
 // within-pipeline checking would find it, because the pipeline never saw it.
 func TestReconcileCatchesUnmeteredResource(t *testing.T) {
-	got := Reconcile("scecs-cn-north-1-01-a1b2c3d4", 24, 0)
+	got := Reconcile("euecs-cn-north-1-01-a1b2c3d4", 24, 0)
 	if !got.NeedsAlert {
 		t.Fatal("a resource that ran 24h with zero metering must alert")
 	}

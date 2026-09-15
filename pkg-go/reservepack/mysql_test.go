@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // newSQLTestLedger builds the pack ledger on the real MySQL store, with the same
@@ -40,7 +40,7 @@ func TestSQLStorePackLifecycle(t *testing.T) {
 		t.Fatalf("absent pack: ok=%v err=%v, want false/nil", ok, err)
 	}
 
-	pack, _, err := l.Purchase("pk-life", sqlAcct, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1")
+	pack, _, err := l.Purchase("pk-life", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestSQLStorePackLifecycle(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get purchased pack: ok=%v err=%v", ok, err)
 	}
-	if got.AccountID != sqlAcct || got.ProductCode != "scecs" || got.SKUCode != "scecs.pack" {
+	if got.AccountID != sqlAcct || got.ProductCode != "euecs" || got.SKUCode != "euecs.pack" {
 		t.Fatalf("pack fields lost in the round trip: %+v", got)
 	}
 	if got.FaceValue.String() != "1000" || got.Remaining.String() != "1000" || got.Version != 1 {
@@ -71,7 +71,7 @@ func TestSQLStorePackLifecycle(t *testing.T) {
 	}
 
 	// A consume that runs the pack dry flips it to the EXHAUSTED terminal state.
-	pack, entry, shortfall, err := l.Consume("pk-life", "scecs", yuan("1000"), "chg-1", "consume-1")
+	pack, entry, shortfall, err := l.Consume("pk-life", "euecs", yuan("1000"), "chg-1", "consume-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestSQLStorePackLifecycle(t *testing.T) {
 func TestSQLStoreExpireAtNullMeansNoExpiry(t *testing.T) {
 	l, store := newSQLTestLedger(t)
 
-	if _, _, err := l.Purchase("pk-noexp", sqlAcct, "scecs", "scecs.pack", yuan("10"), time.Time{}, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-noexp", sqlAcct, "euecs", "euecs.pack", yuan("10"), time.Time{}, "ord-1"); err != nil {
 		t.Fatal(err)
 	}
 	pack, ok, err := store.GetPack("pk-noexp")
@@ -125,7 +125,7 @@ func TestSQLStoreRoundTripsMicroPrecision(t *testing.T) {
 
 	// DECIMAL(18,6) matches pricing.Amount's micro-unit scale exactly; a
 	// truncated digit here would be invisible until an invoice did not add up.
-	if _, _, err := l.Purchase("pk-micro", sqlAcct, "", "scecs.pack", yuan("0.000001"), testNow.Add(time.Hour), "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-micro", sqlAcct, "", "euecs.pack", yuan("0.000001"), testNow.Add(time.Hour), "ord-1"); err != nil {
 		t.Fatal(err)
 	}
 	pack, _, err := store.GetPack("pk-micro")
@@ -140,7 +140,7 @@ func TestSQLStoreRoundTripsMicroPrecision(t *testing.T) {
 func TestSQLStoreApplyReportsVersionConflict(t *testing.T) {
 	l, store := newSQLTestLedger(t)
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-race", sqlAcct, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-race", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatal(err)
 	}
 	pack, _, err := store.GetPack("pk-race")
@@ -196,10 +196,10 @@ func TestSQLStoreApplyReportsMissingPack(t *testing.T) {
 func TestSQLStoreDuplicateIdempotencyKeyIsRejected(t *testing.T) {
 	l, store := newSQLTestLedger(t)
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-dup", sqlAcct, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-dup", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := l.Consume("pk-dup", "scecs", yuan("100"), "chg-1", "consume-x"); err != nil {
+	if _, _, _, err := l.Consume("pk-dup", "euecs", yuan("100"), "chg-1", "consume-x"); err != nil {
 		t.Fatal(err)
 	}
 	pack, _, err := store.GetPack("pk-dup")
@@ -242,7 +242,7 @@ func TestSQLStoreDuplicateIdempotencyKeyIsRejected(t *testing.T) {
 func TestSQLStoreApplyIsAtomic(t *testing.T) {
 	l, store := newSQLTestLedger(t)
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-atomic", sqlAcct, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-atomic", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatal(err)
 	}
 	pack, _, err := store.GetPack("pk-atomic")
@@ -332,7 +332,7 @@ func TestSQLStoreConcurrentConsumeCannotOverspend(t *testing.T) {
 		perConsume = "100"
 		goroutines = 20
 	)
-	if _, _, err := l.Purchase("pk-contend", sqlAcct, "scecs", "scecs.pack", yuan(face), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-contend", sqlAcct, "euecs", "euecs.pack", yuan(face), expire, "ord-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -341,7 +341,7 @@ func TestSQLStoreConcurrentConsumeCannotOverspend(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, _, _, err := l.Consume("pk-contend", "scecs", yuan(perConsume), "chg-1", fmt.Sprintf("consume-%d", i))
+			_, _, _, err := l.Consume("pk-contend", "euecs", yuan(perConsume), "chg-1", fmt.Sprintf("consume-%d", i))
 			switch {
 			case err == nil,
 				errors.Is(err, ErrInsufficientQuota),
@@ -457,19 +457,19 @@ func TestSQLStoreParityWithMemoryStore(t *testing.T) {
 	}
 	steps := []step{
 		{"purchase", func(l *Ledger) error {
-			_, _, err := l.Purchase("pk-p", sqlAcct, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1")
+			_, _, err := l.Purchase("pk-p", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1")
 			return err
 		}},
 		{"purchase-replay", func(l *Ledger) error {
-			_, _, err := l.Purchase("pk-p", sqlAcct, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1")
+			_, _, err := l.Purchase("pk-p", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1")
 			return err
 		}},
 		{"consume-partial", func(l *Ledger) error {
-			_, _, _, err := l.Consume("pk-p", "scecs", yuan("400"), "chg-1", "consume-1")
+			_, _, _, err := l.Consume("pk-p", "euecs", yuan("400"), "chg-1", "consume-1")
 			return err
 		}},
 		{"consume-wrong-product", func(l *Ledger) error {
-			_, _, _, err := l.Consume("pk-p", "scoss", yuan("100"), "chg-2", "consume-2")
+			_, _, _, err := l.Consume("pk-p", "euoss", yuan("100"), "chg-2", "consume-2")
 			return err
 		}},
 		{"refund", func(l *Ledger) error {
@@ -477,7 +477,7 @@ func TestSQLStoreParityWithMemoryStore(t *testing.T) {
 			return err
 		}},
 		{"consume-rest", func(l *Ledger) error {
-			_, _, _, err := l.Consume("pk-p", "scecs", yuan("700"), "chg-3", "consume-3")
+			_, _, _, err := l.Consume("pk-p", "euecs", yuan("700"), "chg-3", "consume-3")
 			return err
 		}},
 	}

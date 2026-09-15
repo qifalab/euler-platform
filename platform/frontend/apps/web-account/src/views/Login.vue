@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Login page (02§5.1, §5.2). account.starcloud.cn is the SSO-only auth domain.
+ * Login page (02§5.1, §5.2). account.euler.emoera.com is the SSO-only auth domain.
  * On success: writes token to the account store + broadcasts to the parent
  * shell via the bridge, then redirects to the console (or ?redirect target).
  */
@@ -99,43 +99,43 @@ async function onSubmit() {
 </template>
 
 <style scoped>
-.login-page { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - var(--sc-topbar-height)); padding: var(--sc-spacing-6); }
+.login-page { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - var(--eu-topbar-height)); padding: var(--eu-spacing-6); }
 .login-card {
-  background: var(--sc-glass-bg);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-xl);
-  box-shadow: var(--sc-glass-shadow);
+  background: var(--eu-glass-bg);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-xl);
+  box-shadow: var(--eu-glass-shadow);
   padding: 40px;
   width: 100%;
   max-width: 400px;
 }
-.login-title { font-size: 24px; margin: 0 0 var(--sc-spacing-2); text-align: center; color: var(--sc-text-primary); }
-.login-sub { font-size: 13px; color: var(--sc-text-secondary); text-align: center; margin: 0 0 var(--sc-spacing-7); }
-.login-form { display: flex; flex-direction: column; gap: var(--sc-spacing-4); }
-.login-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--sc-text-secondary); }
+.login-title { font-size: 24px; margin: 0 0 var(--eu-spacing-2); text-align: center; color: var(--eu-text-primary); }
+.login-sub { font-size: 13px; color: var(--eu-text-secondary); text-align: center; margin: 0 0 var(--eu-spacing-7); }
+.login-form { display: flex; flex-direction: column; gap: var(--eu-spacing-4); }
+.login-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--eu-text-secondary); }
 .login-field input {
   padding: 10px 12px;
-  background: var(--sc-bg-container);
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-md);
+  background: var(--eu-bg-container);
+  border: 1px solid var(--eu-border);
+  border-radius: var(--eu-radius-md);
   font-size: 14px;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
   outline: none;
-  transition: border-color var(--sc-transition), box-shadow var(--sc-transition);
+  transition: border-color var(--eu-transition), box-shadow var(--eu-transition);
 }
-.login-field input:focus { border-color: var(--sc-color-brand); box-shadow: 0 0 0 3px var(--sc-color-brand-soft); }
-.login-error { color: var(--sc-color-danger); font-size: 13px; margin: 0; }
+.login-field input:focus { border-color: var(--eu-color-brand); box-shadow: 0 0 0 3px var(--eu-color-brand-soft); }
+.login-error { color: var(--eu-color-danger); font-size: 13px; margin: 0; }
 .login-btn {
-  padding: 11px; border: none; border-radius: var(--sc-radius-md);
-  background: var(--sc-color-brand); color: var(--sc-text-on-brand); font-size: 14px;
-  cursor: pointer; margin-top: var(--sc-spacing-2);
-  transition: background var(--sc-transition);
+  padding: 11px; border: none; border-radius: var(--eu-radius-md);
+  background: var(--eu-color-brand); color: var(--eu-text-on-brand); font-size: 14px;
+  cursor: pointer; margin-top: var(--eu-spacing-2);
+  transition: background var(--eu-transition);
 }
-.login-btn:hover { background: var(--sc-color-brand-hover); }
+.login-btn:hover { background: var(--eu-color-brand-hover); }
 .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.login-links { display: flex; justify-content: space-between; margin-top: var(--sc-spacing-6); }
-.login-links a { color: var(--sc-color-brand); text-decoration: none; font-size: 13px; }
-.login-hint { margin: var(--sc-spacing-6) 0 0; padding: var(--sc-spacing-2) var(--sc-spacing-3); background: var(--sc-color-brand-soft); border-radius: var(--sc-radius-sm); font-size: 12px; color: var(--sc-text-secondary); text-align: center; }
+.login-links { display: flex; justify-content: space-between; margin-top: var(--eu-spacing-6); }
+.login-links a { color: var(--eu-color-brand); text-decoration: none; font-size: 13px; }
+.login-hint { margin: var(--eu-spacing-6) 0 0; padding: var(--eu-spacing-2) var(--eu-spacing-3); background: var(--eu-color-brand-soft); border-radius: var(--eu-radius-sm); font-size: 12px; color: var(--eu-text-secondary); text-align: center; }
 </style>

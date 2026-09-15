@@ -54,7 +54,7 @@ const (
 
 // Definition is a quota rule (quota_definition).
 type Definition struct {
-	QuotaCode    string // quota_scecs_instance
+	QuotaCode    string // quota_euecs_instance
 	ProductCode  string
 	DefaultValue int
 	Scope        Scope

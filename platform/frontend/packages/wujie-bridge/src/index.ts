@@ -1,5 +1,5 @@
 /**
- * @sc/wujie-bridge — micro-frontend communication bridge (02§5.4/6.4).
+ * @eu/wujie-bridge — micro-frontend communication bridge (02§5.4/6.4).
  *
  * Wraps the raw Wujie bus so callers depend on a stable, typed API rather than
  * the global `window.$wujie`. Handles three concerns:

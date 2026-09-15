@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Register page (02§5.1). account.starcloud.cn public signup route.
+ * Register page (02§5.1). account.euler.emoera.com public signup route.
  * Collects email/phone + password, validates confirmation match and the
  * service-agreement consent, then on success shows a success toast and
  * redirects to /realname to complete identity verification.
@@ -178,16 +178,16 @@ async function onSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - var(--sc-topbar-height));
-  padding: var(--sc-spacing-6);
+  min-height: calc(100vh - var(--eu-topbar-height));
+  padding: var(--eu-spacing-6);
 }
 .register-card {
-  background: var(--sc-glass-bg);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-xl);
-  box-shadow: var(--sc-glass-shadow);
+  background: var(--eu-glass-bg);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-xl);
+  box-shadow: var(--eu-glass-shadow);
   padding: 40px;
   width: 100%;
   max-width: 440px;
@@ -196,49 +196,49 @@ async function onSubmit() {
   font-size: 24px;
   margin: 0 0 8px;
   text-align: center;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .register-sub {
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-secondary);
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-secondary);
   text-align: center;
-  margin: 0 0 var(--sc-spacing-7);
+  margin: 0 0 var(--eu-spacing-7);
 }
 .register-form :deep(.el-form-item) {
-  margin-bottom: var(--sc-spacing-4);
+  margin-bottom: var(--eu-spacing-4);
 }
 .register-form :deep(.el-form-item__label) {
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-secondary);
-  padding-bottom: var(--sc-spacing-1);
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-secondary);
+  padding-bottom: var(--eu-spacing-1);
 }
 .register-form :deep(.el-input__wrapper) {
-  border-radius: var(--sc-radius-sm);
+  border-radius: var(--eu-radius-sm);
 }
 .register-agree :deep(.el-form-item__content) {
   line-height: 1.6;
 }
 .register-link-inline {
-  color: var(--sc-color-brand);
+  color: var(--eu-color-brand);
   text-decoration: none;
 }
 .register-link-inline:hover {
-  color: var(--sc-color-brand-hover);
+  color: var(--eu-color-brand-hover);
 }
 .register-btn {
   width: 100%;
-  margin-top: var(--sc-spacing-2);
+  margin-top: var(--eu-spacing-2);
 }
 .register-links {
-  margin-top: var(--sc-spacing-6);
+  margin-top: var(--eu-spacing-6);
   text-align: center;
 }
 .register-links a {
-  color: var(--sc-color-brand);
+  color: var(--eu-color-brand);
   text-decoration: none;
-  font-size: var(--sc-font-size-sm);
+  font-size: var(--eu-font-size-sm);
 }
 .register-links a:hover {
-  color: var(--sc-color-brand-hover);
+  color: var(--eu-color-brand-hover);
 }
 </style>

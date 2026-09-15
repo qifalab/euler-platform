@@ -1,11 +1,11 @@
 /**
- * Vitest tests for @sc/sdk createSDK client (co-located, auto-discovered).
+ * Vitest tests for @eu/sdk createSDK client (co-located, auto-discovered).
  *
  * Covers the five load-bearing behaviors of the unified request client:
  *   1. Platform envelope unwrapping ({Code,Data} → Data passed through)
  *   2. 401 single-flight refresh: refresh called once, replayed with new token,
  *      Authorization header updated on the replayed request
- *   3. Non-OK status throws ScError with code/message/requestId/status
+ *   3. Non-OK status throws EuError with code/message/requestId/status
  *   4. X-Requested-With header always set (CSRF double-submit, 02§5.1)
  *   5. Token injection: getToken() → Authorization: Bearer
  *
@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createSDK, yuanToMinor } from "./index";
-import type { ScError } from "./index";
+import type { EuError } from "./index";
 
 /** Build a JSON Response whose body will be res.json(). */
 function jsonResponse(body: unknown, init: { status?: number; requestId?: string } = {}): Response {
@@ -145,7 +145,7 @@ describe("createSDK — 401 silent refresh + replay", () => {
 
     const sdk = createSDK({ onUnauthorized });
 
-    // Second 401 has retries:0 → no further refresh, surfaces as ScError.
+    // Second 401 has retries:0 → no further refresh, surfaces as EuError.
     await expect(sdk.get("/guarded")).rejects.toThrow();
 
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
@@ -163,7 +163,7 @@ describe("createSDK — 401 silent refresh + replay", () => {
 
     const sdk = createSDK({ onUnauthorized });
 
-    // No fresh token → 401 surfaces as a structured ScError (toError reads
+    // No fresh token → 401 surfaces as a structured EuError (toError reads
     // lowercase code/message from the body, falling back to HTTP_<status>).
     await expect(sdk.get("/no-token")).rejects.toMatchObject({
       code: "UNAUTHORIZED",
@@ -176,7 +176,7 @@ describe("createSDK — 401 silent refresh + replay", () => {
 });
 
 describe("createSDK — structured error model (non-OK)", () => {
-  it("throws an ScError carrying code, message, requestId, detailUrl, and status", async () => {
+  it("throws an EuError carrying code, message, requestId, detailUrl, and status", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(
         {
@@ -185,7 +185,7 @@ describe("createSDK — structured error model (non-OK)", () => {
           code: "QUOTA_EXCEEDED",
           message: "disk quota exceeded",
           requestId: "req-from-body",
-          detailUrl: "https://docs.starcloud.cn/errors/quota",
+          detailUrl: "https://docs.euler.emoera.com/errors/quota",
         },
         { status: 402 },
       ),
@@ -201,12 +201,12 @@ describe("createSDK — structured error model (non-OK)", () => {
       caught = e;
     }
 
-    const err = caught as ScError;
+    const err = caught as EuError;
     expect(err).toBeInstanceOf(Error);
     expect(err.code).toBe("QUOTA_EXCEEDED");
     expect(err.message).toBe("disk quota exceeded");
     expect(err.requestId).toBe("req-from-body");
-    expect(err.detailUrl).toBe("https://docs.starcloud.cn/errors/quota");
+    expect(err.detailUrl).toBe("https://docs.euler.emoera.com/errors/quota");
     expect(err.status).toBe(402);
   });
 
@@ -239,7 +239,7 @@ describe("createSDK — structured error model (non-OK)", () => {
     await expect(sdk.get("/secret")).rejects.toThrow("no access");
     expect(onError).toHaveBeenCalledTimes(1);
 
-    const reported = onError.mock.calls[0][0] as ScError;
+    const reported = onError.mock.calls[0][0] as EuError;
     expect(reported.code).toBe("FORBIDDEN");
     expect(reported.status).toBe(403);
   });
@@ -328,11 +328,11 @@ describe("createSDK — token injection into Authorization", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const sdk = createSDK({ baseURL: "https://api.starcloud.cn" });
+    const sdk = createSDK({ baseURL: "https://api.euler.emoera.com" });
     await sdk.get("/v1/clusters");
 
     const url = fetchMock.mock.calls[0][0] as string;
-    expect(url).toBe("https://api.starcloud.cn/v1/clusters");
+    expect(url).toBe("https://api.euler.emoera.com/v1/clusters");
   });
 });
 

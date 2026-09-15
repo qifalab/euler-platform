@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // checkpoint is one tenant's persisted chain head.
@@ -82,7 +82,7 @@ func (r *sqlCheckpointRepo) LoadAll(ctx context.Context) ([]checkpoint, error) {
 }
 
 // newCheckpointRepo picks the backend. Persistence is opt-in (pkg-go/storage
-// doc): with SC_DB_DSN set, chain heads live in support_db and a restarted
+// doc): with EULER_DB_DSN set, chain heads live in support_db and a restarted
 // svc-audit continues every tenant's chain; unset, chains start at genesis in
 // memory and `go test` stays dependency-free.
 //

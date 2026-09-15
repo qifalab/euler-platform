@@ -59,7 +59,7 @@ also sheds load under attack:
 3. STS token validity — when `x-cps-security-token` is present
 4. Signature recomputation — constant-time compare
 5. Nonce dedup — Redis `SET NX`, TTL 16 min
-6. Identity injection — `X-Sc-Account-Id` / `X-Sc-Identity` / `X-Sc-TraceId`
+6. Identity injection — `X-Euler-Account-Id` / `X-Euler-Identity` / `X-Euler-TraceId`
 
 Nonce dedup deliberately follows signature verification: an attacker must forge
 a valid signature before they can consume nonce-store capacity.
@@ -70,7 +70,7 @@ unreachable replay store means the request cannot be proven fresh.
 ## Scope binding
 
 `region` and `service` are resolved by the gateway from the routed product
-subdomain (`{productCode}.api.starcloud.cn`), never from client input. They
+subdomain (`{productCode}.api.euler.emoera.com`), never from client input. They
 participate in the derived signing key, so a signature scoped to one service
 cannot be replayed against another. `TestVerifyRejectsWrongScope` covers this.
 

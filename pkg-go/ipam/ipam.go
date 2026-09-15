@@ -1,11 +1,11 @@
-// Package ipam implements the address-management engine behind SCVPC's subnet
-// CIDR planning and per-subnet IP allocation (01-product-catalog.md §6 SCVPC
+// Package ipam implements the address-management engine behind EUVPC's subnet
+// CIDR planning and per-subnet IP allocation (01-product-catalog.md §6 EUVPC
 // "VPC/子网/路由表 CRUD、安全组、ECS 网卡接入、CIDR 规划"; 09-roadmap §3.2 D-02
 // 二期"专有网络 VPC 进阶特性"; 06-kubernetes-productization.md §2.4.1 网络平面).
 //
 // # What phase 1 shipped vs what this package adds
 //
-// Phase 1 delivered SCVPC as VPC/subnet CRUD on the K8s network model
+// Phase 1 delivered EUVPC as VPC/subnet CRUD on the K8s network model
 // (D-02: Calico + NetworkPolicy 承载隔离), with resource models already
 // carrying vpc_id placeholder fields. The phase-2 VPC 进阶特性 turns that
 // scaffolding into product semantics, and the first semantic that must be
@@ -198,7 +198,7 @@ func fromU32(v uint32) netip.Addr {
 // SubnetAllocator hands out non-overlapping subnet CIDRs from one VPC block.
 //
 // It is the only component allowed to decide subnet addresses: controllers
-// and the SCVPC API both ask it (Allocate for platform-chosen blocks,
+// and the EUVPC API both ask it (Allocate for platform-chosen blocks,
 // Reserve for customer-specified ones) so every write passes the same
 // overlap check.
 type SubnetAllocator struct {

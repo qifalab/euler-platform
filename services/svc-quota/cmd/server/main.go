@@ -9,7 +9,7 @@
 // built around: in-flight reservations count against the limit, so two
 // concurrent orders cannot both claim the last slot.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST /api/v1/quota/occupy  — two-phase reserve (body: productCode, resourceType, count)
 //	POST /api/v1/quota/release — release a reservation (body: reservationId)
@@ -34,13 +34,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/quota"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/quota"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // accountIDHeader is injected by the API gateway after authentication (see
 // TRUST NOTE in accountIDFrom).
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // maxBodyBytes caps JSON request bodies.
 const maxBodyBytes = 1 << 20 // 1 MiB
@@ -48,7 +48,7 @@ const maxBodyBytes = 1 << 20 // 1 MiB
 // quotaStore is the service's quota persistence facade: it owns the two pieces of
 // state that are process-local by design (the client-idempotency map and the
 // token-id sequence) and delegates everything else to backend — quota.SQLStore
-// against support_db when SC_DB_DSN is set, memQuotaStore otherwise.
+// against support_db when EULER_DB_DSN is set, memQuotaStore otherwise.
 //
 // The handlers pass the facade itself to quota.NewManager, so the two-phase
 // protocol is wired identically with and without persistence.
@@ -72,7 +72,7 @@ type quotaStore struct {
 }
 
 // newQuotaStore wires the persistence backend. Persistence is opt-in
-// (pkg-go/storage doc): with SC_DB_DSN set, definitions, usage counters and
+// (pkg-go/storage doc): with EULER_DB_DSN set, definitions, usage counters and
 // reservation tokens live in support_db, so a restart keeps both the counters and
 // the in-flight reservations. Unset, the demo store is used.
 //
@@ -107,7 +107,7 @@ func newQuotaStore(ctx context.Context) (*quotaStore, error) {
 
 // newInMemoryQuotaStore builds the demo store: in-memory backend, local token-id
 // counter, seeded definitions. Handler tests construct it directly, so they never
-// depend on whether the developer's shell has SC_DB_DSN set.
+// depend on whether the developer's shell has EULER_DB_DSN set.
 func newInMemoryQuotaStore() *quotaStore {
 	mem := newMemQuotaStore()
 	return &quotaStore{
@@ -174,21 +174,21 @@ func (s *memQuotaStore) nextTokenID() string {
 }
 
 func (s *memQuotaStore) seed() {
-	// Seed the scecs-instance quota definition (limit 20, region-scoped) and a
+	// Seed the euecs-instance quota definition (limit 20, region-scoped) and a
 	// pre-seeded usage row for account 100123 so GET /usage returns the real
 	// shape before any occupy.
-	s.defs["quota_scecs_instance"] = quota.Definition{
-		QuotaCode:    "quota_scecs_instance",
-		ProductCode:  "scecs",
+	s.defs["quota_euecs_instance"] = quota.Definition{
+		QuotaCode:    "quota_euecs_instance",
+		ProductCode:  "euecs",
 		DefaultValue: 20,
 		Scope:        quota.ScopeRegion,
 		Adjustable:   true,
 	}
 	// Global-scope definition too, so the productCode→quotaCode path is real for
-	// scoss buckets as well (and to demonstrate scope handling).
-	s.defs["quota_scoss_bucket"] = quota.Definition{
-		QuotaCode:    "quota_scoss_bucket",
-		ProductCode:  "scoss",
+	// euoss buckets as well (and to demonstrate scope handling).
+	s.defs["quota_euoss_bucket"] = quota.Definition{
+		QuotaCode:    "quota_euoss_bucket",
+		ProductCode:  "euoss",
 		DefaultValue: 100,
 		Scope:        quota.ScopeGlobal,
 	}
@@ -196,8 +196,8 @@ func (s *memQuotaStore) seed() {
 	// CheckAndOccupy would lazily create this on first reserve from the
 	// definition; seeding it makes the usage endpoint return real data before
 	// any reservation exists, matching the console-bff seed for account 100123.
-	s.usage[usageKey(100123, "quota_scecs_instance", "cn-north-1")] = quota.Usage{
-		AccountID: 100123, QuotaCode: "quota_scecs_instance", Region: "cn-north-1",
+	s.usage[usageKey(100123, "quota_euecs_instance", "cn-north-1")] = quota.Usage{
+		AccountID: 100123, QuotaCode: "quota_euecs_instance", Region: "cn-north-1",
 		Used: 0, Occupying: 0, HardLimit: 20, Version: 0,
 	}
 }
@@ -282,13 +282,13 @@ func (s *memQuotaStore) ListExpiredTokens(now time.Time) ([]quota.Token, error) 
 
 // quotaCodeFor maps a productCode to its quota code. Each product has exactly
 // one primary resource-count quota; this mapping is what turns a provisioning
-// request ("reserve 3 scecs instances") into a quota code.
+// request ("reserve 3 euecs instances") into a quota code.
 func quotaCodeFor(productCode string) string {
 	switch productCode {
-	case "scecs":
-		return "quota_scecs_instance"
-	case "scoss":
-		return "quota_scoss_bucket"
+	case "euecs":
+		return "quota_euecs_instance"
+	case "euoss":
+		return "quota_euoss_bucket"
 	default:
 		return "quota_" + productCode + "_instance"
 	}
@@ -448,7 +448,7 @@ func (s *quotaStore) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	productCode := r.URL.Query().Get("productCode")
 	if productCode == "" {
-		productCode = "scecs"
+		productCode = "euecs"
 	}
 	region := r.URL.Query().Get("region")
 	if region == "" {
@@ -478,30 +478,30 @@ func (s *quotaStore) handleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+	// TRUST NOTE: X-Euler-Account-Id is injected by the API gateway after
 	// authentication; this service relies on network isolation (and optionally
 	// internalTokenMiddleware) rather than re-authenticating.
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -509,26 +509,26 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("quota-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }
 
 // internalTokenMiddleware optionally enforces an internal shared secret: when
-// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
-// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
-// X-Sc-Account-Id trust). Unset (dev default) = no check.
+// the EULER_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Euler-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Euler-Account-Id trust). Unset (dev default) = no check.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Sc-Internal-Token") != token {
+		if r.Header.Get("X-Euler-Internal-Token") != token {
 			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
 			return
 		}

@@ -12,7 +12,7 @@
 //
 // This is the model先行 principle: the policy and its semantics are defined
 // and testable now, before the executor exists, so the catalogue can register
-// scbackup (M-7.4) against a frozen contract rather than against an executor
+// eubackup (M-7.4) against a frozen contract rather than against an executor
 // that is still being built.
 //
 // # Retention is enforced, never unbounded

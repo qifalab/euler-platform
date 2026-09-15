@@ -11,12 +11,12 @@
 import { createApp, type App as VueApp } from "vue";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
-import "@sc/tokens/style.css";
-import "@sc/ui/style.css";
-import "@sc/console-kit/style.css";
+import "@eu/tokens/style.css";
+import "@eu/ui/style.css";
+import "@eu/console-kit/style.css";
 import App from "./App.vue";
 import { router } from "./router";
-import { inWujieSandbox, readSharedProps } from "@sc/wujie-bridge";
+import { inWujieSandbox, readSharedProps } from "@eu/wujie-bridge";
 
 let app: VueApp | null = null;
 
@@ -30,7 +30,7 @@ export async function mount(el: HTMLElement | string) {
   app.use(router);
 
   const props = readSharedProps();
-  app.provide("sc:props", props);
+  app.provide("eu:props", props);
 
   app.mount(root);
 }

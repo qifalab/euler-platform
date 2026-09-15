@@ -1,6 +1,6 @@
-# cloudsdk — StarCloud Python SDK (M-5.2)
+# cloudsdk — Euler Python SDK (M-5.2)
 
-The Python entry point for calling StarCloud product APIs from off-platform code,
+The Python entry point for calling Euler product APIs from off-platform code,
 the way the published `cloudsdk-{product}-python` packages wrap.
 
 ## Single signing contract (03§9.4 rule ⑤)
@@ -19,9 +19,9 @@ body surfaces an `ApiError` carrying the business code and HTTP status.
 ```python
 from cloudsdk import Client, Config, ApiRequest
 
-client = Client(Config(ak="SC...", sk="...", region="cn-north-1"))
+client = Client(Config(ak="EU...", sk="...", region="cn-north-1"))
 resp = client.call(ApiRequest(
-    product_code="scecs", method="POST", path="/",
+    product_code="euecs", method="POST", path="/",
     query={"Action": "RunInstances", "Version": "2026-08-01"},
     body=b'{"ImageId":"img-001","InstanceType":"s2.large"}',
 ))

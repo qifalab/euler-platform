@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // Buying a resource pack must collect its price. The endpoint is reachable
@@ -18,7 +18,7 @@ func TestReservePackPurchaseIsPaidFor(t *testing.T) {
 	buy := func(orderKey string) *httptest.ResponseRecorder {
 		t.Helper()
 		return doReq(t, a.handleReservePacks, http.MethodPost, "/internal/reservepacks", acct, map[string]any{
-			"packId": "pk-1", "productCode": "scecs", "skuCode": "scecs.pack",
+			"packId": "pk-1", "productCode": "euecs", "skuCode": "euecs.pack",
 			"faceValue": "50", "orderKey": orderKey,
 		})
 	}

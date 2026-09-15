@@ -10,8 +10,8 @@
 //   - bills → svc-billing (/internal/bills, one period per call)
 //   - pending orders → svc-order (/api/v1/orders)
 //
-// Internal service base URLs come from env (SC_SVC_*), defaulting to the dev
-// ports. The account id is gateway-injected (X-Sc-Account-Id header) and
+// Internal service base URLs come from env (EULER_SVC_*), defaulting to the dev
+// ports. The account id is gateway-injected (X-Euler-Account-Id header) and
 // forwarded verbatim to each downstream service — the BFF never falls back to a
 // client-supplied account in the body (07§3.3).
 //
@@ -36,13 +36,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/errors"
+	"github.com/qifalab/euler-platform/errors"
 )
 
 // accountIDHeader is injected by the APISIX gateway on every request. The BFF
 // TRUSTS this header (network isolation behind the gateway); services can
-// additionally enable a shared-secret check via SC_INTERNAL_TOKEN.
-const accountIDHeader = "X-Sc-Account-Id"
+// additionally enable a shared-secret check via EULER_INTERNAL_TOKEN.
+const accountIDHeader = "X-Euler-Account-Id"
 
 // maxBodyBytes caps JSON request bodies accepted by the BFF's mutation handlers.
 const maxBodyBytes = 1 << 20 // 1 MiB
@@ -62,10 +62,10 @@ type consoleStore struct {
 func newConsoleStore() *consoleStore {
 	return &consoleStore{
 		httpClient:      &http.Client{Timeout: 5 * time.Second},
-		orchestratorURL: envOrDefault("SC_SVC_ORCHESTRATOR_URL", "http://localhost:9203"),
-		billingURL:      envOrDefault("SC_SVC_BILLING_URL", "http://localhost:9210"),
-		orderURL:        envOrDefault("SC_SVC_ORDER_URL", "http://localhost:9204"),
-		catalogURL:      envOrDefault("SC_SVC_CATALOG_URL", "http://localhost:9207"),
+		orchestratorURL: envOrDefault("EULER_SVC_ORCHESTRATOR_URL", "http://localhost:9203"),
+		billingURL:      envOrDefault("EULER_SVC_BILLING_URL", "http://localhost:9210"),
+		orderURL:        envOrDefault("EULER_SVC_ORDER_URL", "http://localhost:9204"),
+		catalogURL:      envOrDefault("EULER_SVC_CATALOG_URL", "http://localhost:9207"),
 	}
 }
 
@@ -85,23 +85,23 @@ func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := strings.TrimSpace(r.Header.Get(accountIDHeader))
 	if raw == "" {
 		writeError(w, errorsx.New("Common.MissingAccountId", errorsx.StatusForbidden,
-			"X-Sc-Account-Id header is required (injected by gateway)"))
+			"X-Euler-Account-Id header is required (injected by gateway)"))
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest,
-			"malformed X-Sc-Account-Id"))
+			"malformed X-Euler-Account-Id"))
 		return 0, false
 	}
 	return id, true
 }
 
 // requestID reads the trace id the middleware set on the response header, so
-// the envelope's RequestId matches X-Sc-TraceId. Get canonicalizes the key
-// (Go stores headers canonicalized, e.g. "X-Sc-Traceid").
+// the envelope's RequestId matches X-Euler-TraceId. Get canonicalizes the key
+// (Go stores headers canonicalized, e.g. "X-Euler-Traceid").
 func requestID(w http.ResponseWriter) string {
-	return w.Header().Get("X-Sc-TraceId")
+	return w.Header().Get("X-Euler-TraceId")
 }
 
 // envelope is the platform response body {RequestId, Code, Message, Data}

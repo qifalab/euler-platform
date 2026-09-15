@@ -11,11 +11,11 @@ export default defineConfig({
       fileName: (format) => (format === "es" ? "index.js" : "index.cjs"),
     },
     rollupOptions: {
-      // Shared layer externals (02§6.5). @sc/* resolve via workspace at build,
+      // Shared layer externals (02§6.5). @eu/* resolve via workspace at build,
       // Vue/Element Plus are single-instance injected by the base at runtime.
       external: [
         "vue", "element-plus",
-        "@sc/tokens", "@sc/sdk", "@sc/wujie-bridge", "@sc/ui",
+        "@eu/tokens", "@eu/sdk", "@eu/wujie-bridge", "@eu/ui",
       ],
     },
   },

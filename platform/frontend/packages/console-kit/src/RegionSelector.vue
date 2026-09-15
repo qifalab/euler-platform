@@ -9,7 +9,7 @@
  */
 import { computed, onMounted, ref } from "vue";
 import { ElSelect, ElOption } from "element-plus";
-import { bridge } from "@sc/wujie-bridge";
+import { bridge } from "@eu/wujie-bridge";
 import { fetchRegions } from "./useCatalogMeta";
 
 const props = defineProps<{

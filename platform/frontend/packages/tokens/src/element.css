@@ -1,5 +1,5 @@
 /**
- * Element Plus theme bridge — maps `--el-*` onto the `--sc-*` design tokens so
+ * Element Plus theme bridge — maps `--el-*` onto the `--eu-*` design tokens so
  * EP components follow the Google Cloud Glass theme (and dark mode) without
  * per-app overrides. Must be loaded AFTER `element-plus/dist/index.css`.
  *
@@ -7,46 +7,46 @@
  * because it resolves against the live token values.
  */
 :root {
-  --el-color-primary: var(--sc-color-brand);
-  --el-color-primary-light-3: color-mix(in srgb, var(--sc-color-brand) 70%, var(--sc-bg-container));
-  --el-color-primary-light-5: color-mix(in srgb, var(--sc-color-brand) 50%, var(--sc-bg-container));
-  --el-color-primary-light-7: color-mix(in srgb, var(--sc-color-brand) 30%, var(--sc-bg-container));
-  --el-color-primary-light-8: color-mix(in srgb, var(--sc-color-brand) 20%, var(--sc-bg-container));
-  --el-color-primary-light-9: color-mix(in srgb, var(--sc-color-brand) 10%, var(--sc-bg-container));
-  --el-color-primary-dark-2: color-mix(in srgb, var(--sc-color-brand) 82%, #000);
+  --el-color-primary: var(--eu-color-brand);
+  --el-color-primary-light-3: color-mix(in srgb, var(--eu-color-brand) 70%, var(--eu-bg-container));
+  --el-color-primary-light-5: color-mix(in srgb, var(--eu-color-brand) 50%, var(--eu-bg-container));
+  --el-color-primary-light-7: color-mix(in srgb, var(--eu-color-brand) 30%, var(--eu-bg-container));
+  --el-color-primary-light-8: color-mix(in srgb, var(--eu-color-brand) 20%, var(--eu-bg-container));
+  --el-color-primary-light-9: color-mix(in srgb, var(--eu-color-brand) 10%, var(--eu-bg-container));
+  --el-color-primary-dark-2: color-mix(in srgb, var(--eu-color-brand) 82%, #000);
 
-  --el-color-success: var(--sc-color-success);
-  --el-color-warning: var(--sc-color-warning);
-  --el-color-danger: var(--sc-color-danger);
-  --el-color-error: var(--sc-color-danger);
-  --el-color-info: var(--sc-text-secondary);
+  --el-color-success: var(--eu-color-success);
+  --el-color-warning: var(--eu-color-warning);
+  --el-color-danger: var(--eu-color-danger);
+  --el-color-error: var(--eu-color-danger);
+  --el-color-info: var(--eu-text-secondary);
 
-  --el-text-color-primary: var(--sc-text-primary);
-  --el-text-color-regular: var(--sc-text-primary);
-  --el-text-color-secondary: var(--sc-text-secondary);
-  --el-text-color-placeholder: var(--sc-text-disabled);
-  --el-text-color-disabled: var(--sc-text-disabled);
+  --el-text-color-primary: var(--eu-text-primary);
+  --el-text-color-regular: var(--eu-text-primary);
+  --el-text-color-secondary: var(--eu-text-secondary);
+  --el-text-color-placeholder: var(--eu-text-disabled);
+  --el-text-color-disabled: var(--eu-text-disabled);
 
-  --el-border-color: var(--sc-border);
-  --el-border-color-light: var(--sc-border);
-  --el-border-color-lighter: var(--sc-border);
-  --el-border-color-extra-light: var(--sc-border);
+  --el-border-color: var(--eu-border);
+  --el-border-color-light: var(--eu-border);
+  --el-border-color-lighter: var(--eu-border);
+  --el-border-color-extra-light: var(--eu-border);
 
-  --el-bg-color: var(--sc-bg-container);
-  --el-bg-color-overlay: var(--sc-bg-container);
-  --el-bg-color-page: var(--sc-bg-page);
-  --el-fill-color-blank: var(--sc-bg-container);
-  --el-fill-color-light: var(--sc-bg-page);
-  --el-fill-color-lighter: var(--sc-bg-page);
+  --el-bg-color: var(--eu-bg-container);
+  --el-bg-color-overlay: var(--eu-bg-container);
+  --el-bg-color-page: var(--eu-bg-page);
+  --el-fill-color-blank: var(--eu-bg-container);
+  --el-fill-color-light: var(--eu-bg-page);
+  --el-fill-color-lighter: var(--eu-bg-page);
   --el-mask-color: rgba(32, 33, 36, 0.55);
   --el-mask-color-extra-light: rgba(32, 33, 36, 0.3);
 
   --el-border-radius-base: 8px;
   --el-border-radius-small: 6px;
   --el-border-radius-round: 20px;
-  --el-font-family: var(--sc-font-family);
-  --el-box-shadow: var(--sc-shadow-lg);
-  --el-box-shadow-light: var(--sc-glass-shadow);
+  --el-font-family: var(--eu-font-family);
+  --el-box-shadow: var(--eu-shadow-lg);
+  --el-box-shadow-light: var(--eu-glass-shadow);
   --el-transition-duration: 0.18s;
 }
 
@@ -58,5 +58,5 @@
 .el-select__popper,
 .el-pager,
 .el-message {
-  border-radius: var(--sc-radius-lg);
+  border-radius: var(--eu-radius-lg);
 }

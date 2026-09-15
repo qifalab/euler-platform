@@ -187,7 +187,7 @@ function goLogin() {
     <div class="forgot-card">
       <div class="forgot-header">
         <h2 class="forgot-title">找回密码</h2>
-        <p class="forgot-subtitle">通过注册邮箱重置您的 StarCloud 账户密码</p>
+        <p class="forgot-subtitle">通过注册邮箱重置您的 Euler 账户密码</p>
       </div>
 
       <ElSteps :active="active" align-center class="forgot-steps">
@@ -316,51 +316,51 @@ function goLogin() {
 
 <style scoped>
 .forgot-page {
-  min-height: calc(100vh - var(--sc-topbar-height));
+  min-height: calc(100vh - var(--eu-topbar-height));
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--sc-spacing-6);
+  padding: var(--eu-spacing-6);
   box-sizing: border-box;
 }
 
 .forgot-card {
   width: 100%;
   max-width: 440px;
-  background: var(--sc-glass-bg);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-xl);
-  box-shadow: var(--sc-glass-shadow);
-  padding: var(--sc-spacing-7) var(--sc-spacing-6);
+  background: var(--eu-glass-bg);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-xl);
+  box-shadow: var(--eu-glass-shadow);
+  padding: var(--eu-spacing-7) var(--eu-spacing-6);
 }
 
 .forgot-header {
   text-align: center;
-  margin-bottom: var(--sc-spacing-6);
+  margin-bottom: var(--eu-spacing-6);
 }
 
 .forgot-title {
-  margin: 0 0 var(--sc-spacing-2);
+  margin: 0 0 var(--eu-spacing-2);
   font-size: 22px;
   font-weight: 600;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 
 .forgot-subtitle {
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
 }
 
 .forgot-steps {
-  margin-bottom: var(--sc-spacing-7);
+  margin-bottom: var(--eu-spacing-7);
 }
 
 .forgot-form {
-  margin-top: var(--sc-spacing-2);
+  margin-top: var(--eu-spacing-2);
 }
 
 .forgot-submit {
@@ -369,7 +369,7 @@ function goLogin() {
 
 .action-row {
   display: flex;
-  gap: var(--sc-spacing-3);
+  gap: var(--eu-spacing-3);
 }
 
 .action-row .forgot-submit {
@@ -378,7 +378,7 @@ function goLogin() {
 
 .code-row {
   display: flex;
-  gap: var(--sc-spacing-3);
+  gap: var(--eu-spacing-3);
   width: 100%;
 }
 
@@ -388,16 +388,16 @@ function goLogin() {
 
 .forgot-done {
   text-align: center;
-  padding: var(--sc-spacing-4) 0;
+  padding: var(--eu-spacing-4) 0;
 }
 
 .done-icon {
   width: 64px;
   height: 64px;
-  margin: 0 auto var(--sc-spacing-4);
+  margin: 0 auto var(--eu-spacing-4);
   border-radius: 50%;
-  background: var(--sc-color-success-soft);
-  color: var(--sc-color-success);
+  background: var(--eu-color-success-soft);
+  color: var(--eu-color-success);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -409,13 +409,13 @@ function goLogin() {
 }
 
 .done-text {
-  margin: 0 0 var(--sc-spacing-4);
+  margin: 0 0 var(--eu-spacing-4);
   font-size: 15px;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 
 .forgot-footer {
-  margin-top: var(--sc-spacing-5);
+  margin-top: var(--eu-spacing-5);
   text-align: center;
 }
 </style>

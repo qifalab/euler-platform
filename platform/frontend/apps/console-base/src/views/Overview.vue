@@ -7,7 +7,7 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useSDK, type OverviewData, type ResourceItem } from "../sdk";
-import { PriceText } from "@sc/ui";
+import { PriceText } from "@eu/ui";
 
 const router = useRouter();
 const sdk = useSDK();
@@ -32,8 +32,8 @@ onMounted(async () => {
 });
 
 const PRODUCT_LABEL: Record<string, string> = {
-  scecs: "云服务器", scoss: "对象存储", scrds: "云数据库", scvpc: "专有网络",
-  sceip: "弹性公网 IP", scmon: "云监控", scbs: "块存储",
+  euecs: "云服务器", euoss: "对象存储", eurds: "云数据库", euvpc: "专有网络",
+  eueip: "弹性公网 IP", eumon: "云监控", eubs: "块存储",
 };
 </script>
 
@@ -89,40 +89,40 @@ const PRODUCT_LABEL: Record<string, string> = {
 /* Glass cards/tables sit on the body mesh; inner text stays plain for readability. */
 .overview { padding: 24px; max-width: 1200px; }
 .overview h1 { font-size: 20px; margin: 0 0 16px; }
-.overview-loading, .overview-error, .overview-empty { color: var(--sc-text-secondary); padding: 24px; }
-.overview-error { color: var(--sc-color-danger); }
+.overview-loading, .overview-error, .overview-empty { color: var(--eu-text-secondary); padding: 24px; }
+.overview-error { color: var(--eu-color-danger); }
 .overview-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin-bottom: 32px; }
 .ov-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 20px; display: flex; flex-direction: column; gap: 4px;
-  transition: var(--sc-transition);
+  transition: var(--eu-transition);
 }
-.ov-card:hover { transform: translateY(-2px); box-shadow: var(--sc-shadow-md); }
-.ov-label { font-size: 13px; color: var(--sc-text-secondary); }
-.ov-value { font-size: 28px; font-weight: 600; color: var(--sc-text-primary); }
-.ov-sub { font-size: 12px; color: var(--sc-text-disabled); }
-.ov-warn { color: var(--sc-color-warning-text); }
-.ov-link { font-size: 13px; color: var(--sc-color-brand); text-decoration: none; }
+.ov-card:hover { transform: translateY(-2px); box-shadow: var(--eu-shadow-md); }
+.ov-label { font-size: 13px; color: var(--eu-text-secondary); }
+.ov-value { font-size: 28px; font-weight: 600; color: var(--eu-text-primary); }
+.ov-sub { font-size: 12px; color: var(--eu-text-disabled); }
+.ov-warn { color: var(--eu-color-warning-text); }
+.ov-link { font-size: 13px; color: var(--eu-color-brand); text-decoration: none; }
 .overview-section { font-size: 16px; margin: 0 0 12px; }
 .overview-table {
   width: 100%;
   border-collapse: separate; border-spacing: 0;
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
-.overview-table th, .overview-table td { padding: 12px 16px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--sc-border); }
-.overview-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-weight: 500; }
-.overview-table td { color: var(--sc-text-primary); }
-.overview-table tbody tr { transition: var(--sc-transition); }
-.overview-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.overview-table th, .overview-table td { padding: 12px 16px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--eu-border); }
+.overview-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-weight: 500; }
+.overview-table td { color: var(--eu-text-primary); }
+.overview-table tbody tr { transition: var(--eu-transition); }
+.overview-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 </style>

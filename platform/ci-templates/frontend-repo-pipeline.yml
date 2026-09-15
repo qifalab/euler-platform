@@ -1,6 +1,6 @@
 # Frontend monorepo CI pipeline (08-devops-delivery.md §5.3, 02§9.4).
 #
-# Runs in the frontend monorepo (sc-frontend-platform). Builds shared @sc/*
+# Runs in the frontend monorepo (eu-frontend-platform). Builds shared @eu/*
 # packages, runs Vitest unit tests, builds all apps, and publishes the shell +
 # sub-app entries to object storage (MinIO) — the Wujie entries the console
 # loads at runtime (02§2.3).
@@ -89,7 +89,7 @@ build:apps:
     - if: $CI_COMMIT_BRANCH == "main"
 
 # ---------------------------------------------------------------------------
-# Publish: upload shell + sub-app entries to MinIO (the static.starcloud.cn
+# Publish: upload shell + sub-app entries to MinIO (the static.euler.emoera.com
 # source). Versioned dir = immutable; the manifest repo bumps the registry.
 # ---------------------------------------------------------------------------
 publish:entries:
@@ -97,13 +97,13 @@ publish:entries:
   image: minio/mc:latest
   needs: ["build:apps"]
   script:
-    - mc alias set starcloud "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+    - mc alias set euler "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
     # Shell → shell/<sha>/index.html (02§2.3)
-    - mc cp --recursive apps/console-base/dist/ starcloud/static/shell/$CI_COMMIT_SHORT_SHA/
+    - mc cp --recursive apps/console-base/dist/ euler/static/shell/$CI_COMMIT_SHORT_SHA/
     # Each sub-app → apps/<app>/<sha>/index.html
     - |
       for app in console-ecs console-storage console-network console-database console-monitor web-account web-billing web-ticket site docs-site; do
-        mc cp --recursive apps/$app/dist/ starcloud/static/apps/$app/$CI_COMMIT_SHORT_SHA/ || true
+        mc cp --recursive apps/$app/dist/ euler/static/apps/$app/$CI_COMMIT_SHORT_SHA/ || true
       done
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

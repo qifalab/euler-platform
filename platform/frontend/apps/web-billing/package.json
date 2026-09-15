@@ -2,7 +2,7 @@
   "name": "web-billing",
   "version": "0.1.0",
   "private": true,
-  "description": "StarCloud billing center — dual-form site (02§1.2).",
+  "description": "Euler billing center — dual-form site (02§1.2).",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5180",
@@ -11,11 +11,11 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@sc/tokens": "workspace:*",
-    "@sc/ui": "workspace:*",
-    "@sc/console-kit": "workspace:*",
-    "@sc/sdk": "workspace:*",
-    "@sc/wujie-bridge": "workspace:*",
+    "@eu/tokens": "workspace:*",
+    "@eu/ui": "workspace:*",
+    "@eu/console-kit": "workspace:*",
+    "@eu/sdk": "workspace:*",
+    "@eu/wujie-bridge": "workspace:*",
     "element-plus": "^2.7.0",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0"

@@ -5,7 +5,7 @@ deployment), `07-security.md` §4/§5 (plugin chain, signature verification).
 
 ## Why the signature algorithm is not implemented in Lua
 
-`sc-auth` bypasses to svc-iam's `/internal/openapi/verify` endpoint rather than
+`eu-auth` bypasses to svc-iam's `/internal/openapi/verify` endpoint rather than
 recomputing CPS1-HMAC-SHA256 in the plugin. APISIX ships no cloud-vendor
 signature plugin, so writing one was an option — and the wrong one.
 
@@ -22,7 +22,7 @@ access), which 04§3.4 accepts explicitly.
 ## Plugin chain
 
 ```
-ip-restriction → limit-req → sc-auth → sc-authorize → sc-audit → upstream
+ip-restriction → limit-req → eu-auth → eu-authorize → eu-audit → upstream
      (blacklist)  (IP floor)  (authn)    (authz)      (side-stream)
 ```
 
@@ -33,14 +33,14 @@ after the built-ins.
 
 | Plugin | Phase | Responsibility |
 |---|---|---|
-| `sc-auth` | `rewrite` | CPS1 signature (OpenAPI zone) or JWT (console zone); injects identity headers |
-| `sc-authorize` | `access` | Action-level authorization via svc-iam `CheckAccess`; L1 cache 30 s |
-| `sc-audit` | `log` | Emits the audit event to Kafka after the response; never blocks the request |
+| `eu-auth` | `rewrite` | CPS1 signature (OpenAPI zone) or JWT (console zone); injects identity headers |
+| `eu-authorize` | `access` | Action-level authorization via svc-iam `CheckAccess`; L1 cache 30 s |
+| `eu-audit` | `log` | Emits the audit event to Kafka after the response; never blocks the request |
 
 ## Identity header spoofing
 
-`sc-auth` strips **every** client-supplied `X-Sc-*` header before injecting its
-own. Without that step, a caller could simply present `X-Sc-Account-Id: <victim>`
+`eu-auth` strips **every** client-supplied `X-Euler-*` header before injecting its
+own. Without that step, a caller could simply present `X-Euler-Account-Id: <victim>`
 and any upstream that trusts the header would serve another tenant's data.
 
 Upstream services accept these headers only from gateway mTLS or the internal
@@ -51,18 +51,18 @@ gateway half of that contract.
 
 `region` and `service` are configured **on the route**, never read from the
 request. They feed the derived signing key, so binding them to the route is what
-stops a signature scoped to `scecs` being replayed against `scoss`. The
+stops a signature scoped to `euecs` being replayed against `euoss`. The
 validator enforces that every signature-mode route sets both.
 
 ## Fail-closed behaviour
 
 Three places deliberately fail closed rather than open:
 
-- `sc-auth` when the verify endpoint is unreachable → 503. An unreachable
+- `eu-auth` when the verify endpoint is unreachable → 503. An unreachable
   verifier means the caller's identity cannot be proven.
-- `sc-authorize` when `CheckAccess` fails → 503, and the failure is **not**
+- `eu-authorize` when `CheckAccess` fails → 503, and the failure is **not**
   cached, so a transient outage does not pin a deny for 30 seconds.
-- `sc-authorize` when `sc-auth` did not run → 403. A route missing the auth
+- `eu-authorize` when `eu-auth` did not run → 403. A route missing the auth
   plugin is a misconfiguration, not an anonymous request.
 
 ## Nacos discovery
@@ -91,8 +91,8 @@ ops checklist for backup, monitoring, and version upgrades, with snapshots every
 
 | Route | Exemption | Reason |
 |---|---|---|
-| `console-auth` | no `sc-auth` | Mints the session; cannot require a session to obtain one. Protected by a 5/min per-IP limit plus the `X-Requested-With` CSRF floor. |
-| `openapi-scoss-data` | no `sc-auth` | S3-compatible data plane uses MinIO's own SigV4 for ecosystem compatibility (04§9.4). The single documented exemption from the platform signature contract. |
+| `console-auth` | no `eu-auth` | Mints the session; cannot require a session to obtain one. Protected by a 5/min per-IP limit plus the `X-Requested-With` CSRF floor. |
+| `openapi-euoss-data` | no `eu-auth` | S3-compatible data plane uses MinIO's own SigV4 for ecosystem compatibility (04§9.4). The single documented exemption from the platform signature contract. |
 
 Both are listed in `tools/check-apisix-routes.py`; adding a new exemption means
 editing that list, which forces the reason into review.

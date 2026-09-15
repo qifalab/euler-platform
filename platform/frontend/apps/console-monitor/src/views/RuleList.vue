@@ -1,18 +1,18 @@
 <script setup lang="ts">
 /**
  * Rule list (监控规则) — svc-monitor /api/v1/monitor/rules (03§4.4.1).
- * Demonstrates the declarative ResourceTable pattern from @sc/console-kit with
+ * Demonstrates the declarative ResourceTable pattern from @eu/console-kit with
  * unified StatusBadge, polling on transitional states, and empty-guide.
  */
 import { computed, h } from "vue";
 import { ElButton } from "element-plus";
-import { ResourceTable, useResourceTable } from "@sc/console-kit";
-import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
+import { ResourceTable, useResourceTable } from "@eu/console-kit";
+import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
 
 type RuleRow = Record<string, unknown>;
 
-// In the real build @sc/sdk is generated from OpenAPI; here a typed fetcher.
+// In the real build @eu/sdk is generated from OpenAPI; here a typed fetcher.
 const sdk = createSDK({ baseURL: "" });
 
 const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTable<RuleRow>({
@@ -31,7 +31,7 @@ const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTa
     return { items, total: items.length };
   },
   columns: [
-    { key: "ruleName", title: "规则名", link: (r) => `#/scmon/dashboard/${r.ruleId}` },
+    { key: "ruleName", title: "规则名", link: (r) => `#/eumon/dashboard/${r.ruleId}` },
     { key: "resourceScope", title: "资源范围" },
     { key: "metric", title: "指标" },
     { key: "threshold", title: "阈值" },
@@ -83,7 +83,7 @@ const tableColumns = computed(() =>
       title="暂无告警规则"
       description="创建您的第一条监控告警规则,及时掌握资源异常。"
       action-label="创建规则"
-      action-href="#/scmon/rules/create"
+      action-href="#/eumon/rules/create"
     />
   </section>
 </template>

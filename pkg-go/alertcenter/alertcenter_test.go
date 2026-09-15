@@ -18,7 +18,7 @@ func alert(tenant int64, product, metric string, sev Severity, labels map[string
 }
 
 func TestDedupCollapsesReFires(t *testing.T) {
-	a := alert(1, "scecs", "cpu", SeverityCritical, map[string]string{"instance": "i-1"})
+	a := alert(1, "euecs", "cpu", SeverityCritical, map[string]string{"instance": "i-1"})
 	b := a // same tenant/product/metric/labels → same dedup key
 	if a.DedupKey() != b.DedupKey() {
 		t.Fatal("identical alerts must share a dedup key")
@@ -30,9 +30,9 @@ func TestDedupCollapsesReFires(t *testing.T) {
 }
 
 func TestInhibitionKeepsHighestSeverityPerGroup(t *testing.T) {
-	critical := alert(1, "scecs", "cpu", SeverityCritical, map[string]string{"instance": "i-1"})
-	warning := alert(1, "scecs", "memory", SeverityWarning, map[string]string{"instance": "i-1"})
-	info := alert(1, "scecs", "disk", SeverityInfo, map[string]string{"instance": "i-1"})
+	critical := alert(1, "euecs", "cpu", SeverityCritical, map[string]string{"instance": "i-1"})
+	warning := alert(1, "euecs", "memory", SeverityWarning, map[string]string{"instance": "i-1"})
+	info := alert(1, "euecs", "disk", SeverityInfo, map[string]string{"instance": "i-1"})
 	out := Converge([]Alert{info, warning, critical}, nil)
 	if len(out) != 1 {
 		t.Fatalf("same-group alerts should inhibit to one, got %d", len(out))
@@ -43,8 +43,8 @@ func TestInhibitionKeepsHighestSeverityPerGroup(t *testing.T) {
 }
 
 func TestDifferentGroupsDoNotInhibit(t *testing.T) {
-	a := alert(1, "scecs", "cpu", SeverityCritical, nil)
-	b := alert(1, "scoss", "requests", SeverityInfo, nil)
+	a := alert(1, "euecs", "cpu", SeverityCritical, nil)
+	b := alert(1, "euoss", "requests", SeverityInfo, nil)
 	out := Converge([]Alert{a, b}, nil)
 	if len(out) != 2 {
 		t.Fatalf("different products are different groups, got %d alerts", len(out))
@@ -53,23 +53,23 @@ func TestDifferentGroupsDoNotInhibit(t *testing.T) {
 
 func TestSilenceDropsMutedGroup(t *testing.T) {
 	s := NewSilence()
-	s.Mute(1, "scecs")
-	critical := alert(1, "scecs", "cpu", SeverityCritical, nil)
-	other := alert(1, "scoss", "requests", SeverityInfo, nil)
+	s.Mute(1, "euecs")
+	critical := alert(1, "euecs", "cpu", SeverityCritical, nil)
+	other := alert(1, "euoss", "requests", SeverityInfo, nil)
 	out := Converge([]Alert{critical, other}, s)
-	if len(out) != 1 || out[0].Product != "scoss" {
+	if len(out) != 1 || out[0].Product != "euoss" {
 		t.Fatalf("muted group must be dropped, got %d alerts", len(out))
 	}
 	// unmute restores delivery
-	s.Unmute(1, "scecs")
+	s.Unmute(1, "euecs")
 	if len(Converge([]Alert{critical}, s)) != 1 {
 		t.Fatal("unmuted group must deliver again")
 	}
 }
 
 func TestInhibitedByIsOneDirectional(t *testing.T) {
-	critical := alert(1, "scecs", "cpu", SeverityCritical, nil)
-	info := alert(1, "scecs", "disk", SeverityInfo, nil)
+	critical := alert(1, "euecs", "cpu", SeverityCritical, nil)
+	info := alert(1, "euecs", "disk", SeverityInfo, nil)
 	if !info.InhibitedBy(critical) {
 		t.Error("lower severity must be inhibited by higher in the same group")
 	}

@@ -40,7 +40,7 @@
 
 **决策:站点结构服从《01-product-catalog.md》D5——六站点独立子域。**
 
-- **结论**:www / console / docs / account / billing / ticket 六站点各自独立子域、独立前端应用、独立发布流水线;根域名统一为 `starcloud.cn`(对齐《01-product-catalog.md》D0 品牌规范);文档站子域统一为 `docs.*`;账号中心是 SSO 唯一认证域。
+- **结论**:www / console / docs / account / billing / ticket 六站点各自独立子域、独立前端应用、独立发布流水线;根域名统一为 `euler.emoera.com`(对齐《01-product-catalog.md》D0 品牌规范);文档站子域统一为 `docs.*`;账号中心是 SSO 唯一认证域。
 - **理由**:① 营销站匿名静态流量与控制台重交互 SPA 的性能优化、发布节奏完全不同,必须物理隔离;② 安全域隔离:account/console 是高价值攻击面,独立子域便于 CSP、Cookie 域策略与 WAF 规则分域(参见《07-security.md》);③ 与《01-product-catalog.md》站点矩阵和 SSO 拓扑保持一致,避免两章两套域名拓扑在评审中互相矛盾。
 - **备选方案**:account/billing/ticket 全部只作 console 域内 Wujie 子应用,不设独立子域(本章 v1.0 稿做法)。
 - **改选条件**:仅当 billing/ticket 收敛为纯控制台内嵌视图(无独立 SEO/品牌诉求、无独立发布节奏诉求、安全评审同意并入 console 的 Cookie 与 CSP 域)时,可降级为纯子应用;account 作为 SSO 中心的独立域不可降级。
@@ -56,44 +56,44 @@
 
 - **结论**:产品控制台子应用按产品目录一级大类拆分:计算 / 存储 / 网络 / 数据库 / 中间件 / 监控与日志 / 安全,共 7 个大类子应用("域名与建站"类一期不建独立子应用,其下单与咨询动线由官网+工单承载);子应用内部以 productCode 为一级路由,一个子应用承载本大类全部产品。
 - **理由**:① 子应用总数直接影响基座加载调度、注册表管理与发布协调成本,大类拆分把数量稳定在 7 个品类 + 3 个双形态站点(上限 10);② 品类内产品共享列表/详情/向导交互骨架,团队组织亦按品类划分(产品组=大类),仓库边界与组织边界一致;③ Wujie 沙箱与注册表已解决"子应用内独立发布",无需把发布粒度再拆到单产品;产品级灰度由"子应用版本灰度 + 特性开关"实现,不靠拆仓库。
-- **备选方案**:一产品一子应用(本章 v1.0 稿做法,console-scecs / console-scoss 等 8 仓)。
-- **改选条件**:当某大类产品数超过 10 个且由多个前端团队并行认领时(《01-product-catalog.md》D9 改选条件,如计算大类 scecs/轻量/GPU/CKE/ECI/FC 全部铺开且团队拆分),该大类可细化为一产品一子应用;因一级路径取 productCode 而非 appCode(见 2.2),届时细化拆分**不需要变更 URL 与注册表契约**。
+- **备选方案**:一产品一子应用(本章 v1.0 稿做法,console-euecs / console-euoss 等 8 仓)。
+- **改选条件**:当某大类产品数超过 10 个且由多个前端团队并行认领时(《01-product-catalog.md》D9 改选条件,如计算大类 euecs/轻量/GPU/CKE/ECI/FC 全部铺开且团队拆分),该大类可细化为一产品一子应用;因一级路径取 productCode 而非 appCode(见 2.2),届时细化拆分**不需要变更 URL 与注册表契约**。
 
 **应用清单**(产品 code 对齐《01-product-catalog.md》§2 产品目录明细):
 
 | 应用 | 代号/仓库 | 域名 | 渲染形态 | 微前端角色 | 主要团队 | 发布节奏 |
 |---|---|---|---|---|---|---|
-| 营销官网 | `web-portal` | `www.starcloud.cn` | Nuxt3 SSR | 否(独立) | 官网组 | 每周 + 活动页随需 |
-| 文档站 | `docs-site` | `docs.starcloud.cn` | VitePress SSG 静态 | 否(独立) | 文档组 | 随文档提交自动发布 |
-| 控制台主框架 | `console-shell` | `console.starcloud.cn` | SPA(Vue3+Vite) | 主应用(Wujie 基座) | 控制台平台组 | 双周,严格灰度 |
-| 计算类控制台 | `console-compute` | console 域(子应用) | SPA | Wujie 子应用,承载 SCECS/SCSAS/SCGPU/SCCKE/SCECI/SCFC(SCECI 后置二期) | 计算产品组 | 随产品迭代 |
-| 存储类控制台 | `console-storage` | console 域(子应用) | SPA | Wujie 子应用,承载 SCOSS/SCBS/SCFS | 存储产品组 | 随产品迭代 |
-| 网络类控制台 | `console-network` | console 域(子应用) | SPA | Wujie 子应用,承载 SCVPC/SCCLB/SCALB/SCEIP/SCNAT/SCCDN | 网络产品组 | 随产品迭代 |
-| 数据库类控制台 | `console-database` | console 域(子应用) | SPA | Wujie 子应用,承载 SCRDS/SCREDIS/SCES | 数据库产品组 | 随产品迭代 |
-| 中间件类控制台 | `console-middleware` | console 域(子应用) | SPA | Wujie 子应用,承载 SCKAFKA/SCGW/SCMSE | 中间件产品组 | 随产品迭代 |
-| 监控与日志控制台 | `console-monitor` | console 域(子应用) | SPA | Wujie 子应用,承载 SCMON/SCSLS | 可观测产品组 | 随产品迭代 |
-| 安全类控制台 | `console-security` | console 域(子应用) | SPA | Wujie 子应用,承载 SCKMS/SCWAF/SCDPS/SCCERT | 安全产品组 | 随产品迭代 |
-| 账号中心 | `web-account` | `account.starcloud.cn` + console 域子应用 | SPA 双产物 | 独立站点(SSO 中心)+ Wujie 子应用(双形态) | 账号安全组 | 双周 |
-| 费用中心 | `web-billing` | `billing.starcloud.cn` + console 域子应用 | SPA 双产物 | 独立站点 + Wujie 子应用(双形态) | 商业化组 | 双周 |
-| 工单支持 | `web-ticket` | `ticket.starcloud.cn` + console 域子应用 | SPA 双产物 | 独立站点 + Wujie 子应用(双形态) | 服务组 | 双周 |
+| 营销官网 | `web-portal` | `www.euler.emoera.com` | Nuxt3 SSR | 否(独立) | 官网组 | 每周 + 活动页随需 |
+| 文档站 | `docs-site` | `docs.euler.emoera.com` | VitePress SSG 静态 | 否(独立) | 文档组 | 随文档提交自动发布 |
+| 控制台主框架 | `console-shell` | `console.euler.emoera.com` | SPA(Vue3+Vite) | 主应用(Wujie 基座) | 控制台平台组 | 双周,严格灰度 |
+| 计算类控制台 | `console-compute` | console 域(子应用) | SPA | Wujie 子应用,承载 EUECS/EUSAS/EUGPU/EUCKE/EUECI/EUFC(EUECI 后置二期) | 计算产品组 | 随产品迭代 |
+| 存储类控制台 | `console-storage` | console 域(子应用) | SPA | Wujie 子应用,承载 EUOSS/EUBS/SCFS | 存储产品组 | 随产品迭代 |
+| 网络类控制台 | `console-network` | console 域(子应用) | SPA | Wujie 子应用,承载 EUVPC/SCCLB/SCALB/EUEIP/SCNAT/SCCDN | 网络产品组 | 随产品迭代 |
+| 数据库类控制台 | `console-database` | console 域(子应用) | SPA | Wujie 子应用,承载 EURDS/EUREDIS/SCES | 数据库产品组 | 随产品迭代 |
+| 中间件类控制台 | `console-middleware` | console 域(子应用) | SPA | Wujie 子应用,承载 EUKAFKA/EUGW/SCMSE | 中间件产品组 | 随产品迭代 |
+| 监控与日志控制台 | `console-monitor` | console 域(子应用) | SPA | Wujie 子应用,承载 EUMON/SCSLS | 可观测产品组 | 随产品迭代 |
+| 安全类控制台 | `console-security` | console 域(子应用) | SPA | Wujie 子应用,承载 SCKMS/EUWAF/SCDPS/EUCERT | 安全产品组 | 随产品迭代 |
+| 账号中心 | `web-account` | `account.euler.emoera.com` + console 域子应用 | SPA 双产物 | 独立站点(SSO 中心)+ Wujie 子应用(双形态) | 账号安全组 | 双周 |
+| 费用中心 | `web-billing` | `billing.euler.emoera.com` + console 域子应用 | SPA 双产物 | 独立站点 + Wujie 子应用(双形态) | 商业化组 | 双周 |
+| 工单支持 | `web-ticket` | `ticket.euler.emoera.com` + console 域子应用 | SPA 双产物 | 独立站点 + Wujie 子应用(双形态) | 服务组 | 双周 |
 
 说明:
 
-- **MVP 阶段建仓范围**:首期建 `console-compute`、`console-storage`、`console-network`、`console-database`、`console-monitor` 五个品类子应用(对齐《01-product-catalog.md》§3.2 第一批 MVP 产品集:SCECS+SCBS、SCOSS、SCVPC+SCEIP、SCRDS、SCMON;`console-security` 下的 SCCERT 与 RAM 权限管理随认证能力一期落地但合并入 `web-account`(账号中心,双形态站点)承载,不单列品类仓)与 `web-account`、`web-billing`、`web-ticket` 三个双形态站点(对齐第一批"六大站点 MVP"与不可后置清单:认证、账单、工单不得后置);`console-middleware`、`console-security` 随二批产品建仓。SCECI 后置二期。大类内新增产品只增加路由与页面,不新增仓库。
-- **SSO 拓扑落位**:`account.starcloud.cn` 为唯一认证域(对齐《01-product-catalog.md》§4.1)——承载登录/注册/找回/实名认证(未登录态页面,需高可用)与账号管理/RAM/AK(登录态页面),签发根域 `.starcloud.cn` 的 HttpOnly 会话 Cookie,console/billing/ticket 共享会话;www 营销站仅在登录态读取用户标识做个性化,不做鉴权强依赖。本章 v1.0 稿的 `passport.*` 域废止,其职责并入 account。
-- **双形态产物机制**:`web-account/web-billing/web-ticket` 单一代码库产出两份构建产物——独立产物(含自有顶栏与导航,部署于独立子域)与子应用产物(无壳,entry 注册进控制台,一级路径 `/account`、`/billing`、`/ticket` 与独立站点保持一致);运行环境由 `@sc/wujie-bridge` 检测(双模式机制复用 3.4 节)。
-- **官网"控制台"入口**:官网所有"进入控制台/立即购买"按钮统一跳 `console.starcloud.cn`,不在官网内嵌控制台页面。
+- **MVP 阶段建仓范围**:首期建 `console-compute`、`console-storage`、`console-network`、`console-database`、`console-monitor` 五个品类子应用(对齐《01-product-catalog.md》§3.2 第一批 MVP 产品集:EUECS+EUBS、EUOSS、EUVPC+EUEIP、EURDS、EUMON;`console-security` 下的 EUCERT 与 RAM 权限管理随认证能力一期落地但合并入 `web-account`(账号中心,双形态站点)承载,不单列品类仓)与 `web-account`、`web-billing`、`web-ticket` 三个双形态站点(对齐第一批"六大站点 MVP"与不可后置清单:认证、账单、工单不得后置);`console-middleware`、`console-security` 随二批产品建仓。EUECI 后置二期。大类内新增产品只增加路由与页面,不新增仓库。
+- **SSO 拓扑落位**:`account.euler.emoera.com` 为唯一认证域(对齐《01-product-catalog.md》§4.1)——承载登录/注册/找回/实名认证(未登录态页面,需高可用)与账号管理/RAM/AK(登录态页面),签发根域 `.euler.emoera.com` 的 HttpOnly 会话 Cookie,console/billing/ticket 共享会话;www 营销站仅在登录态读取用户标识做个性化,不做鉴权强依赖。本章 v1.0 稿的 `passport.*` 域废止,其职责并入 account。
+- **双形态产物机制**:`web-account/web-billing/web-ticket` 单一代码库产出两份构建产物——独立产物(含自有顶栏与导航,部署于独立子域)与子应用产物(无壳,entry 注册进控制台,一级路径 `/account`、`/billing`、`/ticket` 与独立站点保持一致);运行环境由 `@eu/wujie-bridge` 检测(双模式机制复用 3.4 节)。
+- **官网"控制台"入口**:官网所有"进入控制台/立即购买"按钮统一跳 `console.euler.emoera.com`,不在官网内嵌控制台页面。
 
 ### 1.3 仓库策略决策:业务多仓 + 公共层单 monorepo
 
 **结论**:采用"**1 个公共 monorepo + N 个业务独立仓库**"的混合模式。
 
-- `sc-frontend-platform`(monorepo,pnpm workspace):
-  - `packages/ui`:设计系统组件库(@sc/ui)
-  - `packages/tokens`:设计令牌(@sc/tokens)
-  - `packages/sdk`:统一请求/OpenAPI 客户端(@sc/sdk)
-  - `packages/console-kit`:控制台通用框架(@sc/console-kit,见第 7 章)
-  - `packages/wujie-bridge`:微前端通信/生命周期桥(@sc/wujie-bridge)
+- `eu-frontend-platform`(monorepo,pnpm workspace):
+  - `packages/ui`:设计系统组件库(@eu/ui)
+  - `packages/tokens`:设计令牌(@eu/tokens)
+  - `packages/sdk`:统一请求/OpenAPI 客户端(@eu/sdk)
+  - `packages/console-kit`:控制台通用框架(@eu/console-kit,见第 7 章)
+  - `packages/wujie-bridge`:微前端通信/生命周期桥(@eu/wujie-bridge)
   - `packages/eslint-config`、`packages/ts-config`:工程规范
   - `templates/`:子应用脚手架模板(degit/CLI 拉取)
 - 每个业务应用(1.2 表格)一个独立 Git 仓库。
@@ -101,7 +101,7 @@
 **理由**:
 1. 满足硬性要求——每个应用独立仓库、独立流水线、独立发布,产品组之间零耦合、零排队;
 2. 公共库天然需要原子化联动修改(tokens 改一个变量 → ui 组件跟随 → 文档示例更新),monorepo 内一次 MR 完成,版本发布走 changesets 统一管理;
-3. 业务应用通过**语义化版本号**消费公共包,主框架可锁定 `@sc/console-kit` 大版本,避免公共库升级引发全量子应用同时回归。
+3. 业务应用通过**语义化版本号**消费公共包,主框架可锁定 `@eu/console-kit` 大版本,避免公共库升级引发全量子应用同时回归。
 
 **备选方案**:全量 monorepo(所有应用 + 公共库一个仓库,turborepo/nx 增量构建)。
 **何时改选备选**:当子应用总数 < 8 个且全部由同一支前端团队维护时,全量 monorepo 的依赖同步成本更低;一旦产品组各自认领控制台子应用(组织上多团队并行),立即回到多仓模式。
@@ -137,7 +137,7 @@ flowchart TB
         REG["子应用注册表客户端"]
         WUJIE["Wujie 微前端容器"]
         AUTH["登录态与权限 Store(Pinia)"]
-        BUS["全局事件总线 @sc/wujie-bridge"]
+        BUS["全局事件总线 @eu/wujie-bridge"]
     end
 
     subgraph SUBS["微前端子应用(独立仓库/独立发布)"]
@@ -147,16 +147,16 @@ flowchart TB
     end
 
     subgraph SHARED["共享层(npm 包,私有 registry)"]
-        UI["@sc/ui 设计系统(Element Plus 封装)"]
-        KIT["@sc/console-kit 控制台框架"]
-        SDK["@sc/sdk 请求/OpenAPI 客户端"]
-        TOKENS["@sc/tokens 设计令牌"]
+        UI["@eu/ui 设计系统(Element Plus 封装)"]
+        KIT["@eu/console-kit 控制台框架"]
+        SDK["@eu/sdk 请求/OpenAPI 客户端"]
+        TOKENS["@eu/tokens 设计令牌"]
     end
 
     subgraph BACKEND["后端服务(参见 03 章)"]
         SVC_USER["账号/IAM 服务 svc-iam"]
         SVC_META["元数据/注册表服务 svc-api-meta<br/>(子应用注册表+产品目录)"]
-        SVC_RES["各产品资源服务(scecs/scoss/...)"]
+        SVC_RES["各产品资源服务(euecs/euoss/...)"]
         SVC_BILL["计费/订单服务 svc-billing/svc-order"]
     end
 
@@ -188,31 +188,31 @@ flowchart TB
 
 | 域名 | 用途 | 缓存策略 |
 |---|---|---|
-| `www.starcloud.cn` | 营销官网(首页/全部产品/产品详情/定价/活动) | SSR 输出,CDN 缓存 60s + stale-while-revalidate |
-| `console.starcloud.cn` | 控制台主框架 + 全部子应用 | HTML no-cache |
-| `docs.starcloud.cn` | 文档站 | 纯静态,CDN 长缓存,HTML 短缓存 |
-| `account.starcloud.cn` | 账号中心:登录/注册/找回/实名(未登录态)+ 账号管理/RAM/AK(登录态),SSO 唯一认证域 | HTML no-cache,独立高可用部署 |
-| `billing.starcloud.cn` | 费用中心独立站形态(账单/订单/续费/发票) | HTML no-cache |
-| `ticket.starcloud.cn` | 工单支持独立站形态(工单/支持计划/健康看板) | HTML no-cache |
-| `api.starcloud.cn` | APISIX 网关统一 API 入口(控制台 BFF 与子应用 XHR 经此路由;OpenAPI 对客入口按产品子域名 `{productCode}.api.starcloud.cn` 承载,见《04-middleware-infrastructure.md》§3.2,本表不重复列) | 不缓存 |
-| `static.starcloud.cn` | 静态资产 CDN 域名(含子应用 entry) | 带 hash 资产 immutable,entry HTML no-cache |
+| `www.euler.emoera.com` | 营销官网(首页/全部产品/产品详情/定价/活动) | SSR 输出,CDN 缓存 60s + stale-while-revalidate |
+| `console.euler.emoera.com` | 控制台主框架 + 全部子应用 | HTML no-cache |
+| `docs.euler.emoera.com` | 文档站 | 纯静态,CDN 长缓存,HTML 短缓存 |
+| `account.euler.emoera.com` | 账号中心:登录/注册/找回/实名(未登录态)+ 账号管理/RAM/AK(登录态),SSO 唯一认证域 | HTML no-cache,独立高可用部署 |
+| `billing.euler.emoera.com` | 费用中心独立站形态(账单/订单/续费/发票) | HTML no-cache |
+| `ticket.euler.emoera.com` | 工单支持独立站形态(工单/支持计划/健康看板) | HTML no-cache |
+| `api.euler.emoera.com` | APISIX 网关统一 API 入口(控制台 BFF 与子应用 XHR 经此路由;OpenAPI 对客入口按产品子域名 `{productCode}.api.euler.emoera.com` 承载,见《04-middleware-infrastructure.md》§3.2,本表不重复列) | 不缓存 |
+| `static.euler.emoera.com` | 静态资产 CDN 域名(含子应用 entry) | 带 hash 资产 immutable,entry HTML no-cache |
 
-SSO 会话拓扑(对齐《01-product-catalog.md》§4.1):account 是唯一认证域,登录成功后签发 refresh_token Cookie(`Domain=.starcloud.cn; HttpOnly; Secure; SameSite=Lax`,见 5.1),console/billing/ticket 三站共享会话;billing/ticket 的独立站形态与控制台内嵌子应用形态共享同一会话,形态切换对用户无感。www 营销站仅登录态读取用户标识用于个性化。
+SSO 会话拓扑(对齐《01-product-catalog.md》§4.1):account 是唯一认证域,登录成功后签发 refresh_token Cookie(`Domain=.euler.emoera.com; HttpOnly; Secure; SameSite=Lax`,见 5.1),console/billing/ticket 三站共享会话;billing/ticket 的独立站形态与控制台内嵌子应用形态共享同一会话,形态切换对用户无感。www 营销站仅登录态读取用户标识用于个性化。
 
 控制台内 URL 规范(主应用 vue-router 管理一级路径,子应用接管二级及以下):
 
 ```text
-console.starcloud.cn/                          # 总览页(主应用自持)
-console.starcloud.cn/scecs/instances           # 计算类子应用:云服务器实例列表
-console.starcloud.cn/scecs/instances/scecs-cn-north-1-01-a1b2c3d4     # 计算类子应用:云服务器实例详情(资源 ID 格式见《00-overview.md》附录 A 全局标识规范)
-console.starcloud.cn/scecs/buy                 # 计算类子应用:云服务器购买页
-console.starcloud.cn/scoss/buckets             # 存储类子应用:Bucket 列表
-console.starcloud.cn/billing/invoices          # 费用中心子应用形态(billing.starcloud.cn/billing/invoices 同页可达)
-console.starcloud.cn/account/ram/users         # 账号中心子应用形态(account.starcloud.cn/account/ram/users 同页可达)
+console.euler.emoera.com/                          # 总览页(主应用自持)
+console.euler.emoera.com/euecs/instances           # 计算类子应用:云服务器实例列表
+console.euler.emoera.com/euecs/instances/euecs-cn-north-1-01-a1b2c3d4     # 计算类子应用:云服务器实例详情(资源 ID 格式见《00-overview.md》附录 A 全局标识规范)
+console.euler.emoera.com/euecs/buy                 # 计算类子应用:云服务器购买页
+console.euler.emoera.com/euoss/buckets             # 存储类子应用:Bucket 列表
+console.euler.emoera.com/billing/invoices          # 费用中心子应用形态(billing.euler.emoera.com/billing/invoices 同页可达)
+console.euler.emoera.com/account/ram/users         # 账号中心子应用形态(account.euler.emoera.com/account/ram/users 同页可达)
 ```
 
 规则:
-- 一级路径段 = productCode(品类子应用)或功能域(account/billing/ticket 双形态);《01-product-catalog.md》§4.3 路由模式 `/console/{productCode}` 在本章落地为 console 子域承载,即 `/console` 段升格为子域、实际路径为 `console.starcloud.cn/{productCode}`(与 01§4.3 路由模式等价,不产生冗余路径段);注册表维护 productCode→子应用映射,一个品类子应用登记本类全部 productCode;一级路径一经发布**永不变更**(变更需走重定向映射);
+- 一级路径段 = productCode(品类子应用)或功能域(account/billing/ticket 双形态);《01-product-catalog.md》§4.3 路由模式 `/console/{productCode}` 在本章落地为 console 子域承载,即 `/console` 段升格为子域、实际路径为 `console.euler.emoera.com/{productCode}`(与 01§4.3 路由模式等价,不产生冗余路径段);注册表维护 productCode→子应用映射,一个品类子应用登记本类全部 productCode;一级路径一经发布**永不变更**(变更需走重定向映射);
 - 选择 productCode 而非 appCode 作为一级路径,是为了未来某大类细化拆分为一产品一子应用时(1.2 节改选条件)URL 与路由契约零变更;
 - 子应用内部路由模式统一 `history`,由 Wujie 接管后与主框架 URL 双向同步;
 - 查询参数保留区:`?regionId=cn-north-1`(全局地域切换器写入,所有子应用必须读取;region 命名见《00-overview.md》附录 A 全局标识规范)。
@@ -220,7 +220,7 @@ console.starcloud.cn/account/ram/users         # 账号中心子应用形态(acc
 ### 2.3 静态资源目录规范
 
 ```text
-static.starcloud.cn/
+static.euler.emoera.com/
 ├── portal/            # 官网资产(由 CDN 回源 SSR/静态层)
 ├── docs/              # 文档站资产
 ├── shell/1.8.2/       # 主框架带版本目录(支持秒级回滚:注册表/入口指回旧版本)
@@ -284,7 +284,7 @@ import { setupApp, preloadApp, startApp, destroyApp } from "wujie";
 
 setupApp({
   name: "compute",                              // 与注册表一致
-  url: entry.entryUrl,                          // https://static.starcloud.cn/apps/compute/2.3.1/index.html
+  url: entry.entryUrl,                          // https://static.euler.emoera.com/apps/compute/2.3.1/index.html
   exec: true,                                   // 预执行
   alive: entry.keepAlive,                       // 高频大类(计算/存储)保活
   props: createSharedProps(),                   // 注入登录态、总线、共享依赖(见 6.4/6.5)
@@ -297,8 +297,8 @@ setupApp({
 ```
 
 子应用侧(`console-compute`)无框架耦合改造,只需:
-- `vite.config.ts` 设置 `base: 'https://static.starcloud.cn/apps/compute/${version}/'`(构建期注入);
-- 使用 `@sc/wujie-bridge` 检测运行环境:`window.__POWERED_BY_WUJIE__` 为真时走子应用模式(不渲染自己的登录页/顶栏),否则独立模式全量渲染(双形态站点 account/billing/ticket 复用同一机制);
+- `vite.config.ts` 设置 `base: 'https://static.euler.emoera.com/apps/compute/${version}/'`(构建期注入);
+- 使用 `@eu/wujie-bridge` 检测运行环境:`window.__POWERED_BY_WUJIE__` 为真时走子应用模式(不渲染自己的登录页/顶栏),否则独立模式全量渲染(双形态站点 account/billing/ticket 复用同一机制);
 - 跨域:子应用 entry 域(static 域)需对 console 域开放 CORS 头(由对象存储/CDN 统一配置),这是 Wujie entry 模式的硬性要求。
 
 ---
@@ -320,8 +320,8 @@ CREATE TABLE mf_app_registry (
   id            BIGINT PRIMARY KEY AUTO_INCREMENT,
   app_code      VARCHAR(32)  NOT NULL COMMENT '子应用代号,如 compute/billing',
   app_title     VARCHAR(64)  NOT NULL COMMENT '大类或站点名,如 计算、费用中心',
-  product_codes VARCHAR(256) NOT NULL DEFAULT '' COMMENT '承载的产品code列表,如 scecs,scsas;站点子应用(account/billing/ticket)为空',
-  active_rules  VARCHAR(512) NOT NULL COMMENT '一级路由列表,如 /scecs,/scsas;站点子应用为 /account 等',
+  product_codes VARCHAR(256) NOT NULL DEFAULT '' COMMENT '承载的产品code列表,如 euecs,eusas;站点子应用(account/billing/ticket)为空',
+  active_rules  VARCHAR(512) NOT NULL COMMENT '一级路由列表,如 /euecs,/eusas;站点子应用为 /account 等',
   entry_url     VARCHAR(512) NOT NULL COMMENT '当前稳定版 entry',
   version       VARCHAR(32)  NOT NULL COMMENT '当前稳定版语义化版本',
   keep_alive    TINYINT      NOT NULL DEFAULT 0,
@@ -344,15 +344,15 @@ API 响应示例:
     {
       "appCode": "compute",
       "appTitle": "计算",
-      "productCodes": ["scecs", "scsas", "scgpu", "sccke", "sceci", "scfc"],
-      "activeRules": ["/scecs", "/scsas", "/scgpu", "/sccke", "/sceci", "/scfc"],
-      "entryUrl": "https://static.starcloud.cn/apps/compute/2.3.1/index.html",
+      "productCodes": ["euecs", "eusas", "eugpu", "eucke", "eueci", "eufc"],
+      "activeRules": ["/euecs", "/eusas", "/eugpu", "/eucke", "/eueci", "/eufc"],
+      "entryUrl": "https://static.euler.emoera.com/apps/compute/2.3.1/index.html",
       "version": "2.3.1",
       "keepAlive": true,
       "preload": true,
       "gray": {
         "version": "2.4.0",
-        "entryUrl": "https://static.starcloud.cn/apps/compute/2.4.0/index.html",
+        "entryUrl": "https://static.euler.emoera.com/apps/compute/2.4.0/index.html",
         "rule": { "type": "account_percent", "percent": 10 }
       }
     }
@@ -366,8 +366,8 @@ API 响应示例:
 
 ```mermaid
 flowchart TD
-    START["用户进入 console.starcloud.cn"] --> BOOT["主框架启动<br/>拉取登录态 + 注册表(并行)"]
-    BOOT --> ROUTE{"解析一级路径<br/>productCode(/scecs/…)"}
+    START["用户进入 console.euler.emoera.com"] --> BOOT["主框架启动<br/>拉取登录态 + 注册表(并行)"]
+    BOOT --> ROUTE{"解析一级路径<br/>productCode(/euecs/…)"}
     ROUTE -->|命中注册表| GRAY{"命中灰度规则?<br/>(account_percent/白名单)"}
     ROUTE -->|未命中| NF["404 页 + 全部产品导航"]
     GRAY -->|是| ENTRY_G["使用 gray entry"]
@@ -391,10 +391,10 @@ sequenceDiagram
     participant C as CDN/对象存储
     participant E as console-compute(沙箱内)
 
-    U->>S: GET /scecs/instances
+    U->>S: GET /euecs/instances
     par 并行初始化
         S->>M: GET /meta/console/apps
-        M-->>S: 注册表(含 compute entry,映射 /scecs)
+        M-->>S: 注册表(含 compute entry,映射 /euecs)
     and
         S->>M: GET /iam/session(校验登录态,经 svc-iam)
         M-->>S: 用户/权限快照
@@ -402,7 +402,7 @@ sequenceDiagram
     S->>C: fetch compute entry HTML + 资产
     C-->>S: 资源(指纹校验通过)
     S->>E: Wujie 沙箱执行,注入 props(token/总线/共享依赖)
-    E->>M: GET /scecs/instances?regionId=cn-north-1(经 APISIX)
+    E->>M: GET /euecs/instances?regionId=cn-north-1(经 APISIX)
     M-->>E: 资源列表
     E-->>S: 上报标题/面包屑/菜单高亮
     S-->>U: 渲染完成
@@ -432,8 +432,8 @@ sequenceDiagram
 
 | 项 | 方案 |
 |---|---|
-| access_token | JWT,有效期 15 分钟;仅存于主框架 Pinia store 与 JS 内存,**不落** localStorage;通过 props 下发给子应用,子应用统一走 `@sc/sdk` 发起请求时附带 `Authorization: Bearer` |
-| refresh_token | 不透明字符串,有效期 **7 天**,每次续期旋转签发(旧 token 吊销、新 token 下发,7 天内活跃则会话持续延展);`Set-Cookie: HttpOnly; Secure; SameSite=Lax; Domain=.starcloud.cn; Path=/api/auth`(根域签发,console/billing/ticket 三站共享,见 2.2 SSO 会话拓扑);前端 JS 永远读不到。时效与 Cookie 属性由安全章锁定(见《07-security.md》§2.4 会话参数统一基线),本章不得单独变更。注:SameSite=Lax 下从站外(如邮件链接)直达控制台时浏览器不携带该 cookie,主框架静默续期失败后按 §5.3 路由守卫跳转 account 登录页恢复登录态,属预期行为 |
+| access_token | JWT,有效期 15 分钟;仅存于主框架 Pinia store 与 JS 内存,**不落** localStorage;通过 props 下发给子应用,子应用统一走 `@eu/sdk` 发起请求时附带 `Authorization: Bearer` |
+| refresh_token | 不透明字符串,有效期 **7 天**,每次续期旋转签发(旧 token 吊销、新 token 下发,7 天内活跃则会话持续延展);`Set-Cookie: HttpOnly; Secure; SameSite=Lax; Domain=.euler.emoera.com; Path=/api/auth`(根域签发,console/billing/ticket 三站共享,见 2.2 SSO 会话拓扑);前端 JS 永远读不到。时效与 Cookie 属性由安全章锁定(见《07-security.md》§2.4 会话参数统一基线),本章不得单独变更。注:SameSite=Lax 下从站外(如邮件链接)直达控制台时浏览器不携带该 cookie,主框架静默续期失败后按 §5.3 路由守卫跳转 account 登录页恢复登录态,属预期行为 |
 | 静默续期 | access_token 剩余 < 3 分钟或收到 401 时,主框架调用 `POST /api/auth/refresh`(浏览器自动带 cookie)换新 access_token;并发请求排队等待续期(单飞锁) |
 | 登出 | `POST /api/auth/logout` 服务端吊销 refresh_token;清内存;总线广播;跳 account 登录页 |
 | CSRF | refresh 端点校验自定义头 `X-Requested-With`(SameSite=Lax + 自定义头双保险);网关对 `/api/auth/*` 强制该头 |
@@ -447,7 +447,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant P as account.starcloud.cn 登录页(SSO 唯一认证域)
+    participant P as account.euler.emoera.com 登录页(SSO 唯一认证域)
     participant GW as APISIX
     participant IAM as svc-iam(账号/IAM 服务,account 域签发,见 07 章)
     participant S as console-shell
@@ -455,9 +455,9 @@ sequenceDiagram
     U->>P: 访问登录页(带 redirect=console 目标 URL)
     U->>GW: POST /api/auth/login(账密/短信/MFA)
     GW->>IAM: 校验(风控/防爆破,见 07 章)
-    IAM-->>U: 200 + Set-Cookie(refresh_token, HttpOnly, SameSite=Lax, Domain=.starcloud.cn) + 返回 access_token
+    IAM-->>U: 200 + Set-Cookie(refresh_token, HttpOnly, SameSite=Lax, Domain=.euler.emoera.com) + 返回 access_token
     Note over P,IAM: Cookie 设于根域,console/billing/ticket 三站共享会话
-    P->>S: 302 回 console.starcloud.cn
+    P->>S: 302 回 console.euler.emoera.com
     S->>GW: GET /api/iam/session(带 access_token,经 svc-iam)
     GW-->>S: 用户信息 + 权限快照(RAM 策略评估结果摘要)
     Note over S: access_token 存 Pinia;权限快照缓存
@@ -480,7 +480,7 @@ router.beforeEach(async (to) => {
   const auth = useAuthStore();
   if (!auth.accessToken) {
     try { await auth.silentRefresh(); }
-    catch { return redirectAccount(to.fullPath); } // 跳 account.starcloud.cn 登录,带 redirect 参数
+    catch { return redirectAccount(to.fullPath); } // 跳 account.euler.emoera.com 登录,带 redirect 参数
   }
 
   // 3) 权限判定:一级路径(productCode) -> 品类子应用 -> 所需 RAM action 前缀
@@ -496,7 +496,7 @@ router.beforeEach(async (to) => {
 
 要点:
 - **权限快照模型**:登录后 IAM 返回该账号的策略评估摘要(产品级 action 集合),页面级菜单按此渲染;资源级判定(能否操作某台实例)**永远由后端网关+服务端裁决**,前端只做 UI 隐藏,不作为安全边界(参见《07-security.md》);
-- 401 全局拦截:`@sc/sdk` 收到 401 → 触发单飞续期 → 成功则重放请求,失败则广播登出并跳登录页;
+- 401 全局拦截:`@eu/sdk` 收到 401 → 触发单飞续期 → 成功则重放请求,失败则广播登出并跳登录页;
 - 实名认证状态作为全局拦截:未实名账号进入控制台强制引导实名页(合规要求,见《01-product-catalog.md》§4.5 账号中心页面地图)。
 
 ### 5.4 跨子应用会话同步
@@ -510,7 +510,7 @@ router.beforeEach(async (to) => {
 | `auth:switch-account`(RAM 角色切换) | 账号中心(子应用形态经总线;独立站形态经后端事件) | 总线广播 → 主框架强制刷新权限快照与当前页面数据 |
 | `region:changed` | 主框架地域选择器 | 所有激活子应用监听并重新拉取数据 |
 
-实现:`@sc/wujie-bridge` 基于 Wujie 的 `window.$wujie?.bus` 封装主题订阅;保活模式下子应用 `deactivate` 期间总线消息缓存于主框架,再次激活时回放最近一条状态类消息(仅最新值,非全量)。
+实现:`@eu/wujie-bridge` 基于 Wujie 的 `window.$wujie?.bus` 封装主题订阅;保活模式下子应用 `deactivate` 期间总线消息缓存于主框架,再次激活时回放最近一条状态类消息(仅最新值,非全量)。
 
 ---
 
@@ -520,7 +520,7 @@ router.beforeEach(async (to) => {
 
 子应用 MR 合并前流水线强制检查(详见《08-devops-delivery.md》):
 
-1. `@sc/console-kit`、`@sc/sdk`、`@sc/ui` 版本满足主框架声明的兼容区间(注册表元数据带 `peerShellVersion`);
+1. `@eu/console-kit`、`@eu/sdk`、`@eu/ui` 版本满足主框架声明的兼容区间(注册表元数据带 `peerShellVersion`);
 2. 产物体积超预算则阻断(见第 12 章);
 3. 路由前缀、埋点、错误上报接入存在性检查(自定义 lint 规则);
 4. 预览环境自动部署:每个 MR 生成临时 entry(`apps/{app}/mr-{id}/index.html`),主框架支持通过 `?mf_app_compute=https://...` 参数在预览壳中加载,联调与验收无需发布。
@@ -546,7 +546,7 @@ router.beforeEach(async (to) => {
 ### 6.3 样式隔离
 
 - Wujie WebComponent 容器天然隔离子应用 CSS 作用域,**不依赖**人工前缀;
-- 但共享层必须统一,否则"隔离了但长得不一样":设计令牌 `@sc/tokens` 以 CSS 变量注入(`--sc-*`),主框架在容器上设置,子应用读取;子应用**禁止**重定义 `--sc-` 前缀变量;
+- 但共享层必须统一,否则"隔离了但长得不一样":设计令牌 `@eu/tokens` 以 CSS 变量注入(`--eu-*`),主框架在容器上设置,子应用读取;子应用**禁止**重定义 `--eu-` 前缀变量;
 - 规范红线:子应用禁止使用未 scope 的全局标签选择器(`body {}`、`div {}`);字体、滚动条、弹窗层级(z-index 区段划分:主框架 0–999,子应用 1000–1999,全局弹窗 2000+)按约定分区;
 - ESLint stylelint 规则 `sc/no-global-token-override` 在 CI 强制。
 
@@ -556,21 +556,21 @@ router.beforeEach(async (to) => {
 
 | 手段 | 场景 | 示例 |
 |---|---|---|
-| URL/查询参数 | 跨应用跳转携带上下文 | 费用中心→云服务器:`/scecs/instances?highlight=scecs-cn-north-1-01-a1b2c3d4&from=billing` |
+| URL/查询参数 | 跨应用跳转携带上下文 | 费用中心→云服务器:`/euecs/instances?highlight=euecs-cn-north-1-01-a1b2c3d4&from=billing` |
 | 后端数据 | 共享业务状态 | 资源列表、余额(各子应用分别请求,网关聚合;余额字段归 trade_db ledger,见《04-middleware-infrastructure.md》§6.3) |
 | props 注入 | 主→子只读能力 | token、用户信息、地域、主题、埋点器 |
 | wujie-bridge 总线 | 会话/布局级事件 | 5.4 节事件表 |
 
-禁止:子应用之间直接互相 import、直接操作对方 DOM、共享 localStorage 键(localStorage 命名空间按 `sc:{appCode}:` 前缀强制隔离,lint 检查)。
+禁止:子应用之间直接互相 import、直接操作对方 DOM、共享 localStorage 键(localStorage 命名空间按 `eu:{appCode}:` 前缀强制隔离,lint 检查)。
 
 ### 6.5 公共依赖共享
 
 **结论:构建期 externals 共享 + 主框架注入共享实例;不采用运行期 Module Federation。**
 
 **理由**:
-1. Vue/Vue Router/Pinia/Element Plus/`@sc/*` 必须全平台单实例(多 Vue 实例会导致 devtools、组件注册与总线混乱),externals 强制子应用不打包这些依赖,从机制上杜绝"两份 Vue";
+1. Vue/Vue Router/Pinia/Element Plus/`@eu/*` 必须全平台单实例(多 Vue 实例会导致 devtools、组件注册与总线混乱),externals 强制子应用不打包这些依赖,从机制上杜绝"两份 Vue";
 2. Wujie 沙箱内 `window` 被代理,主框架通过 `props` 注入共享实例,子应用以轻量 shim 映射,比 MF 运行期协商更可控、更可调试;
-3. 子应用体积大幅下降(典型 scecs 控制台业务 bundle 从 ~900KB 降至 ~250KB gzip 前)。
+3. 子应用体积大幅下降(典型 euecs 控制台业务 bundle 从 ~900KB 降至 ~250KB gzip 前)。
 
 ```ts
 // 子应用 vite.config.ts(节选)
@@ -578,7 +578,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       external: ["vue", "vue-router", "pinia", "element-plus",
-                 "@sc/ui", "@sc/sdk", "@sc/console-kit"],
+                 "@eu/ui", "@eu/sdk", "@eu/console-kit"],
     },
   },
 });
@@ -602,17 +602,17 @@ export function resolveShared(props?: SharedProps) {
 |---|---|
 | 子应用 JS 运行时错误 | Wujie 沙箱隔离,子应用崩溃不炸主框架;主框架 `plugins` 内 `window.onerror`/`unhandledrejection` 捕获并上报 |
 | 子应用加载失败 | 4.2 节降级面板:展示应用名/版本/错误码,提供"重试"与"新窗口独立打开 `apps 域独立入口`" |
-| 子应用内页面级错误 | `@sc/console-kit` 提供 `<AppErrorBoundary>` 包裹路由视图,错误页带 traceId 与反馈入口 |
+| 子应用内页面级错误 | `@eu/console-kit` 提供 `<AppErrorBoundary>` 包裹路由视图,错误页带 traceId 与反馈入口 |
 | 保活实例异常 | 激活时健康检查(子应用暴露 `healthCheck()`),失败则销毁重建 |
 | 前端白屏兜底 | 主框架监控容器渲染超时(8s 无内容),触发上报并展示降级面板 |
 
-子应用独立运行入口:每个品类子应用产物 `https://static.starcloud.cn/apps/{app}/{ver}/index.html` 可直接访问(独立模式渲染自己的壳),作为终极降级路径;双形态站点(account/billing/ticket)的降级入口即其独立子域站点本身,控制台子应用形态加载失败时直接引导跳转对应子域。
+子应用独立运行入口:每个品类子应用产物 `https://static.euler.emoera.com/apps/{app}/{ver}/index.html` 可直接访问(独立模式渲染自己的壳),作为终极降级路径;双形态站点(account/billing/ticket)的降级入口即其独立子域站点本身,控制台子应用形态加载失败时直接引导跳转对应子域。
 
 ---
 
 ## 7. 控制台通用框架(Console Kit)
 
-`@sc/console-kit` 是"阿里云控制台体验"的落地点:所有产品控制台子应用基于它开发,**填槽式**产出列表页/详情页/创建向导。
+`@eu/console-kit` 是"阿里云控制台体验"的落地点:所有产品控制台子应用基于它开发,**填槽式**产出列表页/详情页/创建向导。
 
 ### 7.1 统一布局
 
@@ -641,7 +641,7 @@ export function resolveShared(props?: SharedProps) {
 
 ```ts
 useResourceTable({
-  api: scecsSdk.describeInstances,          // OpenAPI 生成函数(见下)
+  api: euecsSdk.describeInstances,          // OpenAPI 生成函数(见下)
   columns: [
     { key: "instanceId", title: "实例 ID/名称", copyable: true, link: toDetail },
     { key: "status", title: "状态", render: StatusBadge },     // 统一状态徽章
@@ -661,7 +661,7 @@ useResourceTable({
 规范要点:
 - **状态徽章全局统一**:Running=绿、Stopped=灰、Expired/Locked=橙、Error=红、Creating/Pending=蓝+进度;状态文案与状态机严格一致(参见《03-backend-services.md》§5.2 资源状态机,资源台账唯一所有者为 svc-orchestrator);
 - 轮询退避:页面不可见(`visibilitychange`)停止轮询;存在"创建中/变配中"等过渡态才轮询,稳态列表 30s 低频;
-- 表格列配置持久化到 `sc:{app}:columns`;导出 CSV 走后端异步导出任务(大数据量不前端硬拼)。
+- 表格列配置持久化到 `eu:{app}:columns`;导出 CSV 走后端异步导出任务(大数据量不前端硬拼)。
 
 ### 7.3 详情页规范
 
@@ -692,10 +692,10 @@ flowchart LR
 
 ### 7.5 统一错误、Loading 与空态规范
 
-请求统一走 `@sc/sdk`,所有后端错误码结构化:
+请求统一走 `@eu/sdk`,所有后端错误码结构化:
 
 ```json
-{ "code": "Scecs.QuotaExceeded.Instance", "message": "实例配额不足", "requestId": "9f8a...", "detailUrl": "https://docs.starcloud.cn/..." }
+{ "code": "Euecs.QuotaExceeded.Instance", "message": "实例配额不足", "requestId": "9f8a...", "detailUrl": "https://docs.euler.emoera.com/..." }
 ```
 
 | 场景 | 规范 |
@@ -744,7 +744,7 @@ SEO 要点清单:
 - API 参考由 OpenAPI 规范自动生成(IDL-first,与后端 API 规范同源,参见《03-backend-services.md》),杜绝手写 API 文档漂移;
 - 版本化:文档目录按 `v1/v2` 维护,跟随产品 API 大版本;
 - 站内搜索:构建期索引 + 轻量客户端搜索(页面量增长后再评估接搜索 ES 集群,见《04-middleware-infrastructure.md》§8.1;trace 存储由独立 trace-ES 集群承担,与搜索 ES 物理隔离,见《05-data-observability.md》§7.3);
-- 文档内"OpenAPI 在线调试"组件:嵌一个 CSR 岛屿组件,调用网关沙箱环境,对标阿里云 OpenAPI Explorer(可后置,见《01-product-catalog.md》§4.4 文档站页面地图的 OpenAPI Explorer 节;OpenAPI 入口按产品子域名 `{productCode}.api.starcloud.cn` + Action/日期型 Version,见《04-middleware-infrastructure.md》§3.2)。
+- 文档内"OpenAPI 在线调试"组件:嵌一个 CSR 岛屿组件,调用网关沙箱环境,对标阿里云 OpenAPI Explorer(可后置,见《01-product-catalog.md》§4.4 文档站页面地图的 OpenAPI Explorer 节;OpenAPI 入口按产品子域名 `{productCode}.api.euler.emoera.com` + Action/日期型 Version,见《04-middleware-infrastructure.md》§3.2)。
 
 ---
 
@@ -757,13 +757,13 @@ SEO 要点清单:
 | 语言 | TypeScript(严格模式)全量覆盖;业务代码禁止 `any`(lint 报错) |
 | 包管理 | pnpm(hard link 省空间 + workspace 协议);锁定文件入库 |
 | Node | LTS 版本锁定(`.nvmrc` + CI 镜像固定) |
-| Lint/格式化 | `@sc/eslint-config`(ESLint + Prettier + Stylelint + vue 规则),pre-commit hook(husky)只检查暂存区 |
+| Lint/格式化 | `@eu/eslint-config`(ESLint + Prettier + Stylelint + vue 规则),pre-commit hook(husky)只检查暂存区 |
 | 提交 | Conventional Commits;公共包 MR 附 changeset 决定版本号 |
 | 状态管理 | Pinia(全平台唯一);子应用 store 命名空间 `{app}/` |
-| 请求 | 仅允许 `@sc/sdk`(内部封装 fetch/axios),禁止裸写 axios/fetch(lint 规则) |
+| 请求 | 仅允许 `@eu/sdk`(内部封装 fetch/axios),禁止裸写 axios/fetch(lint 规则) |
 | i18n | vue-i18n,首发 zh-CN,en 预留词条键(出海可后置) |
 
-`@sc/sdk` 由 OpenAPI 规范代码生成(后端 IDL-first 的下游产物),类型安全直达每个云产品 API;拦截器统一处理:token 注入、401 续期、错误码映射、requestId 提取、埋点。
+`@eu/sdk` 由 OpenAPI 规范代码生成(后端 IDL-first 的下游产物),类型安全直达每个云产品 API;拦截器统一处理:token 注入、401 续期、错误码映射、requestId 提取、埋点。
 
 ### 9.2 构建部署流水线(GitLab CI,与《08-devops-delivery.md》一致)
 
@@ -806,17 +806,17 @@ flowchart LR
 
 ## 10. 设计系统
 
-### 10.1 设计令牌(@sc/tokens)
+### 10.1 设计令牌(@eu/tokens)
 
 令牌为唯一事实源(JSON),构建期生成 CSS 变量、SCSS 变量与 TS 类型:
 
 ```text
-颜色:--sc-color-brand(主色)/ -brand-hover / -danger / -success / -warning
-      --sc-bg-page(#f5f7fa)/ -bg-container(#fff)/ -text-primary/-secondary/-disabled
-字号:--sc-font-size-{xs|sm|md|lg|xl}(12/13/14/16/20)
-间距:--sc-spacing-{1..8}(4px 基数)
-圆角/阴影/边框:--sc-radius-{sm|md}, --sc-shadow-{sm|md}
-布局:--sc-topbar-height(56px), --sc-sider-width(208px)
+颜色:--eu-color-brand(主色)/ -brand-hover / -danger / -success / -warning
+      --eu-bg-page(#f5f7fa)/ -bg-container(#fff)/ -text-primary/-secondary/-disabled
+字号:--eu-font-size-{xs|sm|md|lg|xl}(12/13/14/16/20)
+间距:--eu-spacing-{1..8}(4px 基数)
+圆角/阴影/边框:--eu-radius-{sm|md}, --eu-shadow-{sm|md}
+布局:--eu-topbar-height(56px), --eu-sider-width(208px)
 ```
 
 - 暗色模式:`[data-theme="dark"]` 切换令牌集(跟随系统 + 手动覆盖),控制台默认亮色,监控大屏类页面可强制暗色;
@@ -824,7 +824,7 @@ flowchart LR
 
 ### 10.2 组件库选型
 
-**结论:基础组件库选 Element Plus,`@sc/ui` 在其上做薄封装与业务增强。**
+**结论:基础组件库选 Element Plus,`@eu/ui` 在其上做薄封装与业务增强。**
 
 **理由**:
 1. Vue3 生态成熟度与中后台组件完整度最高(Tree/Transfer/日期等复杂件齐全),控制台场景直接命中;
@@ -834,11 +834,11 @@ flowchart LR
 **备选**:Ant Design Vue(设计更"企业",但样式体系侵入性略强)、Naive UI(TS 体验好、可定制强,但复杂件与生态资料稍弱)。
 **改选条件**:若设计团队要求高度定制视觉语言且接受较高封装成本 → Naive UI;若集团已有 AntD 设计规范资产 → Ant Design Vue。
 
-封装原则:`@sc/ui` **只增不改默认语义**——新增业务组件(ResourceTable、StatusBadge、RegionSelector、PriceText、CreateWizard 壳、EmptyGuide),覆写样式仅限令牌映射;子应用不允许绕过 `@sc/ui` 直接深度改 Element Plus 内部样式。
+封装原则:`@eu/ui` **只增不改默认语义**——新增业务组件(ResourceTable、StatusBadge、RegionSelector、PriceText、CreateWizard 壳、EmptyGuide),覆写样式仅限令牌映射;子应用不允许绕过 `@eu/ui` 直接深度改 Element Plus 内部样式。
 
 ### 10.3 图标与文案规范
 
-- 图标:自建 SVG 图标库 `@sc/icons`(产品图标 60+ 与操作图标 200+,sprite symbol 方案,按需引用);产品图标与《01-product-catalog.md》产品分类一一对应;禁止混用多套图标库;
+- 图标:自建 SVG 图标库 `@eu/icons`(产品图标 60+ 与操作图标 200+,sprite symbol 方案,按需引用);产品图标与《01-product-catalog.md》产品分类一一对应;禁止混用多套图标库;
 - 文案规范(摘录):
   - 术语表强制统一:实例/实例 ID、地域/可用区(不写"机房/机房区")、包年包月/按量付费(不写"预付费套餐/计时收费")、释放(不写"删除服务器");
   - 语气:陈述式、可操作("创建实例"而非"点击这里开始");错误文案=原因+动作("配额不足,可申请提升配额");
@@ -855,7 +855,7 @@ flowchart LR
 |---|---|---|
 | JS 错误/Promise rejection/资源加载失败 | 主框架全局监听 + Wujie 插件捕获子应用错误,附 appCode/version/account_id/traceId | `POST /api/v1/collect/web` → Kafka `cloud.sys.rum.event` → ClickHouse |
 | 性能指标 | LCP/FID/CLS/FCP + 子应用加载耗时(自定义埋点:entry fetch→沙箱执行→首屏) | 同上(→ `cloud.sys.rum.event`) |
-| API 质量 | `@sc/sdk` 统一上报:耗时、状态码、错误码、requestId | 同上(→ `cloud.sys.rum.event`),可按 appCode 聚合出"子应用接口成功率" |
+| API 质量 | `@eu/sdk` 统一上报:耗时、状态码、错误码、requestId | 同上(→ `cloud.sys.rum.event`),可按 appCode 聚合出"子应用接口成功率" |
 | 行为埋点 | 声明式(指令 `v-track`)关键转化漏斗:注册→首购、试用→转正 | 同上(→ `cloud.sys.rum.event`) |
 
 告警规则示例(对客告警由 alert-engine + alert-center 走对客通道,见《05-data-observability.md》§8 与《03-backend-services.md》§4.0):某子应用版本 JS 错误率 > 2% 持续 5 分钟 → 通知发布负责人并自动建议回滚;灰度版本错误率显著高于稳定版(>3 倍)→ 阻断放量。所有上报携带子应用版本号,使"指标异常→定位到具体版本→一键回滚"闭环成立。
@@ -870,7 +870,7 @@ flowchart LR
 |---|---|
 | 主框架 shell 首屏 JS | ≤ 350 KB |
 | 单个子应用业务 JS(不含共享层) | ≤ 300 KB |
-| 共享层(vue+element-plus+@sc/*)整体缓存 | ≤ 450 KB,全站共享 |
+| 共享层(vue+element-plus+@eu/*)整体缓存 | ≤ 450 KB,全站共享 |
 | 官网产品详情页 LCP | P75 < 2.5s(4G) |
 | 控制台子应用切换(预执行命中) | < 600ms |
 
@@ -897,8 +897,8 @@ flowchart LR
 | 阶段 | 前端里程碑 |
 |---|---|
 | P0(0~3 月) | 公共 monorepo 立项(tokens/ui/sdk 雏形);console-shell + Wujie 基座与子应用注册表;`web-account`(SSO 唯一认证域)上线、登录态闭环;品类子应用 `console-storage`/`console-compute` 与双形态站点 `web-billing`/`web-ticket` 建仓并出骨架(认证、账单、工单不可后置);官网 Nuxt3 首页+3 个产品详情+定价页;docs-site 骨架。此阶段即满足"账号、计费、OpenAPI、文档、工单"不可后置清单的前端面 |
-| P1(3~6 月) | console-kit 成熟(ResourceTable/向导/错误规范全量);品类子应用 `console-network`/`console-database`/`console-monitor` 补齐(对齐第一批 MVP:SCVPC/SCEIP、SCRDS、SCMON);SCCERT 与 RAM 权限管理由 `web-account`(账号中心)一并承载;注册表灰度放量机制全量运转;前端监控接入 ClickHouse;官网 SEO 结构化数据与 sitemap 完善 |
-| P2(6~12 月) | 共享依赖 externals 体系固化;视觉回归;`console-middleware`、`console-security` 随第二批产品建仓;SCECI 控制台随二期 ECI 上线(`console-compute` 内增路由);双形态站点的控制台子应用形态全量开放(billing/ticket 控制台内嵌);子应用总数稳定在"7 品类 + 3 双形态站点"上限 10 个之内(见 1.2,后续产品扩张只增路由不增仓库);暗色模式;性能预算门禁全面收紧 |
+| P1(3~6 月) | console-kit 成熟(ResourceTable/向导/错误规范全量);品类子应用 `console-network`/`console-database`/`console-monitor` 补齐(对齐第一批 MVP:EUVPC/EUEIP、EURDS、EUMON);EUCERT 与 RAM 权限管理由 `web-account`(账号中心)一并承载;注册表灰度放量机制全量运转;前端监控接入 ClickHouse;官网 SEO 结构化数据与 sitemap 完善 |
+| P2(6~12 月) | 共享依赖 externals 体系固化;视觉回归;`console-middleware`、`console-security` 随第二批产品建仓;EUECI 控制台随二期 ECI 上线(`console-compute` 内增路由);双形态站点的控制台子应用形态全量开放(billing/ticket 控制台内嵌);子应用总数稳定在"7 品类 + 3 双形态站点"上限 10 个之内(见 1.2,后续产品扩张只增路由不增仓库);暗色模式;性能预算门禁全面收紧 |
 | P3(12 月+) | 国际化多语言;OpenAPI Explorer 在线调试;设计系统对外输出(开放给生态伙伴定制控制台皮肤);评估 Module Federation 补充共享 |
 
 组织配套:平台组(shell/kit/官网基线,4~6 人)与产品前端(每产品组 1~2 人,接受平台组准入评审)双层结构,详见《09-roadmap.md》。
@@ -911,10 +911,10 @@ flowchart LR
 |---|---|
 | 《00-overview.md》 | 前端在总体分层中的位置:用户接入层;本章的域名/网关规划服从总体架构 |
 | 《01-product-catalog.md》 | 官网信息架构(目录三件套、定价页、费用中心模块)是官网与控制台页面结构的输入;MVP 产品顺序决定子应用建设顺序 |
-| 《03-backend-services.md》 | OpenAPI 规范/IDL 是 `@sc/sdk` 代码生成的源;订单中心、资源状态机、产品目录服务是前端业务流程的后端依赖 |
+| 《03-backend-services.md》 | OpenAPI 规范/IDL 是 `@eu/sdk` 代码生成的源;订单中心、资源状态机、产品目录服务是前端业务流程的后端依赖 |
 | 《04-middleware-infrastructure.md》 | APISIX 统一承接前端 API 流量(CORS/限流/灰度);MinIO 承载静态资产;Nacos 承载注册表与特性开关配置 |
 | 《05-data-observability.md》 | 前端 RUM/埋点数据经 Kafka 入 ClickHouse;告警与灰度放量观察依赖其指标体系 |
-| 《06-kubernetes-productization.md》 | 托管 K8s(SCCKE)/容器产品控制台的子应用(后续扩展,归 `console-compute`)运行于 K8s 之上,部署侧前端产物分发亦依赖 K8s |
+| 《06-kubernetes-productization.md》 | 托管 K8s(EUCKE)/容器产品控制台的子应用(后续扩展,归 `console-compute`)运行于 K8s 之上,部署侧前端产物分发亦依赖 K8s |
 | 《07-security.md》 | 登录协议、RAM 权限模型、CSRF/XSS/CSP 策略的安全基线;本章 5、6 章是其前端实现 |
 | 《08-devops-delivery.md》 | GitLab CI + ArgoCD 流水线细节;前端发布流程是其子集 |
 | 《09-roadmap.md》 | 本章演进路线的阶段划分与人员组织以其为准 |

@@ -17,12 +17,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/audit"
+	"github.com/qifalab/euler-platform/audit"
 )
 
 // accountHeader is injected by the APISIX gateway for authenticated calls
 // (04§3.1). It is the tenant attribution for every audit event.
-const accountHeader = "X-Sc-Account-Id"
+const accountHeader = "X-Euler-Account-Id"
 
 // auditStore is the svc-audit persistence shape: per-account chain + event
 // trail. The full trail lives in ClickHouse in production (this process keeps
@@ -116,7 +116,7 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 		DecisionNumber: body.DecisionNumber,
 		RequestParams:  body.RequestParams,
 		ResponseCode:   body.ResponseCode,
-		TraceID:        r.Header.Get("X-Sc-TraceId"),
+		TraceID:        r.Header.Get("X-Euler-TraceId"),
 	}
 
 	recorded, err := chain.Append(ev)

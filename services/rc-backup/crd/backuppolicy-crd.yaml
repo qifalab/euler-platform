@@ -6,11 +6,11 @@
 #   3. Operator         (rc-backup — provision/operate engine, Go)
 #   4. metering point   (status.usage → cloud.metering.usage.raw)
 #
-# 云备份 SCBACKUP (M-7.4, 09-roadmap §4.3 M-7, P2): a scheduled-snapshot +
+# 云备份 EUBACKUP (M-7.4, 09-roadmap §4.3 M-7, P2): a scheduled-snapshot +
 # cross-AZ backup POLICY. The policy is REGIONAL (a backup policy is regional;
 # cross-AZ copy is a policy flag, not a placement constraint). POSTPAID by
 # stored capacity. Fulfilled by DriverK8s, bound in
-# provision.Registry.BindProduct("scbackup", DriverK8s).
+# provision.Registry.BindProduct("eubackup", DriverK8s).
 #
 # The policy is the INTENT layer; the actual snapshot creation and the
 # cross-AZ copy run inside the resource reconcile loop (06§4.1). Retention is
@@ -18,7 +18,7 @@
 # their retention window (pkg-go/backup.ExpiredSnapshots) and deletes them —
 # backup storage never grows unbounded.
 #
-# The four iron rules this schema enforces (same as sceci-instance-crd.yaml):
+# The four iron rules this schema enforces (same as eueci-instance-crd.yaml):
 #   * the CR is the only fact interface — no SSH, no reaching into internals
 #   * status is machine-readable: structured phase + conditions, never a log
 #   * the Operator is idempotent and re-entrant
@@ -38,7 +38,7 @@ spec:
     listKind: BackupPolicyList
     plural: backuppolicies
     singular: backuppolicy
-    shortNames: [scbackup]
+    shortNames: [eubackup]
   versions:
     - name: v1
       served: true
@@ -118,7 +118,7 @@ spec:
                         crossaz edition sets this on.
                     vpcId:
                       type: string
-                      description: SCVPC network boundary (decision R-02).
+                      description: EUVPC network boundary (decision R-02).
                 suspend:
                   type: boolean
                   default: false
@@ -174,7 +174,7 @@ spec:
                   description: >
                     Metering readings, a FIRST-CLASS status field (06§4.1 rule
                     4). A product that cannot report usage cannot be launched.
-                    These are published to cloud.metering.usage.raw. SCBACKUP is
+                    These are published to cloud.metering.usage.raw. EUBACKUP is
                     billed by stored backup capacity (gb_hour) and snapshot count.
                   items:
                     type: object
@@ -215,15 +215,15 @@ spec:
 apiVersion: products.cloud.platform/v1
 kind: BackupPolicy
 metadata:
-  name: scbackup-cn-north-1-01-3f4a5b6c
+  name: eubackup-cn-north-1-01-3f4a5b6c
   namespace: plat-backup
   labels:
     # All four are mandatory. Without them a cluster object cannot be
     # attributed to a tenant, which breaks isolation, billing and audit at once.
     cloud.platform/tenant: "100123"
     cloud.platform/project: "1"
-    cloud.platform/product: scbackup
-    cloud.platform/instance: scbackup-cn-north-1-01-3f4a5b6c
+    cloud.platform/product: eubackup
+    cloud.platform/instance: eubackup-cn-north-1-01-3f4a5b6c
   finalizers:
     # The Operator pushes a FINAL metering reading before removing this. "CR
     # truly gone" is the release-complete signal; without the finalizer, deletion
@@ -238,7 +238,7 @@ spec:
     scheduleHours: 24
     retentionDays: 30
     crossAz: false
-    vpcId: scvpc-cn-north-1-01-11223344
+    vpcId: euvpc-cn-north-1-01-11223344
 status:
   phase: Ready
   observedGeneration: 1

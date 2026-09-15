@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package euler.ticket.v1;
+
+option go_package = "github.com/qifalab/euler-platform/proto/euler/ticket/v1;ticketv1";
+
+// TicketService is svc-ticket (工单, 03§4.4.4). Owns ticket creation/flow/evaluation,
+// category & priority, SLA timing (计划分级后置), and the客服工作台 interface.
+//
+// MVP constraint: the ticket channel is on the "不可后置" list (对标启示 10) and
+// must ship in its most minimal form (03§4.4.4). Approval-style flows (配额提升、
+// 退款人工审核) are NOT re-implemented here — they reuse svc-workflow (03§4.3.3).
+service TicketService {
+  rpc CreateTicket(CreateTicketRequest) returns (Ticket);     // Ticket.CreateTicket
+  rpc ReplyTicket(ReplyTicketRequest) returns (TicketReply);  // Ticket.ReplyTicket
+  rpc ListTickets(ListTicketsRequest) returns (ListTicketsResponse); // Ticket.ListTickets
+}
+
+message Ticket {
+  int64 ticket_id = 1;
+  int64 account_id = 2;          // 分片键 (R2 账号维度聚合)
+  string category = 3;           // e.g. 计费 / 资源 / 配额 / 退款
+  TicketPriority priority = 4;
+  TicketStatus status = 5;
+  int64 sla_deadline = 6;        // unix seconds; first-response / resolution deadline
+  int64 assignee_id = 7;         // 客服 ID, 0 = unassigned
+  int64 created_at = 8;
+  int64 updated_at = 9;
+}
+
+enum TicketPriority {
+  TICKET_PRIORITY_UNSPECIFIED = 0;
+  TICKET_PRIORITY_LOW = 1;
+  TICKET_PRIORITY_NORMAL = 2;
+  TICKET_PRIORITY_HIGH = 3;
+  TICKET_PRIORITY_URGENT = 4;
+}
+
+enum TicketStatus {
+  TICKET_STATUS_UNSPECIFIED = 0;
+  TICKET_STATUS_OPEN = 1;
+  TICKET_STATUS_PROCESSING = 2;
+  TICKET_STATUS_WAITING_REPLY = 3;  // awaiting customer's latest reply
+  TICKET_STATUS_CLOSED = 4;
+}
+
+// --- Request / response messages ---
+
+message CreateTicketRequest {
+  int64 account_id = 1;
+  string category = 2;
+  TicketPriority priority = 3;
+  string content = 4;            // first message body (MVP single-text form)
+}
+
+message ReplyTicketRequest {
+  int64 ticket_id = 1;
+  int64 account_id = 2;
+  string content = 3;
+  bool from_customer = 4;        // true=customer, false=客服/agent
+}
+
+message TicketReply {
+  int64 reply_id = 1;
+  int64 ticket_id = 2;
+  int64 account_id = 3;
+  string content = 4;
+  bool from_customer = 5;
+  int64 created_at = 6;
+}
+
+message ListTicketsRequest {
+  int64 account_id = 1;
+  TicketStatus status = 2;       // optional filter
+  int32 page_number = 3;
+  int32 page_size = 4;
+}
+
+message ListTicketsResponse {
+  repeated Ticket tickets = 1;
+  int32 total_count = 2;
+}

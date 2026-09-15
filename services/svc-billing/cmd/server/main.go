@@ -10,7 +10,7 @@
 //	                           returns the Charge + deductions + arrears state
 //	GET  /internal/bills    -> billing.Summarize for a period
 //
-// Every handler reads the caller's account_id from the X-Sc-Account-Id header
+// Every handler reads the caller's account_id from the X-Euler-Account-Id header
 // the gateway injects (07§3.3); a missing header is a 403, never a guess.
 //
 // /healthz, /readyz and /metrics are the probe/metric endpoints every service
@@ -33,18 +33,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/billing"
-	"github.com/starcloud/sc-platform/invoice"
-	"github.com/starcloud/sc-platform/ledger"
-	"github.com/starcloud/sc-platform/metering"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/reservepack"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/invoice"
+	"github.com/qifalab/euler-platform/ledger"
+	"github.com/qifalab/euler-platform/metering"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/reservepack"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 func main() {
 	// Dev port allocation for svc-billing is :9210 — the 92xx block the console
-	// plane uses (:9206 belongs to svc-metering). console-bff's SC_SVC_BILLING_URL
+	// plane uses (:9206 belongs to svc-metering). console-bff's EULER_SVC_BILLING_URL
 	// default points at the same port; production overrides via -http / Helm.
 	var httpAddr = flag.String("http", ":9210", "HTTP listen address")
 	flag.Parse()
@@ -125,7 +125,7 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	// TODO(svc-billing): expose RED metrics. Mandatory labels: service,
 	// instance, region, env (05§7.2). FORBIDDEN as labels: account_id,
 	// resource_id (high cardinality — 05§7.2).
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 // ---------------------------------------------------------------------------
 
 // app holds the wired pkg-go domain objects and the stores behind them: MySQL
-// (trade_db) when SC_DB_DSN is set, in-memory otherwise.
+// (trade_db) when EULER_DB_DSN is set, in-memory otherwise.
 type app struct {
 	ledger *ledger.Ledger
 	// store is the ledger's persistence port — *memLedgerStore in the demo,
@@ -155,7 +155,7 @@ type app struct {
 }
 
 // newApp wires the domain objects. Persistence is opt-in (pkg-go/storage doc):
-// with SC_DB_DSN set, the cash ledger and the resource-pack ledger are trade_db's
+// with EULER_DB_DSN set, the cash ledger and the resource-pack ledger are trade_db's
 // tables, so balances, packs and their journals survive a restart; unset, the
 // service keeps the in-memory stores that make the demo and `go test`
 // dependency-free.
@@ -210,7 +210,7 @@ func newApp(ctx context.Context) (*app, error) {
 
 // newInMemoryApp builds the demo app: in-memory stores, guarded local id
 // counters, invoice book. Tests construct it directly, so they never depend on
-// whether the developer's shell has SC_DB_DSN set.
+// whether the developer's shell has EULER_DB_DSN set.
 func newInMemoryApp() *app {
 	var invMu sync.Mutex
 	var invSeq int64
@@ -255,10 +255,10 @@ func limitBody(w http.ResponseWriter, r *http.Request) {
 }
 
 // internalToken is the optional shared secret for service-to-service calls.
-// When the SC_INTERNAL_TOKEN environment variable is set, every /internal/*
-// request must carry a matching X-Sc-Internal-Token header. Unset (the dev
+// When the EULER_INTERNAL_TOKEN environment variable is set, every /internal/*
+// request must carry a matching X-Euler-Internal-Token header. Unset (the dev
 // default) disables the check.
-var internalToken = os.Getenv("SC_INTERNAL_TOKEN")
+var internalToken = os.Getenv("EULER_INTERNAL_TOKEN")
 
 // checkInternalToken enforces the optional shared-secret header. Returns false
 // (and writes 403) when the token is configured and the request's header does
@@ -267,7 +267,7 @@ func checkInternalToken(w http.ResponseWriter, r *http.Request) bool {
 	if internalToken == "" {
 		return true // dev default: gateway network isolation is the only guard
 	}
-	if r.Header.Get("X-Sc-Internal-Token") != internalToken {
+	if r.Header.Get("X-Euler-Internal-Token") != internalToken {
 		writeErr(w, http.StatusForbidden, "Forbidden", "invalid internal token")
 		return false
 	}
@@ -278,23 +278,23 @@ func checkInternalToken(w http.ResponseWriter, r *http.Request) bool {
 // header. A missing/blank header is 403 — the service must never fall back to
 // a client-supplied account in the body (07§3.3).
 //
-// TRUST BOUNDARY: X-Sc-Account-Id is trusted only because /internal/* routes
+// TRUST BOUNDARY: X-Euler-Account-Id is trusted only because /internal/* routes
 // are reachable exclusively via the APISIX gateway, which strips any
 // client-supplied copy and injects the authenticated account. Deployments that
-// cannot guarantee network isolation should set SC_INTERNAL_TOKEN so callers
-// must also present the shared X-Sc-Internal-Token secret.
+// cannot guarantee network isolation should set EULER_INTERNAL_TOKEN so callers
+// must also present the shared X-Euler-Internal-Token secret.
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	if !checkInternalToken(w, r) {
 		return 0, false
 	}
-	raw := strings.TrimSpace(r.Header.Get("X-Sc-Account-Id"))
+	raw := strings.TrimSpace(r.Header.Get("X-Euler-Account-Id"))
 	if raw == "" {
-		writeErr(w, http.StatusForbidden, "Forbidden", "missing X-Sc-Account-Id header")
+		writeErr(w, http.StatusForbidden, "Forbidden", "missing X-Euler-Account-Id header")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "malformed X-Sc-Account-Id")
+		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true

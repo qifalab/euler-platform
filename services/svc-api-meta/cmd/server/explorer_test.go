@@ -16,15 +16,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/cps1"
+	"github.com/qifalab/euler-platform/cps1"
 )
 
 // golden-vector credentials (proto-hub/testdata/cps1-golden-vectors.json).
 const (
-	gAK      = "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	gAK      = "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	gSK      = "test-secret-key-0123456789"
 	gRegion  = "cn-north-1"
-	gProduct = "scecs" // service namespace "ecs"
+	gProduct = "euecs" // service namespace "ecs"
 )
 
 // TestExplorerSignsAndVerifiesGoldenInputs feeds the Explorer a request with
@@ -49,8 +49,8 @@ func TestExplorerSignsAndVerifiesGoldenInputs(t *testing.T) {
 	raw, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/apimeta/explorer", bytes.NewReader(raw))
-	req.Header.Set("X-Sc-Account-Id", "100123")
-	req.Header.Set("X-Sc-TraceId", "test-trace")
+	req.Header.Set("X-Euler-Account-Id", "100123")
+	req.Header.Set("X-Euler-TraceId", "test-trace")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -68,7 +68,7 @@ func TestExplorerSignsAndVerifiesGoldenInputs(t *testing.T) {
 		t.Fatalf("envelope Code = %q, want OK", resp.Code)
 	}
 
-	// Must not have executed a live call (no SC_EXPLORER_TARGET configured).
+	// Must not have executed a live call (no EULER_EXPLORER_TARGET configured).
 	if resp.Data.Executed {
 		t.Fatal("Executed=true; Explorer made a live call with no target configured")
 	}
@@ -86,12 +86,12 @@ func TestExplorerSignsAndVerifiesGoldenInputs(t *testing.T) {
 	if sig.Signature == "" {
 		t.Fatal("Signature is empty")
 	}
-	// service namespace derived from scecs → ecs (golden-vector service).
+	// service namespace derived from euecs → ecs (golden-vector service).
 	if sig.Service != "ecs" {
 		t.Errorf("Service = %q, want ecs", sig.Service)
 	}
-	if sig.Host != "scecs.api.starcloud.cn" {
-		t.Errorf("Host = %q, want scecs.api.starcloud.cn", sig.Host)
+	if sig.Host != "euecs.api.euler.emoera.com" {
+		t.Errorf("Host = %q, want euecs.api.euler.emoera.com", sig.Host)
 	}
 
 	// The proof: the Authorization the Explorer produced must verify through
@@ -126,7 +126,7 @@ func TestExplorerRejectsMissingCredentials(t *testing.T) {
 
 	body, _ := json.Marshal(explorerRequest{ProductCode: gProduct, Method: "GET", Path: "/"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/apimeta/explorer", bytes.NewReader(body))
-	req.Header.Set("X-Sc-Account-Id", "100123")
+	req.Header.Set("X-Euler-Account-Id", "100123")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -154,12 +154,12 @@ func TestExplorerRejectsMissingAccountHeader(t *testing.T) {
 // TestServiceNamespace covers the product→service derivation for phase-1 products.
 func TestServiceNamespace(t *testing.T) {
 	cases := map[string]string{
-		"scecs": "ecs",
-		"scoss": "oss",
-		"scvpc": "vpc",
-		"scrds": "rds",
-		"scmon": "mon",
-		"sceip": "eip",
+		"euecs": "ecs",
+		"euoss": "oss",
+		"euvpc": "vpc",
+		"eurds": "rds",
+		"eumon": "mon",
+		"eueip": "eip",
 	}
 	for product, want := range cases {
 		if got := serviceNamespace(product); got != want {

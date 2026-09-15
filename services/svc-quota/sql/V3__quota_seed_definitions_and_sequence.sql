@@ -22,8 +22,8 @@
 -- and two replicas would race to own the same row.
 --
 -- The two rows mirror what the service's in-memory store used to hardcode:
---   quota_scecs_instance — 20 instances per region (REGION scope)
---   quota_scoss_bucket   — 100 buckets across regions (GLOBAL scope)
+--   quota_euecs_instance — 20 instances per region (REGION scope)
+--   quota_euoss_bucket   — 100 buckets across regions (GLOBAL scope)
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS `id_sequence` (
@@ -41,5 +41,5 @@ INSERT IGNORE INTO `id_sequence` (`name`, `next_value`, `segment_size`) VALUES
 INSERT IGNORE INTO `quota_definition`
   (`quota_code`, `product_code`, `default_value`, `scope`, `adjustable`, `unit`)
 VALUES
-  ('quota_scecs_instance', 'scecs', 20,  'REGION', 1, '个'),
-  ('quota_scoss_bucket',   'scoss', 100, 'GLOBAL', 0, '个');
+  ('quota_euecs_instance', 'euecs', 20,  'REGION', 1, '个'),
+  ('quota_euoss_bucket',   'euoss', 100, 'GLOBAL', 0, '个');

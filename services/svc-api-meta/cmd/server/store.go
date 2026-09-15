@@ -7,7 +7,7 @@
 // _tmpl-go / in-server verify pattern).
 //
 // An Action is the atomic unit of the OpenAPI surface: every {product_code}
-// Action (e.g. scecs:CreateInstance) has a parameter schema (JSON Schema-ish),
+// Action (e.g. euecs:CreateInstance) has a parameter schema (JSON Schema-ish),
 // the set of error codes it can return (registered in this center — unregistered
 // codes are blocked at CI time, 03§9.3), and a version. This metadata drives
 // documentation generation and SDK generation (03§9.4).
@@ -19,17 +19,17 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/starcloud/sc-platform/errors"
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/errors"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // accountIDHeader is injected by the APISIX gateway on every internal call.
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // Action is the stored metadata for one OpenAPI Action.
 type Action struct {
-	ID          string          `json:"id"`          // {product}.{Action}, e.g. scecs.CreateInstance
-	ProductCode string          `json:"product_code"` // scecs / scoss / ...
+	ID          string          `json:"id"`          // {product}.{Action}, e.g. euecs.CreateInstance
+	ProductCode string          `json:"product_code"` // euecs / euoss / ...
 	ActionName  string          `json:"action_name"`  // CreateInstance
 	Version     string          `json:"version"`      // e.g. "2026-08-01"
 	ParamSchema json.RawMessage `json:"param_schema"` // parameter schema (JSON)
@@ -62,24 +62,24 @@ func newMetaStoreWith(repo actionRepo) *actionStore {
 // surface so the Explorer and docs have real Actions to show before the
 // services register their own (03§9.4 rule ①: a route is not mounted until its
 // metadata is registered here). These mirror the OpenAPI Actions the gateway
-// actually routes for scecs/scoss/scvpc.
+// actually routes for euecs/euoss/euvpc.
 func (s *actionStore) seedActions() {
 	seed := []Action{
-		{ID: "scecs.RunInstances", ProductCode: "scecs", ActionName: "RunInstances", Version: "2026-08-01",
+		{ID: "euecs.RunInstances", ProductCode: "euecs", ActionName: "RunInstances", Version: "2026-08-01",
 			ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceType","ImageId"],"properties":{"InstanceType":{"type":"string","description":"spec code, e.g. s2.large"},"ImageId":{"type":"string"},"InstanceName":{"type":"string"},"ChargeType":{"type":"string","enum":["Prepaid","Postpaid"]}}}`),
-			ErrorCodes:  []string{"scecs.InvalidInstanceType", "scecs.QuotaExceeded", "scecs.InsufficientBalance"}},
-		{ID: "scecs.DescribeInstances", ProductCode: "scecs", ActionName: "DescribeInstances", Version: "2026-08-01",
+			ErrorCodes:  []string{"euecs.InvalidInstanceType", "euecs.QuotaExceeded", "euecs.InsufficientBalance"}},
+		{ID: "euecs.DescribeInstances", ProductCode: "euecs", ActionName: "DescribeInstances", Version: "2026-08-01",
 			ParamSchema: json.RawMessage(`{"type":"object","properties":{"InstanceIds":{"type":"array","items":{"type":"string"}},"PageNumber":{"type":"integer"},"PageSize":{"type":"integer"}}}`),
-			ErrorCodes:  []string{"scecs.InstanceNotFound"}},
-		{ID: "scecs.StartInstance", ProductCode: "scecs", ActionName: "StartInstance", Version: "2026-08-01",
+			ErrorCodes:  []string{"euecs.InstanceNotFound"}},
+		{ID: "euecs.StartInstance", ProductCode: "euecs", ActionName: "StartInstance", Version: "2026-08-01",
 			ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceId"],"properties":{"InstanceId":{"type":"string"}}}`),
-			ErrorCodes:  []string{"scecs.InstanceNotFound", "scecs.IncorrectStatus"}},
-		{ID: "scoss.CreateBucket", ProductCode: "scoss", ActionName: "CreateBucket", Version: "2026-08-01",
+			ErrorCodes:  []string{"euecs.InstanceNotFound", "euecs.IncorrectStatus"}},
+		{ID: "euoss.CreateBucket", ProductCode: "euoss", ActionName: "CreateBucket", Version: "2026-08-01",
 			ParamSchema: json.RawMessage(`{"type":"object","required":["BucketName"],"properties":{"BucketName":{"type":"string"},"StorageClass":{"type":"string","enum":["Standard","IA","Archive"]}}}`),
-			ErrorCodes:  []string{"scoss.BucketAlreadyExists", "scoss.InvalidBucketName"}},
-		{ID: "scvpc.CreateVpc", ProductCode: "scvpc", ActionName: "CreateVpc", Version: "2026-08-01",
+			ErrorCodes:  []string{"euoss.BucketAlreadyExists", "euoss.InvalidBucketName"}},
+		{ID: "euvpc.CreateVpc", ProductCode: "euvpc", ActionName: "CreateVpc", Version: "2026-08-01",
 			ParamSchema: json.RawMessage(`{"type":"object","required":["CidrBlock"],"properties":{"CidrBlock":{"type":"string"},"VpcName":{"type":"string"}}}`),
-			ErrorCodes:  []string{"scvpc.InvalidCidrBlock", "scvpc.QuotaExceeded"}},
+			ErrorCodes:  []string{"euvpc.InvalidCidrBlock", "euvpc.QuotaExceeded"}},
 	}
 	for _, a := range seed {
 		a.UpdatedBy = "system-seed"
@@ -94,7 +94,7 @@ func actionID(product, action string) string {
 	return product + "." + action
 }
 
-// --- domain operations (delegated to the repo; MySQL when SC_DB_DSN is set) --
+// --- domain operations (delegated to the repo; MySQL when EULER_DB_DSN is set) --
 
 func (s *actionStore) register(a Action) (Action, error) {
 	if err := s.repo.Upsert(&a); err != nil {
@@ -116,9 +116,9 @@ func (s *actionStore) listByProduct(product string) ([]*Action, error) {
 // accountIDFromRequest extracts the gateway-injected account id, or returns ""
 // if the header is missing.
 //
-// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+// TRUST NOTE: X-Euler-Account-Id is injected by the API gateway after
 // authentication; this service relies on network isolation (and optionally
-// internalTokenMiddleware / SC_INTERNAL_TOKEN) rather than re-authenticating.
+// internalTokenMiddleware / EULER_INTERNAL_TOKEN) rather than re-authenticating.
 func accountIDFromRequest(r *http.Request) string {
 	return r.Header.Get(accountIDHeader)
 }
@@ -127,7 +127,7 @@ func accountIDFromRequest(r *http.Request) string {
 // { "RequestId": ..., "Code": "OK", "Data": ... }.
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	rid := ""
-	if v, ok := w.Header()["X-Sc-TraceId"]; ok && len(v) > 0 {
+	if v, ok := w.Header()["X-Euler-TraceId"]; ok && len(v) > 0 {
 		rid = v[0]
 	}
 	body := map[string]any{
@@ -144,7 +144,7 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 // per errorsx (03§9.3).
 func writeError(w http.ResponseWriter, e *errorsx.Error) {
 	rid := ""
-	if v, ok := w.Header()["X-Sc-TraceId"]; ok && len(v) > 0 {
+	if v, ok := w.Header()["X-Euler-TraceId"]; ok && len(v) > 0 {
 		rid = v[0]
 	}
 	body := map[string]any{
@@ -170,13 +170,13 @@ func (s *actionStore) handleRegisterAction(w http.ResponseWriter, r *http.Reques
 	acct := accountIDFromRequest(r)
 	if acct == "" {
 		writeError(w, errorsx.New("Common.MissingAccountId", errorsx.StatusForbidden,
-			"X-Sc-Account-Id header is required (injected by gateway)"))
+			"X-Euler-Account-Id header is required (injected by gateway)"))
 		return
 	}
 
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, errorsx.ErrInvalidParameter.WithRequestID(r.Header.Get("X-Sc-TraceId")))
+		writeError(w, errorsx.ErrInvalidParameter.WithRequestID(r.Header.Get("X-Euler-TraceId")))
 		return
 	}
 	if req.ProductCode == "" || req.ActionName == "" {
@@ -227,7 +227,7 @@ func (s *actionStore) handleRegisterAction(w http.ResponseWriter, r *http.Reques
 func (s *actionStore) handleGetAction(w http.ResponseWriter, r *http.Request) {
 	if accountIDFromRequest(r) == "" {
 		writeError(w, errorsx.New("Common.MissingAccountId", errorsx.StatusForbidden,
-			"X-Sc-Account-Id header is required (injected by gateway)"))
+			"X-Euler-Account-Id header is required (injected by gateway)"))
 		return
 	}
 	product := r.PathValue("product")
@@ -249,7 +249,7 @@ func (s *actionStore) handleGetAction(w http.ResponseWriter, r *http.Request) {
 func (s *actionStore) handleListActions(w http.ResponseWriter, r *http.Request) {
 	if accountIDFromRequest(r) == "" {
 		writeError(w, errorsx.New("Common.MissingAccountId", errorsx.StatusForbidden,
-			"X-Sc-Account-Id header is required (injected by gateway)"))
+			"X-Euler-Account-Id header is required (injected by gateway)"))
 		return
 	}
 	product := r.URL.Query().Get("product")

@@ -5,12 +5,12 @@
 // console frontend and fans out to the internal services (svc-billing,
 // svc-orchestrator, svc-order) behind it, aggregating their responses into the
 // shapes the console needs. The fan-out is live (see store.go); downstream base
-// URLs come from SC_SVC_* env vars (dev defaults: orchestrator :9203, billing
+// URLs come from EULER_SVC_* env vars (dev defaults: orchestrator :9203, billing
 // :9206, order :9204). In the target architecture the BFF also caches
 // aggregated views in Redis (03§4); phase-1 is uncached fan-out.
 //
 // This is a stdlib-HTTP service (no Kratos/gRPC codegen — repo convention).
-// Account identity is injected by the APISIX gateway via the X-Sc-Account-Id
+// Account identity is injected by the APISIX gateway via the X-Euler-Account-Id
 // header; handlers reject requests that omit it with 403 (03§9.3).
 //
 // Responsibilities wired here (matching the shared scaffold, _tmpl-go):
@@ -126,5 +126,5 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	// TODO(scaffold): expose RED metrics via prometheus/client_golang.
 	// FORBIDDEN as labels: account_id, resource_id (high cardinality — 05§7.2).
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }

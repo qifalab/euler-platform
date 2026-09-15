@@ -16,7 +16,7 @@
 // so the contract cannot drift.
 //
 // # Internal routes (the gateway reaches these only on authenticated /internal
-// paths and injects X-Sc-Account-Id upstream, 07§3.3):
+// paths and injects X-Euler-Account-Id upstream, 07§3.3):
 //
 //	POST /internal/flows/start  -> start a predefined flow for def_key + biz_key
 //	GET  /internal/flows/{id}   -> the flow Result (status, compensation errors)
@@ -111,7 +111,7 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	// TODO(svc-workflow): expose RED metrics via prometheus/client_golang
 	// (05§7.2). Mandatory labels: service, instance, region, env. FORBIDDEN as
 	// labels: account_id, resource_id (high cardinality).
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }
 
 // --- HTTP handlers -----------------------------------------------------------
@@ -128,7 +128,7 @@ func (a *app) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID, ok := accountIDFromHeader(r)
 	if !ok {
-		writeErr(w, "Workflow.MissingAccount", "missing or invalid X-Sc-Account-Id header", http.StatusForbidden)
+		writeErr(w, "Workflow.MissingAccount", "missing or invalid X-Euler-Account-Id header", http.StatusForbidden)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -162,7 +162,7 @@ func (a *app) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID, ok := accountIDFromHeader(r)
 	if !ok {
-		writeErr(w, "Workflow.MissingAccount", "missing or invalid X-Sc-Account-Id header", http.StatusForbidden)
+		writeErr(w, "Workflow.MissingAccount", "missing or invalid X-Euler-Account-Id header", http.StatusForbidden)
 		return
 	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/internal/flows/")
@@ -194,7 +194,7 @@ func (a *app) handleGet(w http.ResponseWriter, r *http.Request) {
 // (07§3.3). The gateway guarantees it; a missing/invalid value is a routing
 // misconfiguration and must be rejected with 403, not guessed.
 func accountIDFromHeader(r *http.Request) (int64, bool) {
-	v := r.Header.Get("X-Sc-Account-Id")
+	v := r.Header.Get("X-Euler-Account-Id")
 	if v == "" {
 		return 0, false
 	}

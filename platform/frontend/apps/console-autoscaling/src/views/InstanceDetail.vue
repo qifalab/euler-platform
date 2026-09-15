@@ -5,14 +5,14 @@
  * Wired to the real resource lifecycle endpoint:
  *   GET /api/v1/orchestrator/resources/{id}  — svc-orchestrator (03§5.2)
  * The orchestrator is the sole owner of the resource lifecycle ledger, so this
- * is the authoritative source of state, spec, billing start, etc. SCAS carries
+ * is the authoritative source of state, spec, billing start, etc. EUAS carries
  * chargeType=POSTPAID (按量, the per-hour management fee); currentReplicas is
  * shown when present (the executor's last reported live count).
  */
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { createSDK } from "@eu/sdk";
 
 interface ResourceDetail {
   resourceId: string;
@@ -115,10 +115,10 @@ const replicasLabel = computed(() => inst.value?.currentReplicas !== undefined ?
 .detail { padding: 16px 24px; }
 .detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
 .detail-title { font-size: 18px; margin: 0; display: flex; align-items: center; gap: 8px; }
-.detail-id { font-size: 12px; color: var(--sc-text-secondary); margin: 4px 0 0; }
+.detail-id { font-size: 12px; color: var(--eu-text-secondary); margin: 4px 0 0; }
 .detail-actions { display: flex; gap: 8px; }
-.detail-error { color: var(--sc-color-danger); padding: 24px 0; }
-.detail-loading { color: var(--sc-text-secondary); padding: 24px 0; }
-.detail-tabs { background: var(--sc-bg-container); border-radius: var(--sc-radius-md); padding: 0 16px 16px; }
-.detail-back { display: inline-block; margin-top: 16px; color: var(--sc-color-brand); text-decoration: none; font-size: 13px; }
+.detail-error { color: var(--eu-color-danger); padding: 24px 0; }
+.detail-loading { color: var(--eu-text-secondary); padding: 24px 0; }
+.detail-tabs { background: var(--eu-bg-container); border-radius: var(--eu-radius-md); padding: 0 16px 16px; }
+.detail-back { display: inline-block; margin-top: 16px; color: var(--eu-color-brand); text-decoration: none; font-size: 13px; }
 </style>

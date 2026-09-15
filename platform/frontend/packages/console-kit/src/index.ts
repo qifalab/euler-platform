@@ -1,5 +1,5 @@
 /**
- * @sc/console-kit — console framework entry (02§7).
+ * @eu/console-kit — console framework entry (02§7).
  * Fill-in-the-blank building blocks: every product console sub-app is built on this.
  * Components that depend on the Wujie bridge live here (console-framework concerns).
  */

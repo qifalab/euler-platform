@@ -26,8 +26,8 @@ func doQuote(t *testing.T, body map[string]any) (int, map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/api/v1/catalog/quote", bytes.NewReader(raw))
-	req.Header.Set("X-Sc-Account-Id", "100123")
-	req.Header.Set("X-Sc-TraceId", "t")
+	req.Header.Set("X-Euler-Account-Id", "100123")
+	req.Header.Set("X-Euler-TraceId", "t")
 	rr := httptest.NewRecorder()
 	newTestServer().ServeHTTP(rr, req)
 	var out map[string]any
@@ -38,8 +38,8 @@ func doQuote(t *testing.T, body map[string]any) (int, map[string]any) {
 func getPlacement(t *testing.T, productCode string) (int, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/api/v1/catalog/placement?productCode="+productCode, nil)
-	req.Header.Set("X-Sc-Account-Id", "100123")
-	req.Header.Set("X-Sc-TraceId", "t")
+	req.Header.Set("X-Euler-Account-Id", "100123")
+	req.Header.Set("X-Euler-TraceId", "t")
 	rr := httptest.NewRecorder()
 	newTestServer().ServeHTTP(rr, req)
 	var env map[string]any
@@ -52,36 +52,36 @@ func getPlacement(t *testing.T, productCode string) (int, map[string]any) {
 }
 
 func TestPlacementEndpointZonal(t *testing.T) {
-	// scecs is seeded ZONAL with cross-AZ replicas.
-	code, out := getPlacement(t, "scecs")
+	// euecs is seeded ZONAL with cross-AZ replicas.
+	code, out := getPlacement(t, "euecs")
 	if code != 200 {
-		t.Fatalf("placement scecs: code %d body %v", code, out)
+		t.Fatalf("placement euecs: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "ZONAL" {
-		t.Errorf("scecs scope = %v, want ZONAL", out["regionScope"])
+		t.Errorf("euecs scope = %v, want ZONAL", out["regionScope"])
 	}
 	if out["zonal"] != true {
-		t.Errorf("scecs zonal = %v, want true", out["zonal"])
+		t.Errorf("euecs zonal = %v, want true", out["zonal"])
 	}
 	if out["crossAz"] != true {
-		t.Errorf("scecs crossAz = %v, want true (HA VM crosses AZs)", out["crossAz"])
+		t.Errorf("euecs crossAz = %v, want true (HA VM crosses AZs)", out["crossAz"])
 	}
 	if out["zoneRequired"] != true {
-		t.Errorf("scecs zoneRequired = %v, want true", out["zoneRequired"])
+		t.Errorf("euecs zoneRequired = %v, want true", out["zoneRequired"])
 	}
 }
 
 func TestPlacementEndpointRegional(t *testing.T) {
-	// scoss is seeded REGIONAL (a bucket spreads; no zone picker).
-	code, out := getPlacement(t, "scoss")
+	// euoss is seeded REGIONAL (a bucket spreads; no zone picker).
+	code, out := getPlacement(t, "euoss")
 	if code != 200 {
-		t.Fatalf("placement scoss: code %d body %v", code, out)
+		t.Fatalf("placement euoss: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "REGIONAL" {
-		t.Errorf("scoss scope = %v, want REGIONAL", out["regionScope"])
+		t.Errorf("euoss scope = %v, want REGIONAL", out["regionScope"])
 	}
 	if out["zoneRequired"] != false {
-		t.Errorf("scoss zoneRequired = %v, want false", out["zoneRequired"])
+		t.Errorf("euoss zoneRequired = %v, want false", out["zoneRequired"])
 	}
 }
 
@@ -97,7 +97,7 @@ func TestPlacementNotFound(t *testing.T) {
 func getRegionTopology(t *testing.T) (int, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/api/v1/catalog/region-topology", nil)
-	req.Header.Set("X-Sc-TraceId", "t")
+	req.Header.Set("X-Euler-TraceId", "t")
 	rr := httptest.NewRecorder()
 	newTestServer().ServeHTTP(rr, req)
 	var env map[string]any
@@ -192,7 +192,7 @@ func TestRegionTopologyClassification(t *testing.T) {
 
 func TestPlacementMissingProductCode(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/catalog/placement", nil)
-	req.Header.Set("X-Sc-Account-Id", "100123")
+	req.Header.Set("X-Euler-Account-Id", "100123")
 	rr := httptest.NewRecorder()
 	newTestServer().ServeHTTP(rr, req)
 	if rr.Code != 400 {
@@ -201,12 +201,12 @@ func TestPlacementMissingProductCode(t *testing.T) {
 }
 
 func TestQuoteZonalRequiresZone(t *testing.T) {
-	// scecs is ZONAL: a quote without zoneId must be rejected at 400, not
+	// euecs is ZONAL: a quote without zoneId must be rejected at 400, not
 	// silently priced and handed to the order flow (which would then fail at
 	// provisioning — a far more expensive place to discover a missing zone).
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scecs",
-		"specCode":    "scecs.s2.large.postpaid",
+		"productCode": "euecs",
+		"specCode":    "euecs.s2.large.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 	})
@@ -220,8 +220,8 @@ func TestQuoteZonalRequiresZone(t *testing.T) {
 
 func TestQuoteZonalAcceptsValidZone(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scecs",
-		"specCode":    "scecs.s2.large.postpaid",
+		"productCode": "euecs",
+		"specCode":    "euecs.s2.large.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 		"zoneId":      "cn-north-1-a",
@@ -233,8 +233,8 @@ func TestQuoteZonalAcceptsValidZone(t *testing.T) {
 
 func TestQuoteZonalRejectsBadZoneShape(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scecs",
-		"specCode":    "scecs.s2.large.postpaid",
+		"productCode": "euecs",
+		"specCode":    "euecs.s2.large.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 		"zoneId":      "cnnorth1a", // not the {region}-{letter} convention
@@ -249,8 +249,8 @@ func TestQuoteZonalRejectsBadZoneShape(t *testing.T) {
 
 func TestQuoteZonalRejectsZoneRegionMismatch(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scecs",
-		"specCode":    "scecs.s2.large.postpaid",
+		"productCode": "euecs",
+		"specCode":    "euecs.s2.large.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 		"zoneId":      "cn-east-1-a", // valid AZ name, wrong region
@@ -264,11 +264,11 @@ func TestQuoteZonalRejectsZoneRegionMismatch(t *testing.T) {
 }
 
 func TestQuoteRegionalIgnoresZone(t *testing.T) {
-	// scoss is REGIONAL: a quote with no zoneId should succeed (the product
+	// euoss is REGIONAL: a quote with no zoneId should succeed (the product
 	// spreads; zone is not its concern).
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scoss",
-		"specCode":    "scoss.standard.postpaid",
+		"productCode": "euoss",
+		"specCode":    "euoss.standard.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 	})
@@ -279,11 +279,11 @@ func TestQuoteRegionalIgnoresZone(t *testing.T) {
 
 func TestQuoteRequiresAccount(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{
-		"productCode": "scecs", "specCode": "scecs.s2.large.postpaid",
+		"productCode": "euecs", "specCode": "euecs.s2.large.postpaid",
 		"chargeType": "POSTPAID", "regionId": "cn-north-1", "zoneId": "cn-north-1-a",
 	})
 	req := httptest.NewRequest("POST", "/api/v1/catalog/quote", bytes.NewReader(raw))
-	// no X-Sc-Account-Id
+	// no X-Euler-Account-Id
 	rr := httptest.NewRecorder()
 	newTestServer().ServeHTTP(rr, req)
 	if rr.Code != 403 {
@@ -291,30 +291,30 @@ func TestQuoteRequiresAccount(t *testing.T) {
 	}
 }
 
-// --- SCECI (M-7.1, 09 §4.3 M-7) — the phase-2 elastic container instance ---
+// --- EUECI (M-7.1, 09 §4.3 M-7) — the phase-2 elastic container instance ---
 
-// TestSceciPlacementZonal guards the M-7.1 catalogue registration: sceci is a
+// TestSceciPlacementZonal guards the M-7.1 catalogue registration: eueci is a
 // ZONAL postpaid container instance, the cheapest compute form, the "弹性"
-// partner to scecs's VM. The placement contract the console's AZ picker reads
+// partner to euecs's VM. The placement contract the console's AZ picker reads
 // must report ZONAL + zoneRequired, and crossAz=false (a container pod is
 // single-AZ; an HA form would be a different SKU, not this product).
 func TestSceciPlacementZonal(t *testing.T) {
-	code, out := getPlacement(t, "sceci")
+	code, out := getPlacement(t, "eueci")
 	if code != 200 {
-		t.Fatalf("placement sceci: code %d body %v", code, out)
+		t.Fatalf("placement eueci: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "ZONAL" {
-		t.Errorf("sceci scope = %v, want ZONAL", out["regionScope"])
+		t.Errorf("eueci scope = %v, want ZONAL", out["regionScope"])
 	}
 	if out["zoneRequired"] != true {
-		t.Errorf("sceci zoneRequired = %v, want true (ZONAL product)", out["zoneRequired"])
+		t.Errorf("eueci zoneRequired = %v, want true (ZONAL product)", out["zoneRequired"])
 	}
 	if out["crossAz"] != false {
-		t.Errorf("sceci crossAz = %v, want false (single-AZ pod)", out["crossAz"])
+		t.Errorf("eueci crossAz = %v, want false (single-AZ pod)", out["crossAz"])
 	}
 }
 
-// TestSceciQuoteIsPerSecond is the M-7.1 billing-granularity contract: sceci
+// TestSceciQuoteIsPerSecond is the M-7.1 billing-granularity contract: eueci
 // is billed per-SECOND (09 §4.2), the DurationUnit M-4.2 reserved for exactly
 // this. The quote path must derive the SECOND unit from the matched rule, not
 // hardcode HOUR — a new billing granularity is a catalogue row, not a code
@@ -322,73 +322,73 @@ func TestSceciPlacementZonal(t *testing.T) {
 // hourly rate, which a separate concern settles from metering).
 func TestSceciQuoteIsPerSecond(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "sceci",
-		"specCode":    "sceci.c2.large.postpaid",
+		"productCode": "eueci",
+		"specCode":    "eueci.c2.large.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 		"zoneId":      "cn-north-1-a",
 	})
 	if code != 200 {
-		t.Fatalf("sceci quote: code %d body %v", code, out)
+		t.Fatalf("eueci quote: code %d body %v", code, out)
 	}
 	// Data lives under the envelope (doQuote unwraps it for 2xx? No — it returns
 	// the whole envelope. Fetch the nested Data.)
 	data, ok := out["Data"].(map[string]any)
 	if !ok {
-		t.Fatalf("sceci quote: no Data in envelope: %v", out)
+		t.Fatalf("eueci quote: no Data in envelope: %v", out)
 	}
 	if data["durationUnit"] != "SECOND" {
-		t.Errorf("sceci durationUnit = %v, want SECOND (09 §4.2 per-second)", data["durationUnit"])
+		t.Errorf("eueci durationUnit = %v, want SECOND (09 §4.2 per-second)", data["durationUnit"])
 	}
-	// 0.00007 yuan/sec × 3600 = 0.252 yuan/hr — matches the scecs.2large hourly
+	// 0.00007 yuan/sec × 3600 = 0.252 yuan/hr — matches the euecs.2large hourly
 	// band (0.25/hr), confirming the per-second price is the hourly rate ÷ 3600.
 	if data["payableAmount"] != "0.00007" {
-		t.Errorf("sceci payableAmount = %v, want 0.00007", data["payableAmount"])
+		t.Errorf("eueci payableAmount = %v, want 0.00007", data["payableAmount"])
 	}
 	// The rule that matched is the per-second one (ruleId 19 for large).
 	if data["ruleId"] != float64(19) {
-		t.Errorf("sceci ruleId = %v, want 19 (per-second rule)", data["ruleId"])
+		t.Errorf("eueci ruleId = %v, want 19 (per-second rule)", data["ruleId"])
 	}
 }
 
 // TestSceciQuoteEnforcesZone is the M-6 gate applied to the new product: a
 // ZONAL product's quote without a zoneId is rejected at the cheapest
-// checkpoint, before any order is created. The same gate scecs passes.
+// checkpoint, before any order is created. The same gate euecs passes.
 func TestSceciQuoteEnforcesZone(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "sceci",
-		"specCode":    "sceci.c2.large.postpaid",
+		"productCode": "eueci",
+		"specCode":    "eueci.c2.large.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 		// no zoneId
 	})
 	if code != 400 {
-		t.Fatalf("sceci quote without zone: code %d, want 400 (body %v)", code, out)
+		t.Fatalf("eueci quote without zone: code %d, want 400 (body %v)", code, out)
 	}
 	if out["Code"] != "Catalog.ZoneRequired" {
-		t.Errorf("sceci no-zone error code = %v, want Catalog.ZoneRequired", out["Code"])
+		t.Errorf("eueci no-zone error code = %v, want Catalog.ZoneRequired", out["Code"])
 	}
 }
 
-// TestSceciRejectsPrepaid guards the M-7.1 catalogue shape: sceci is postpaid
+// TestSceciRejectsPrepaid guards the M-7.1 catalogue shape: eueci is postpaid
 // only — a prepaid container would just be a VM (09 §3.2 D-03). There is no
 // prepaid SKU, so a PREPAID quote must fail with no-pricing-rule (the engine
 // finds no MONTH rule for the sku), not silently price it.
 func TestSceciRejectsPrepaid(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "sceci",
-		"specCode":    "sceci.c2.large.postpaid", // only a postpaid SKU exists
+		"productCode": "eueci",
+		"specCode":    "eueci.c2.large.postpaid", // only a postpaid SKU exists
 		"chargeType":  "PREPAID",
 		"regionId":    "cn-north-1",
 		"zoneId":      "cn-north-1-a",
 		"duration":    1,
 	})
 	if code != 400 {
-		t.Fatalf("sceci prepaid quote: code %d, want 400 (body %v)", code, out)
+		t.Fatalf("eueci prepaid quote: code %d, want 400 (body %v)", code, out)
 	}
 }
 
-// --- M-7.2 SCLB / M-7.3 SCAS / M-7.4 SCBACKUP — REGIONAL products -----------
+// --- M-7.2 EULB / M-7.3 EUAS / M-7.4 EUBACKUP — REGIONAL products -----------
 //
 // These three span AZs (REGIONAL), so the placement contract reports
 // zoneRequired=false and the quote path does NOT demand a zoneId — unlike the
@@ -396,106 +396,106 @@ func TestSceciRejectsPrepaid(t *testing.T) {
 // must not be blocked by a zone they do not pin to.
 
 func TestSclbPlacementRegional(t *testing.T) {
-	code, out := getPlacement(t, "sclb")
+	code, out := getPlacement(t, "eulb")
 	if code != 200 {
-		t.Fatalf("placement sclb: code %d body %v", code, out)
+		t.Fatalf("placement eulb: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "REGIONAL" {
-		t.Errorf("sclb scope = %v, want REGIONAL (LB spans AZs)", out["regionScope"])
+		t.Errorf("eulb scope = %v, want REGIONAL (LB spans AZs)", out["regionScope"])
 	}
 	if out["zoneRequired"] != false {
-		t.Errorf("sclb zoneRequired = %v, want false", out["zoneRequired"])
+		t.Errorf("eulb zoneRequired = %v, want false", out["zoneRequired"])
 	}
 	if out["crossAz"] != true {
-		t.Errorf("sclb crossAz = %v, want true (cross-AZ entry point)", out["crossAz"])
+		t.Errorf("eulb crossAz = %v, want true (cross-AZ entry point)", out["crossAz"])
 	}
 }
 
 func TestScasPlacementRegional(t *testing.T) {
-	code, out := getPlacement(t, "scas")
+	code, out := getPlacement(t, "euas")
 	if code != 200 {
-		t.Fatalf("placement scas: code %d body %v", code, out)
+		t.Fatalf("placement euas: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "REGIONAL" {
-		t.Errorf("scas scope = %v, want REGIONAL", out["regionScope"])
+		t.Errorf("euas scope = %v, want REGIONAL", out["regionScope"])
 	}
 	if out["zoneRequired"] != false {
-		t.Errorf("scas zoneRequired = %v, want false", out["zoneRequired"])
+		t.Errorf("euas zoneRequired = %v, want false", out["zoneRequired"])
 	}
 }
 
 func TestScbackupPlacementRegional(t *testing.T) {
-	code, out := getPlacement(t, "scbackup")
+	code, out := getPlacement(t, "eubackup")
 	if code != 200 {
-		t.Fatalf("placement scbackup: code %d body %v", code, out)
+		t.Fatalf("placement eubackup: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "REGIONAL" {
-		t.Errorf("scbackup scope = %v, want REGIONAL", out["regionScope"])
+		t.Errorf("eubackup scope = %v, want REGIONAL", out["regionScope"])
 	}
 	if out["zoneRequired"] != false {
-		t.Errorf("scbackup zoneRequired = %v, want false", out["zoneRequired"])
+		t.Errorf("eubackup zoneRequired = %v, want false", out["zoneRequired"])
 	}
 }
 
 // A REGIONAL product's quote must succeed WITHOUT a zoneId (it spreads).
 func TestSclbQuoteNoZoneRequired(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "sclb",
-		"specCode":    "sclb.l1.small.postpaid",
+		"productCode": "eulb",
+		"specCode":    "eulb.l1.small.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 		// no zoneId — REGIONAL products do not pin
 	})
 	if code != 200 {
-		t.Fatalf("sclb quote without zone: code %d, want 200 (body %v)", code, out)
+		t.Fatalf("eulb quote without zone: code %d, want 200 (body %v)", code, out)
 	}
 }
 
-// --- M-7.5 SCREDIS — ZONAL managed DB with cross-AZ HA replica ------------
+// --- M-7.5 EUREDIS — ZONAL managed DB with cross-AZ HA replica ------------
 
 func TestScredisPlacementZonalHA(t *testing.T) {
-	code, out := getPlacement(t, "scredis")
+	code, out := getPlacement(t, "euredis")
 	if code != 200 {
-		t.Fatalf("placement scredis: code %d body %v", code, out)
+		t.Fatalf("placement euredis: code %d body %v", code, out)
 	}
 	if out["regionScope"] != "ZONAL" {
-		t.Errorf("scredis scope = %v, want ZONAL (managed DB pinned to one AZ)", out["regionScope"])
+		t.Errorf("euredis scope = %v, want ZONAL (managed DB pinned to one AZ)", out["regionScope"])
 	}
 	if out["zoneRequired"] != true {
-		t.Errorf("scredis zoneRequired = %v, want true", out["zoneRequired"])
+		t.Errorf("euredis zoneRequired = %v, want true", out["zoneRequired"])
 	}
 	if out["crossAz"] != true {
-		t.Errorf("scredis crossAz = %v, want true (HA master+replica cross-AZ)", out["crossAz"])
+		t.Errorf("euredis crossAz = %v, want true (HA master+replica cross-AZ)", out["crossAz"])
 	}
 }
 
 func TestScredisQuoteEnforcesZone(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scredis",
-		"specCode":    "scredis.redis.small.postpaid",
+		"productCode": "euredis",
+		"specCode":    "euredis.redis.small.postpaid",
 		"chargeType":  "POSTPAID",
 		"regionId":    "cn-north-1",
 	})
 	if code != 400 {
-		t.Fatalf("scredis quote without zone: code %d, want 400 (body %v)", code, out)
+		t.Fatalf("euredis quote without zone: code %d, want 400 (body %v)", code, out)
 	}
 	if out["Code"] != "Catalog.ZoneRequired" {
-		t.Errorf("scredis no-zone error = %v, want Catalog.ZoneRequired", out["Code"])
+		t.Errorf("euredis no-zone error = %v, want Catalog.ZoneRequired", out["Code"])
 	}
 }
 
-// scredis offers BOTH prepay and postpay (managed DB). A prepaid quote must
-// succeed (unlike sceci which rejects prepaid).
+// euredis offers BOTH prepay and postpay (managed DB). A prepaid quote must
+// succeed (unlike eueci which rejects prepaid).
 func TestScredisPrepaidAccepted(t *testing.T) {
 	code, out := doQuote(t, map[string]any{
-		"productCode": "scredis",
-		"specCode":    "scredis.redis.large.prepaid",
+		"productCode": "euredis",
+		"specCode":    "euredis.redis.large.prepaid",
 		"chargeType":  "PREPAID",
 		"regionId":    "cn-north-1",
 		"zoneId":      "cn-north-1-a",
 		"duration":    1,
 	})
 	if code != 200 {
-		t.Fatalf("scredis prepaid quote: code %d, want 200 (body %v)", code, out)
+		t.Fatalf("euredis prepaid quote: code %d, want 200 (body %v)", code, out)
 	}
 }

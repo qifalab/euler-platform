@@ -11,7 +11,7 @@ import (
 func fixSpec(id string) Spec {
 	return Spec{
 		ResourceID: id, AccountID: 100123, ProjectID: 1,
-		ProductCode: "scecs", Region: "cn-north-1",
+		ProductCode: "euecs", Region: "cn-north-1",
 		IdempotencyKey: "ord-" + id,
 	}
 }

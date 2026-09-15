@@ -3,8 +3,8 @@
  *  按产品/资源分摊 pretax 费用,与账单总额一致(无未解释差异).
  *  Wired to console-bff /console/cost-analysis (fan-out svc-billing). */
 import { ref, computed, onMounted } from "vue";
-import { createSDK } from "@sc/sdk";
-import { PriceText, PageHeader } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PriceText, PageHeader } from "@eu/ui";
 
 const sdk = createSDK({ baseURL: "" });
 const byProduct = ref<Record<string, string>>({});
@@ -65,15 +65,15 @@ const productBars = computed(() => {
 </template>
 
 <style scoped>
-.cost { padding: var(--sc-spacing-6); max-width: 1000px; }
-.cost-toolbar { display: flex; align-items: center; gap: var(--sc-spacing-4); margin-bottom: var(--sc-spacing-4); }
-.cost-toolbar input { padding: 4px 8px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); background: var(--sc-glass-bg-soft); color: var(--sc-text-primary); }
-.cost-total { margin-left: auto; font-weight: 500; color: var(--sc-text-primary); }
-.cost-error, .cost-loading, .cost-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.cost-error { color: var(--sc-color-danger); }
-.cost-section h3 { font-size: 14px; color: var(--sc-text-secondary); margin: var(--sc-spacing-4) 0 var(--sc-spacing-3); }
-.bar-row { display: grid; grid-template-columns: 120px 1fr auto; align-items: center; gap: var(--sc-spacing-3); padding: var(--sc-spacing-2) 0; }
-.bar-label { font-size: 13px; color: var(--sc-text-primary); }
-.bar-track { height: 10px; background: var(--sc-glass-bg-soft); border-radius: var(--sc-radius-sm); overflow: hidden; }
-.bar-fill { height: 100%; background: var(--sc-color-brand); border-radius: var(--sc-radius-sm); transition: width 0.3s; }
+.cost { padding: var(--eu-spacing-6); max-width: 1000px; }
+.cost-toolbar { display: flex; align-items: center; gap: var(--eu-spacing-4); margin-bottom: var(--eu-spacing-4); }
+.cost-toolbar input { padding: 4px 8px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); background: var(--eu-glass-bg-soft); color: var(--eu-text-primary); }
+.cost-total { margin-left: auto; font-weight: 500; color: var(--eu-text-primary); }
+.cost-error, .cost-loading, .cost-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.cost-error { color: var(--eu-color-danger); }
+.cost-section h3 { font-size: 14px; color: var(--eu-text-secondary); margin: var(--eu-spacing-4) 0 var(--eu-spacing-3); }
+.bar-row { display: grid; grid-template-columns: 120px 1fr auto; align-items: center; gap: var(--eu-spacing-3); padding: var(--eu-spacing-2) 0; }
+.bar-label { font-size: 13px; color: var(--eu-text-primary); }
+.bar-track { height: 10px; background: var(--eu-glass-bg-soft); border-radius: var(--eu-radius-sm); overflow: hidden; }
+.bar-fill { height: 100%; background: var(--eu-color-brand); border-radius: var(--eu-radius-sm); transition: width 0.3s; }
 </style>

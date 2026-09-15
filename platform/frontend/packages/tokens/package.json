@@ -1,7 +1,7 @@
 {
-  "name": "@sc/tokens",
+  "name": "@eu/tokens",
   "version": "0.1.0",
-  "description": "StarCloud design tokens — single source of truth (02§10.1). Emits CSS variables with --sc-* prefix.",
+  "description": "Euler design tokens — single source of truth (02§10.1). Emits CSS variables with --eu-* prefix.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

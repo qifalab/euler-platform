@@ -53,19 +53,19 @@ importers:
 
   apps/console-autoscaling:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -80,19 +80,19 @@ importers:
 
   apps/console-backup:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -107,19 +107,19 @@ importers:
 
   apps/console-base:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -140,19 +140,19 @@ importers:
 
   apps/console-database:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -167,19 +167,19 @@ importers:
 
   apps/console-eci:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -194,19 +194,19 @@ importers:
 
   apps/console-ecs:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -221,19 +221,19 @@ importers:
 
   apps/console-kafka:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -248,19 +248,19 @@ importers:
 
   apps/console-lb:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -275,19 +275,19 @@ importers:
 
   apps/console-logservice:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -302,19 +302,19 @@ importers:
 
   apps/console-monitor:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -329,19 +329,19 @@ importers:
 
   apps/console-network:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -356,19 +356,19 @@ importers:
 
   apps/console-redis:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -383,19 +383,19 @@ importers:
 
   apps/console-storage:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -410,19 +410,19 @@ importers:
 
   apps/devops-explorer:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -443,7 +443,7 @@ importers:
 
   apps/site:
     dependencies:
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
       nuxt:
@@ -458,16 +458,16 @@ importers:
 
   apps/web-account:
     dependencies:
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -485,19 +485,19 @@ importers:
 
   apps/web-billing:
     dependencies:
-      '@sc/console-kit':
+      '@eu/console-kit':
         specifier: workspace:*
         version: link:../../packages/console-kit
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -512,16 +512,16 @@ importers:
 
   apps/web-marketplace:
     dependencies:
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -536,16 +536,16 @@ importers:
 
   apps/web-ticket:
     dependencies:
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../../packages/wujie-bridge
       element-plus:
@@ -560,16 +560,16 @@ importers:
 
   packages/console-kit:
     dependencies:
-      '@sc/sdk':
+      '@eu/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../tokens
-      '@sc/ui':
+      '@eu/ui':
         specifier: workspace:*
         version: link:../ui
-      '@sc/wujie-bridge':
+      '@eu/wujie-bridge':
         specifier: workspace:*
         version: link:../wujie-bridge
       element-plus:
@@ -578,14 +578,22 @@ importers:
       vue:
         specifier: ^3.4.0
         version: 3.5.41(typescript@5.9.3)
+    devDependencies:
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(jsdom@25.0.1(supports-color@10.2.2))(vite@6.4.3(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
-  packages/sdk: {}
+  packages/sdk:
+    devDependencies:
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(jsdom@25.0.1(supports-color@10.2.2))(vite@6.4.3(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/tokens: {}
 
   packages/ui:
     dependencies:
-      '@sc/tokens':
+      '@eu/tokens':
         specifier: workspace:*
         version: link:../tokens
       element-plus:
@@ -594,6 +602,10 @@ importers:
       vue:
         specifier: ^3.4.0
         version: 3.5.41(typescript@5.9.3)
+    devDependencies:
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(jsdom@25.0.1(supports-color@10.2.2))(vite@6.4.3(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/wujie-bridge:
     dependencies:
@@ -1105,9 +1117,6 @@ packages:
 
   '@jridgewell/source-map@0.3.11':
     resolution: {integrity: sha512-ZMp1V8ZFcPG5dIWnQLr3NSI1MiCU7UETdS/A0G8V/XWHvJv3ZsFqutJn1Y5RPmAPX6F3BiE397OqveU/9NCuIA==}
-
-  '@jridgewell/sourcemap-codec@1.5.5':
-    resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
@@ -2794,9 +2803,6 @@ packages:
     resolution: {integrity: sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==}
     engines: {node: '>= 0.4'}
 
-  es-module-lexer@2.3.1:
-    resolution: {integrity: sha512-shc1dbU90Yl/xq1QrC7QRtfcwURZuVRfPhZbDoldJ1cn1gzDvBaBWlv0eFolj5+0znnPJz5TXLxsN77X/12KTA==}
-
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
 
@@ -3504,10 +3510,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  obug@2.1.4:
-    resolution: {integrity: sha512-4a+OsYv9UktOJKE+l1A4OufDgdRF9PifWj+tJnHURo/P+WOxpG4GzUFL9qCalmWauao6ogiG+QvnCovwPoyAWA==}
-    engines: {node: '>=12.20.0'}
-
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
@@ -3613,10 +3615,6 @@ packages:
   picomatch@2.3.2:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
-
-  picomatch@4.0.5:
-    resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
-    engines: {node: '>=12'}
 
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
@@ -4216,10 +4214,6 @@ packages:
   tinyclip@0.1.15:
     resolution: {integrity: sha512-uo33abH+Ays0xYaDysoBt494Hb3hsEczMpcC0MwFl773pazORx4fmvKhclhR1wonUbB6vvpRsvVMwnhfqeMc+A==}
     engines: {node: ^16.14.0 || >= 17.3.0}
-
-  tinyexec@1.3.0:
-    resolution: {integrity: sha512-QKAl9m8gWWGHV8jZcPeym6j+XULi6tOf1mT83WYJ4Lk2ytW/uwAWkrP0uFsdoYMdueVJ0qs26wZ+23xeB4ibNQ==}
-    engines: {node: '>=18'}
 
   tinyexec@1.3.1:
     resolution: {integrity: sha512-GCvB3aoys96IuDFBMcTB46JOR6mdMtAToqwiW8JlWhsoh1mhHi/xn9ss/Dg7N555GiJyEt2qzoG/NHCwM6h1EA==}
@@ -5350,8 +5344,6 @@ snapshots:
     dependencies:
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
-
-  '@jridgewell/sourcemap-codec@1.5.5': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
@@ -7132,8 +7124,6 @@ snapshots:
 
   es-errors@1.3.0: {}
 
-  es-module-lexer@2.3.1: {}
-
   es-module-lexer@2.3.2: {}
 
   es-object-atoms@1.1.2:
@@ -7678,7 +7668,7 @@ snapshots:
 
   magic-string@0.30.21:
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   magic-string@1.3.1:
     dependencies:
@@ -8084,8 +8074,6 @@ snapshots:
       pathe: 2.0.3
       tinyexec: 1.3.1
 
-  obug@2.1.4: {}
-
   obug@2.2.1: {}
 
   ofetch@1.5.1:
@@ -8231,8 +8219,6 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@2.3.2: {}
-
-  picomatch@4.0.5: {}
 
   picomatch@4.0.7: {}
 
@@ -8848,8 +8834,6 @@ snapshots:
 
   tinyclip@0.1.15: {}
 
-  tinyexec@1.3.0: {}
-
   tinyexec@1.3.1: {}
 
   tinyglobby@0.2.17:
@@ -9226,15 +9210,15 @@ snapshots:
       '@vitest/snapshot': 4.1.11
       '@vitest/spy': 4.1.11
       '@vitest/utils': 4.1.11
-      es-module-lexer: 2.3.1
+      es-module-lexer: 2.3.2
       expect-type: 1.4.0
       magic-string: 0.30.21
-      obug: 2.1.4
+      obug: 2.2.1
       pathe: 2.0.3
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       std-env: 4.2.0
       tinybench: 2.9.0
-      tinyexec: 1.3.0
+      tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
       vite: 6.4.3(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)

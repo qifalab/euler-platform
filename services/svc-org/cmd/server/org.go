@@ -10,7 +10,7 @@
 // Project (03§4.1.2): {project_id, account_id, name, parent_id}.
 // Tag:              (account_id, key, value).
 //
-// Tenancy comes from the X-Sc-Account-Id header injected by the gateway
+// Tenancy comes from the X-Euler-Account-Id header injected by the gateway
 // (04§3.1); a request without it is rejected with 403. Every read/write is
 // scoped to that account.
 package main
@@ -29,7 +29,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const accountHeader = "X-Sc-Account-Id"
+const accountHeader = "X-Euler-Account-Id"
 
 // project is the org unit a resource belongs to (03§4.1.2). parent_id = "" for
 // a top-level project; otherwise it references another project_id of the same
@@ -223,7 +223,7 @@ type orgService struct {
 }
 
 // newOrgService wires the service to its storage. Persistence is opt-in
-// (pkg-go/storage doc): SC_DB_DSN set → account_db; unset → the in-memory store
+// (pkg-go/storage doc): EULER_DB_DSN set → account_db; unset → the in-memory store
 // that keeps the demo and `go test` dependency-free.
 func newOrgService(ctx context.Context) (*orgService, error) {
 	store, err := newStore(ctx)
@@ -235,7 +235,7 @@ func newOrgService(ctx context.Context) (*orgService, error) {
 }
 
 // newInMemoryOrgService builds the demo service. Handler tests construct it
-// directly, so they never depend on whether the developer's shell has SC_DB_DSN
+// directly, so they never depend on whether the developer's shell has EULER_DB_DSN
 // set — a test that wrote projects into account_db would be a data incident.
 func newInMemoryOrgService() *orgService {
 	return &orgService{store: newMemStore()}
@@ -253,7 +253,7 @@ func accountID(r *http.Request) (string, error) {
 	return a, nil
 }
 
-var errMissingAccount = errors.New("org: missing X-Sc-Account-Id")
+var errMissingAccount = errors.New("org: missing X-Euler-Account-Id")
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

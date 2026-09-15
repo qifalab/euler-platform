@@ -24,7 +24,7 @@ func TestReviewAndSettlementRequireAPlatformOperator(t *testing.T) {
 			}
 		}
 		req := httptest.NewRequest(method, path, &buf)
-		req.Header.Set("X-Sc-Account-Id", acct)
+		req.Header.Set("X-Euler-Account-Id", acct)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec

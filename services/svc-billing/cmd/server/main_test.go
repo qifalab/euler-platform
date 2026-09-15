@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/billing"
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 func doReq(t *testing.T, h http.HandlerFunc, method, target string, acct int64, body any) *httptest.ResponseRecorder {
@@ -24,7 +24,7 @@ func doReq(t *testing.T, h http.HandlerFunc, method, target string, acct int64, 
 	}
 	req := httptest.NewRequest(method, target, &buf)
 	if acct != 0 {
-		req.Header.Set("X-Sc-Account-Id", fmt.Sprintf("%d", acct))
+		req.Header.Set("X-Euler-Account-Id", fmt.Sprintf("%d", acct))
 	}
 	rr := httptest.NewRecorder()
 	h(rr, req)
@@ -40,7 +40,7 @@ func settleBody(aggID string) map[string]any {
 		"TotalQuantity": "2",
 		"HourStart":     hour.Format(time.RFC3339),
 		"CoveredRatio":  10000,
-		"ProductCode":   "scecs",
+		"ProductCode":   "euecs",
 		"UnitPrice":     "0.25",
 		"SnapshotId":    "snap-1",
 	}
@@ -193,7 +193,7 @@ func TestBodyLimit(t *testing.T) {
 	a := newInMemoryApp()
 	big := bytes.Repeat([]byte("a"), maxBodyBytes+16)
 	req := httptest.NewRequest(http.MethodPost, "/internal/settle", bytes.NewReader(big))
-	req.Header.Set("X-Sc-Account-Id", "1")
+	req.Header.Set("X-Euler-Account-Id", "1")
 	rr := httptest.NewRecorder()
 	a.handleSettle(rr, req)
 	if rr.Code != http.StatusBadRequest {

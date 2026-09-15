@@ -2,11 +2,11 @@
 import { createApp, type App as VueApp } from "vue";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
-import "@sc/tokens/style.css";
-import "@sc/ui/style.css";
+import "@eu/tokens/style.css";
+import "@eu/ui/style.css";
 import App from "./App.vue";
 import { router } from "./router";
-import { inWujieSandbox } from "@sc/wujie-bridge";
+import { inWujieSandbox } from "@eu/wujie-bridge";
 
 let app: VueApp | null = null;
 async function mount(el?: HTMLElement | string) {

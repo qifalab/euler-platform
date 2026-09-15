@@ -1,0 +1,252 @@
+# EUECS instance CRD (06-kubernetes-productization.md §4.2)
+#
+# One cloud product = four artifacts (06§4.1):
+#   1. product definition (catalogue registration — svc-catalog)
+#   2. CRD              (this file — the desired-state model)
+#   3. Operator         (rc-compute — provision/operate engine, Go)
+#   4. metering point   (status.usage → cloud.metering.usage.raw)
+#
+# The four iron rules this schema enforces:
+#   * the CR is the only fact interface — no SSH, no reaching into internals
+#   * status is machine-readable: structured phase + conditions, never a log
+#     line to be parsed
+#   * the Operator is idempotent and re-entrant
+#   * no metering, no launch — status.usage is required, not optional
+#
+# Adding a product means copying this file and changing the names. That is the
+# "填槽" onboarding path (01§7.3): a new product should be configuration work,
+# not platform work.
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: euecsinstances.products.cloud.platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"   # CRDs before the Operator that uses them
+spec:
+  group: products.cloud.platform
+  scope: Namespaced
+  names:
+    kind: EuecsInstance
+    listKind: EuecsInstanceList
+    plural: euecsinstances
+    singular: euecsinstance
+    shortNames: [euecs]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      # Printer columns so `kubectl get euecs` answers the questions an
+      # operator actually asks, without a describe.
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Tenant
+          type: string
+          jsonPath: .metadata.labels['cloud\.platform/tenant']
+        - name: Edition
+          type: string
+          jsonPath: .spec.edition
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [edition, params]
+              properties:
+                edition:
+                  type: string
+                  description: >
+                    Registered SKU edition. Only values registered in
+                    svc-catalog are accepted; an unregistered edition has no
+                    price and no metering item, so it cannot be billed.
+                  enum: [standard, general, compute-optimized, memory-optimized]
+                params:
+                  type: object
+                  description: Purchase parameters, matching the OpenAPI create call.
+                  required: [cpu, memoryGb]
+                  properties:
+                    cpu:
+                      type: integer
+                      minimum: 1
+                      maximum: 128
+                    memoryGb:
+                      type: integer
+                      minimum: 1
+                      maximum: 1024
+                    imageId:
+                      type: string
+                    systemDiskGb:
+                      type: integer
+                      minimum: 20
+                      maximum: 2048
+                    dataDisks:
+                      type: array
+                      maxItems: 16
+                      items:
+                        type: object
+                        properties:
+                          sizeGb: { type: integer, minimum: 20 }
+                          diskType: { type: string, enum: [essd, ssd] }
+                    vpcId:
+                      type: string
+                      description: EUVPC network boundary; ECS requires a VPC (decision R-02).
+                    subnetId: { type: string }
+                    securityGroupIds:
+                      type: array
+                      items: { type: string }
+                    keyPairName: { type: string }
+                suspend:
+                  type: boolean
+                  default: false
+                  description: >
+                    Arrears freeze. The Operator stops serving traffic and
+                    releases compute, but NEVER deletes data — a suspended
+                    instance must come back intact when the customer pays
+                    (01§5.4 D8). This is the single most trust-sensitive flag
+                    in the schema.
+                region:
+                  type: string
+                  pattern: '^(cn|ap|us|eu)-[a-z]+-[0-9]+$'
+                zone:
+                  type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: >
+                    Observed state. This is EVIDENCE, not authority: the
+                    platform's resource_instance.status is the source of truth
+                    (adjudication S21). svc-orchestrator maps this phase onto a
+                    proposed transition and validates it against its own state
+                    machine.
+                  enum: [Pending, Provisioning, Ready, Modifying, Suspended, Failed, Deleting]
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: >
+                    The spec generation this status reflects. A status whose
+                    observedGeneration lags metadata.generation describes the
+                    OLD spec — treating it as current is how a resize appears
+                    to have finished before it started.
+                conditions:
+                  type: array
+                  description: >
+                    Structured conditions. Consumers key on type/status/reason,
+                    never on message — parsing a human string to decide whether
+                    a customer is billed breaks on the first wording change.
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        enum: [Provisioned, NetworkReady, StorageReady, Degraded]
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+                usage:
+                  type: array
+                  description: >
+                    Metering readings, a FIRST-CLASS status field (06§4.1 rule
+                    4). A product that cannot report usage cannot be launched.
+                    These are published to cloud.metering.usage.raw.
+                  items:
+                    type: object
+                    required: [meteringItem, quantity, windowStart, windowSeconds]
+                    properties:
+                      meteringItem:
+                        type: string
+                        description: Must be registered in metering_catalog before launch.
+                        enum: [cpu_core_hour, mem_gb_hour, disk_gb_hour]
+                      quantity:
+                        type: string
+                        description: >
+                          Decimal STRING, never a float. Float accumulation
+                          across millions of hourly rows drifts, and a drifting
+                          quantity produces a bill nobody can reconcile.
+                        pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+                      windowStart: { type: string, format: date-time }
+                      windowSeconds: { type: integer, minimum: 1, maximum: 3600 }
+                endpoints:
+                  type: array
+                  items: { type: string }
+                message:
+                  type: string
+                  description: Human-facing detail only; never parsed by consumers.
+---
+# Example CR, showing the mandatory labels and the finalizer.
+#
+# The object name is the platform resource id verbatim (06§4.2), so a cluster
+# operator and a support engineer reading a bill are looking at the same string.
+apiVersion: products.cloud.platform/v1
+kind: EuecsInstance
+metadata:
+  name: euecs-cn-north-1-01-a1b2c3d4
+  namespace: plat-euecs
+  labels:
+    # All four are mandatory. Without them a cluster object cannot be
+    # attributed to a tenant, which breaks isolation, billing and audit at once.
+    cloud.platform/tenant: "100123"
+    cloud.platform/project: "1"
+    cloud.platform/product: euecs
+    cloud.platform/instance: euecs-cn-north-1-01-a1b2c3d4
+  finalizers:
+    # The Operator reclaims backing resources and pushes a FINAL metering
+    # reading before removing this. "CR truly gone" is the release-complete
+    # signal; without the finalizer, deletion races the last usage report and
+    # the customer is mis-billed for their final minutes.
+    - products.cloud.platform/cleanup
+spec:
+  edition: standard
+  region: cn-north-1
+  zone: cn-north-1-a
+  suspend: false
+  params:
+    cpu: 2
+    memoryGb: 4
+    imageId: img-ubuntu-2404
+    systemDiskGb: 40
+    vpcId: euvpc-cn-north-1-01-11223344
+    subnetId: subnet-01
+    securityGroupIds: [sg-default]
+    keyPairName: user-key-01
+status:
+  phase: Ready
+  observedGeneration: 1
+  conditions:
+    - type: Provisioned
+      status: "True"
+      reason: Ready
+      message: instance is serving
+      lastTransitionTime: "2026-08-08T12:04:00Z"
+    - type: NetworkReady
+      status: "True"
+      reason: VpcAttached
+      lastTransitionTime: "2026-08-08T12:03:30Z"
+  usage:
+    - meteringItem: cpu_core_hour
+      quantity: "0.033333"
+      windowStart: "2026-08-08T12:00:00Z"
+      windowSeconds: 60
+    - meteringItem: mem_gb_hour
+      quantity: "0.066667"
+      windowStart: "2026-08-08T12:00:00Z"
+      windowSeconds: 60
+  endpoints:
+    - "10.128.3.17"

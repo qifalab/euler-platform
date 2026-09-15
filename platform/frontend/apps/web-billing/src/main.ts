@@ -6,13 +6,13 @@
 import { createApp, type App as VueApp } from "vue";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
-import "@sc/tokens/style.css";
-import "@sc/ui/style.css";
-import "@sc/console-kit/style.css";
+import "@eu/tokens/style.css";
+import "@eu/ui/style.css";
+import "@eu/console-kit/style.css";
 import App from "./App.vue";
 import { router } from "./router";
-import { createSDK } from "@sc/sdk";
-import { inWujieSandbox } from "@sc/wujie-bridge";
+import { createSDK } from "@eu/sdk";
+import { inWujieSandbox } from "@eu/wujie-bridge";
 
 let app: VueApp | null = null;
 
@@ -22,7 +22,7 @@ async function mount(el?: HTMLElement | string) {
   app = createApp(App);
   app.use(router);
   app.use(ElementPlus);
-  app.provide("sc:sdk", createSDK({ baseURL: "" }));
+  app.provide("eu:sdk", createSDK({ baseURL: "" }));
   app.mount(root);
 }
 

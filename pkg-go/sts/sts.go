@@ -16,7 +16,7 @@
 //   - An expired credential is invalid regardless of any other field. The
 //     boundary is inclusive (expires_at is the first invalid instant).
 //
-// The AK format delegates to identifier.AKID (single source for the SC prefix),
+// The AK format delegates to identifier.AKID (single source for the EU prefix),
 // exactly as long-lived keys do — the temporary flag is carried by the token's
 // expiry, not by a divergent AK format.
 package sts
@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // DefaultTTL is the default temporary-credential lifetime (one hour). It is a
@@ -78,7 +78,7 @@ func (i *Issuer) AssumeRole(role, accountID string) (Credentials, error) {
 	if role == "" || accountID == "" {
 		return Credentials{}, errors.New("sts: role and accountID are required")
 	}
-	akBody, err := randomHex(15) // 30 hex chars → SC-prefixed 32-char AK
+	akBody, err := randomHex(15) // 30 hex chars → EU-prefixed 32-char AK
 	if err != nil {
 		return Credentials{}, err
 	}

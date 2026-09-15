@@ -15,21 +15,21 @@ func event(name string, seq int, decision Decision) Event {
 	return Event{
 		EventID:     EventID(base, int64(seq)),
 		EventTime:   base.Add(time.Duration(seq) * time.Minute),
-		EventSource: "scecs.api.starcloud.cn",
+		EventSource: "euecs.api.euler.emoera.com",
 		EventName:   name,
 		SourceIP:    "203.0.113.9",
-		UserAgent:   "sc-sdk-go/1.0.0",
+		UserAgent:   "eu-sdk-go/1.0.0",
 		Identity: Identity{
 			Type:       "ram-user",
 			AccountID:  acct,
 			Principal:  "user/alice",
-			AKID:       "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAA3F",
+			AKID:       "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAA3F",
 			MFAPresent: true,
 		},
-		Resources:      []string{"sc:ecs:cn-north-1:100123:instance/scecs-cn-north-1-01-a1b2c3d4"},
+		Resources:      []string{"eu:ecs:cn-north-1:100123:instance/euecs-cn-north-1-01-a1b2c3d4"},
 		Decision:       decision,
 		DecisionNumber: "A-p0-s1",
-		RequestParams:  map[string]string{"InstanceId": "scecs-cn-north-1-01-a1b2c3d4"},
+		RequestParams:  map[string]string{"InstanceId": "euecs-cn-north-1-01-a1b2c3d4"},
 		ResponseCode:   200,
 		TraceID:        "5b8e1234c2",
 	}
@@ -235,11 +235,11 @@ func TestSecretsRedactedAtWriteTime(t *testing.T) {
 func TestAccessKeyMasked(t *testing.T) {
 	c := NewChain(acct)
 	e := event("StopInstance", 1, DecisionAllow)
-	e.Identity.AKID = "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAA3F"
+	e.Identity.AKID = "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAA3F"
 
 	recorded, _ := c.Append(e)
-	if recorded.Identity.AKID != "SC****3F" {
-		t.Fatalf("AK = %s, want SC****3F", recorded.Identity.AKID)
+	if recorded.Identity.AKID != "EU****3F" {
+		t.Fatalf("AK = %s, want EU****3F", recorded.Identity.AKID)
 	}
 	// Enough to correlate an incident to a key; not enough to use it.
 	if strings.Contains(recorded.Identity.AKID, "AAAA") {
@@ -251,8 +251,8 @@ func TestMaskAKEdgeCases(t *testing.T) {
 	if MaskAK("") != "" {
 		t.Error("empty AK should stay empty")
 	}
-	if got := MaskAK("ab"); got != "SC****" {
-		t.Errorf("short AK = %s, want SC****", got)
+	if got := MaskAK("ab"); got != "EU****" {
+		t.Errorf("short AK = %s, want EU****", got)
 	}
 }
 

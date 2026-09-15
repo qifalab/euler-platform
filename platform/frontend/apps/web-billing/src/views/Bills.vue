@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** Bills list — wired to console-bff /console/bills (02§7.2, §1.2). */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@sc/sdk";
-import { PriceText, PageHeader } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PriceText, PageHeader } from "@eu/ui";
 
 const sdk = createSDK({ baseURL: "" });
 const bills = ref<BillItem[]>([]);
@@ -51,23 +51,23 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.bills { padding: var(--sc-spacing-6); max-width: 1200px; }
-.bills-error, .bills-loading, .bills-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.bills-error { color: var(--sc-color-danger); }
+.bills { padding: var(--eu-spacing-6); max-width: 1200px; }
+.bills-error, .bills-loading, .bills-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.bills-error { color: var(--eu-color-danger); }
 .bills-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
 .bills-table { width: 100%; border-collapse: collapse; background: transparent; }
-.bills-table th, .bills-table td { padding: var(--sc-spacing-3) var(--sc-spacing-4); text-align: left; border-bottom: 1px solid var(--sc-border); }
-.bills-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.bills-table td { font-size: 13px; color: var(--sc-text-primary); }
-.bills-table tbody tr { transition: background var(--sc-transition); }
-.bills-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.bills-table th, .bills-table td { padding: var(--eu-spacing-3) var(--eu-spacing-4); text-align: left; border-bottom: 1px solid var(--eu-border); }
+.bills-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.bills-table td { font-size: 13px; color: var(--eu-text-primary); }
+.bills-table tbody tr { transition: background var(--eu-transition); }
+.bills-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .bills-table tbody tr:last-child td { border-bottom: none; }
 </style>

@@ -1,6 +1,6 @@
-/* StarCloud docs — Google Cloud Glass brand overrides for the VitePress
-   default theme. Values mirror @sc/tokens brand tokens
-   (--sc-color-brand / -hover / -active / -soft). */
+/* Euler docs — Google Cloud Glass brand overrides for the VitePress
+   default theme. Values mirror @eu/tokens brand tokens
+   (--eu-color-brand / -hover / -active / -soft). */
 
 :root {
   --vp-c-brand-1: #1a73e8;

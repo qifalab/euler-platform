@@ -126,7 +126,7 @@ CREATE TABLE `iam_role` (
 -- 删除为软删,保留 7 天供审计与恢复。
 -- -----------------------------------------------------------------------------
 CREATE TABLE `access_key` (
-  `ak`             VARCHAR(32)    NOT NULL COMMENT '公开标识,32字符,前缀 SC(07§2.5)',
+  `ak`             VARCHAR(32)    NOT NULL COMMENT '公开标识,32字符,前缀 EU(07§2.5)',
   `account_id`     BIGINT UNSIGNED NOT NULL COMMENT '所属主账号',
   `owner_type`     TINYINT NOT NULL COMMENT '1主账号 2RAM子用户 3角色',
   `owner_id`       BIGINT UNSIGNED DEFAULT NULL COMMENT 'owner_type=1 时为 NULL',
@@ -172,7 +172,7 @@ CREATE TABLE `mfa_device` (
 -- 有匹配 Allow 且无 Deny 才 Allow。
 -- 一期支持的 Condition 运算符: StringEquals/NotEquals, IpAddress/NotIpAddress,
 -- DateGreaterThan/LessThan, Bool。
--- 一期 sc: 前缀上下文键: SourceIp, CurrentTime, MFAPresent, ResourceGroupId。
+-- 一期 eu: 前缀上下文键: SourceIp, CurrentTime, MFAPresent, ResourceGroupId。
 -- -----------------------------------------------------------------------------
 CREATE TABLE `ram_policy` (
   `policy_id`      BIGINT UNSIGNED NOT NULL,
@@ -235,7 +235,7 @@ CREATE TABLE `resource_group` (
   UNIQUE KEY `uk_rg_id` (`rg_id`),
   KEY `idx_account` (`account_id`,`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  COMMENT='资源组(Project);ABAC 标签授权 sc:ResourceTag/<key> 后置二期,一期仅资源组维度';
+  COMMENT='资源组(Project);ABAC 标签授权 eu:ResourceTag/<key> 后置二期,一期仅资源组维度';
 
 -- -----------------------------------------------------------------------------
 -- login_attempt — 登录失败计数 (5 次失败锁定 15 分钟,07§2.4)

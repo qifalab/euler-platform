@@ -1,6 +1,6 @@
 /**
  * Router (02§5.3 route guard, §2.2 URL convention).
- * First path segment = productCode (e.g. /scecs/instances); the shell owns
+ * First path segment = productCode (e.g. /euecs/instances); the shell owns
  * first-level routing, sub-apps own level 2+ via Wujie URL sync.
  */
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
@@ -23,7 +23,7 @@ export const router = createRouter({
   routes,
 });
 
-// Account center base URL (dev: local web-account; prod: account.starcloud.cn).
+// Account center base URL (dev: local web-account; prod: account.euler.emoera.com).
 const ACCOUNT_BASE = "http://localhost:5175";
 
 // Three-level guard (02§5.3): whitelist → silent refresh → permission check.

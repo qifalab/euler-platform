@@ -12,7 +12,7 @@
 // 回调其 OpenAPI 方式履约), NOT by an rc-* controller — that is the whole
 // point of a marketplace: the platform does not operate the partner's product.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST /api/v1/marketplace/listings             — publish a listing (partner)
 //	POST /api/v1/marketplace/listings/{id}/approve — platform review verdict
@@ -41,24 +41,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/settlement"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/settlement"
 )
 
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
-const internalTokenHeader = "X-Sc-Internal-Token"
+const internalTokenHeader = "X-Euler-Internal-Token"
 
 // devOperatorAccount is the seeded dev account that acts as the platform
 // operator when no allowlist is configured. Tests and the local console use
-// it; a real deployment sets SC_MARKETPLACE_OPERATORS.
+// it; a real deployment sets EULER_MARKETPLACE_OPERATORS.
 const devOperatorAccount = 100123
 
 // operatorAccounts is the platform-side allowlist for the review desk and the
 // settlement job. Approval and 分账 are platform operations: a partner must
 // not approve its own listing, and a tenant must not settle an arbitrary
 // order. Unset (dev default) = the seeded dev operator account only.
-var operatorAccounts = parseOperators(os.Getenv("SC_MARKETPLACE_OPERATORS"))
+var operatorAccounts = parseOperators(os.Getenv("EULER_MARKETPLACE_OPERATORS"))
 
 func parseOperators(raw string) map[int64]bool {
 	out := make(map[int64]bool)
@@ -92,10 +92,10 @@ func requireOperator(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 // internalTokenMiddleware optionally enforces a shared-secret header for
-// service-to-service calls (SC_INTERNAL_TOKEN). Unset (dev default) = off;
+// service-to-service calls (EULER_INTERNAL_TOKEN). Unset (dev default) = off;
 // production turns it on in addition to the operator allowlist.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return h
 	}
@@ -286,12 +286,12 @@ func newApp(store Store) *app { return &app{store: store, now: time.Now} }
 func accountFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, 403, "Common.MissingAccountId", "X-Sc-Account-Id header is required")
+		writeErr(w, 403, "Common.MissingAccountId", "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed X-Sc-Account-Id")
+		writeErr(w, 400, "Common.InvalidParameter", "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
@@ -485,13 +485,13 @@ func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
 // --- JSON helpers -----------------------------------------------------------
 
 func writeOK(w http.ResponseWriter, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": "OK", "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -501,11 +501,11 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("mkt-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }

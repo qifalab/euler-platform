@@ -3,9 +3,9 @@
 export default defineNuxtConfig({
   devtools: { enabled: true },
   ssr: true,
-  // Google Cloud Glass: global design tokens (@sc/tokens) — --sc-* CSS variables,
-  // body base styles (mesh background + Google Sans stack) and .sc-glass utilities.
-  css: ["@sc/tokens/style.css"],
+  // Google Cloud Glass: global design tokens (@eu/tokens) — --eu-* CSS variables,
+  // body base styles (mesh background + Google Sans stack) and .eu-glass utilities.
+  css: ["@eu/tokens/style.css"],
   app: {
     head: {
       htmlAttrs: { lang: "zh-CN" },

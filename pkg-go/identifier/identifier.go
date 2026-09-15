@@ -17,13 +17,13 @@ import (
 )
 
 // Domain is the platform primary domain (00 附录A).
-const Domain = "starcloud.cn"
+const Domain = "euler.emoera.com"
 
 // BrandPrefix is the platform/brand prefix, replacing cldp/cps/CPSA (C9).
-const BrandPrefix = "sc"
+const BrandPrefix = "eu"
 
 // AKPrefix is the access-key prefix (07§2.5, replacing LTAI/CPSA).
-const AKPrefix = "SC"
+const AKPrefix = "EU"
 
 // SignatureHeaderPrefix is the OpenAPI signature-protocol header prefix. It is
 // intentionally decoupled from BrandPrefix and retained unchanged (C9/S4).
@@ -32,9 +32,9 @@ const SignatureHeaderPrefix = "x-cps-"
 // ResourceID is a parsed platform resource identifier.
 //
 // Format: {productCode}-{regionId}-{2-digit shard factor}-{8-char random}
-// Example: scecs-cn-north-1-01-a1b2c3d4
+// Example: euecs-cn-north-1-01-a1b2c3d4
 // GLOBAL products embed the GlobalRegion sentinel in place of a region:
-// scdomain-global-01-5e6f7a8b.
+// eudomain-global-01-5e6f7a8b.
 //
 // The 2-digit shard factor encodes the account_id routing: it is derived from
 // (account_id % dbCount)(account_id % tableCount) so a resource_id alone can
@@ -50,7 +50,7 @@ type ResourceID struct {
 // (domain registration, DNS, CDN, WAF — phase 4, provision.ScopeGlobal).
 // A GLOBAL product has no region of residence, but every resource id embeds
 // a region token (00 附录A), so GLOBAL resources carry this literal and stay
-// expressible in the same id grammar: scdomain-global-01-5e6f7a8b.
+// expressible in the same id grammar: eudomain-global-01-5e6f7a8b.
 const GlobalRegion = "global"
 
 // resourceIDPattern enforces the full format. The region group accepts either
@@ -167,7 +167,7 @@ func BFFName(scene string) string {
 	return scene + "-bff"
 }
 
-// OpenAPIDomain returns {productCode}.api.starcloud.cn (04§3.2).
+// OpenAPIDomain returns {productCode}.api.euler.emoera.com (04§3.2).
 func OpenAPIDomain(productCode string) string {
 	return productCode + ".api." + Domain
 }
@@ -178,27 +178,27 @@ func ConsoleRoute(productCode string) string {
 }
 
 // PermissionAction builds a RAM permission action: {productCode}:{Operation}.
-// Example: scecs:CreateInstance (07§3.1, S3).
+// Example: euecs:CreateInstance (07§3.1, S3).
 func PermissionAction(productCode, operation string) string {
 	return productCode + ":" + operation
 }
 
 // ARN builds a platform resource name:
-// sc:{service}:{region}:{account_id}:{relative-resource}
-// Example: sc:ecs:cn-east-1:100123:instance/scecs-cn-east-1-01-a1b2c3d4 (07§3.1).
+// eu:{service}:{region}:{account_id}:{relative-resource}
+// Example: eu:ecs:cn-east-1:100123:instance/euecs-cn-east-1-01-a1b2c3d4 (07§3.1).
 func ARN(service, region string, accountID int64, relative string) string {
 	return fmt.Sprintf("%s:%s:%s:%d:%s", BrandPrefix, service, region, accountID, relative)
 }
 
-// SystemPolicyName builds a system policy name: Sc{Product}FullAccess /
-// Sc{Product}ReadOnlyAccess (07§3.2). pass "FullAccess" or "ReadOnlyAccess"
+// SystemPolicyName builds a system policy name: Eu{Product}FullAccess /
+// Eu{Product}ReadOnlyAccess (07§3.2). pass "FullAccess" or "ReadOnlyAccess"
 // as tier.
 func SystemPolicyName(productName, tier string) string {
-	return "Sc" + productName + tier
+	return "Eu" + productName + tier
 }
 
 // Error code format: {Product}.{Module}.{Reason} (PascalCase), e.g.
-// Quota.Exceeded.ScecsInstance (03§9.3).
+// Quota.Exceeded.EuecsInstance (03§9.3).
 func ErrorCode(product, module, reason string) string {
 	return fmt.Sprintf("%s.%s.%s", product, module, reason)
 }
@@ -216,7 +216,7 @@ func SystemKafkaTopic(purpose string) string {
 	return strings.Join([]string{"cloud", "sys", purpose}, ".")
 }
 
-// AKID builds a 32-character access key identifier with the SC prefix.
+// AKID builds a 32-character access key identifier with the EU prefix.
 // The caller supplies 30 random alphanumeric chars; this is a formatting
 // helper, not a security primitive — actual AK generation happens in svc-iam
 // with a cryptographically secure RNG.
@@ -224,11 +224,11 @@ func AKID(random30 string) string {
 	return AKPrefix + random30
 }
 
-// ProductCode validates and normalizes a product code: lowercase, sc-prefix,
-// 3–8 alpha chars (scecs, scoss, scrds, scvpc, scbs, sceip, scmon, sceci, sccert).
-var productCodePattern = regexp.MustCompile(`^sc[a-z]{1,6}$`)
+// ProductCode validates and normalizes a product code: lowercase, eu-prefix,
+// 3–8 alpha chars (euecs, euoss, eurds, euvpc, eubs, eueip, eumon, eueci, eucert).
+var productCodePattern = regexp.MustCompile(`^eu[a-z]{1,6}$`)
 
-// IsValidProductCode reports whether code matches the sc-prefixed product
+// IsValidProductCode reports whether code matches the eu-prefixed product
 // code convention (01§1.1 D0).
 func IsValidProductCode(code string) bool {
 	return productCodePattern.MatchString(code)

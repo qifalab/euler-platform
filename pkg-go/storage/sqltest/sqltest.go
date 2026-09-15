@@ -14,13 +14,13 @@
 //
 // # Hermetic by default
 //
-// Without SC_DB_DSN — the same variable that turns persistence on for a service
+// Without EULER_DB_DSN — the same variable that turns persistence on for a service
 // — every test that calls Open is SKIPPED. `go test ./...` therefore stays
 // runnable on a machine with no database, which is what the platform's
 // "persistence is opt-in" design requires (storage package doc).
 //
-// With SC_DB_DSN set, each test gets its own throwaway schema named
-// sc_it_<test>_<nanos>, applies the DDL directories it asked for, and drops the
+// With EULER_DB_DSN set, each test gets its own throwaway schema named
+// eu_it_<test>_<nanos>, applies the DDL directories it asked for, and drops the
 // schema again on cleanup. SQTEST_KEEP=1 keeps it for inspection. The DSN user
 // needs CREATE/DROP DATABASE (the local dev account has it).
 package sqltest
@@ -38,7 +38,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // Services names the DDL directory of one service, relative to the repository
@@ -51,7 +51,7 @@ func Services(service string) string {
 	return filepath.Join("services", service, "sql")
 }
 
-// Open skips t unless SC_DB_DSN is set, then returns a pool bound to a fresh
+// Open skips t unless EULER_DB_DSN is set, then returns a pool bound to a fresh
 // schema with ddlDirs (repository-relative, see Services) applied in filename
 // order — the order sqlmigrate uses.
 func Open(t *testing.T, ddlDirs ...string) *sql.DB {
@@ -198,7 +198,7 @@ func isDir(path string) bool {
 func scratchSchemaName(testName string) string {
 	const (
 		maxIdentifier = 64
-		prefix        = "sc_it_"
+		prefix        = "eu_it_"
 	)
 	// prefix + name + "_" + nanoseconds must fit.
 	budget := maxIdentifier - len(prefix) - 1 - 20

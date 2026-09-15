@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
-import { inWujieSandbox } from "@sc/wujie-bridge";
+import { inWujieSandbox } from "@eu/wujie-bridge";
 
 const routes: RouteRecordRaw[] = [
   { path: "/", redirect: "/bills" },

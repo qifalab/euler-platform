@@ -7,12 +7,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/starcloud/sc-platform/chaos"
-	"github.com/starcloud/sc-platform/slo"
+	"github.com/qifalab/euler-platform/chaos"
+	"github.com/qifalab/euler-platform/slo"
 )
 
 // TestComparisonOperatorMapping pins the operator enum to proto-hub
-// proto/starcloud/monitor/v1/monitor.proto ComparisonOperator (lines 46-52):
+// proto/euler/monitor/v1/monitor.proto ComparisonOperator (lines 46-52):
 // 1=GREATER_THAN, 2=GREATER_THAN_OR_EQUAL, 3=LESS_THAN, 4=LESS_THAN_OR_EQUAL.
 func TestComparisonOperatorMapping(t *testing.T) {
 	cases := []struct {
@@ -52,7 +52,7 @@ func TestValidComparisonOperator(t *testing.T) {
 func TestCreateRuleRejectsUnknownOperator(t *testing.T) {
 	s := newRuleStore()
 	body, _ := json.Marshal(createRuleRequest{
-		ProductCode: "scecs", Metric: "disk_usage", Threshold: "95",
+		ProductCode: "euecs", Metric: "disk_usage", Threshold: "95",
 		ComparisonOperator: 5, // invalid per proto (no 5==)
 	})
 	req := httptest.NewRequest("POST", "/api/v1/monitor/rules", bytes.NewReader(body))
@@ -67,7 +67,7 @@ func TestCreateRuleRejectsUnknownOperator(t *testing.T) {
 func TestCreateRuleDefaultsToGTE(t *testing.T) {
 	s := newRuleStore()
 	body, _ := json.Marshal(createRuleRequest{
-		ProductCode: "scecs", Metric: "disk_usage", Threshold: "95",
+		ProductCode: "euecs", Metric: "disk_usage", Threshold: "95",
 	})
 	req := httptest.NewRequest("POST", "/api/v1/monitor/rules", bytes.NewReader(body))
 	req.Header.Set(accountIDHeader, "100123")
@@ -101,7 +101,7 @@ func getMonitorJSON(t *testing.T, path string) (int, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequest("GET", path, nil)
 	req.Header.Set(accountIDHeader, "100123")
-	req.Header.Set("X-Sc-TraceId", "t")
+	req.Header.Set("X-Euler-TraceId", "t")
 	rr := httptest.NewRecorder()
 	newMonitorTestServer().ServeHTTP(rr, req)
 	var env map[string]any

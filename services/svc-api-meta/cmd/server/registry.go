@@ -56,17 +56,17 @@ func newRegistryStore() *registryStore {
 
 // seedRegistry returns the canonical phase-1 sub-app set. EntryURLs point at
 // the dev servers; production swaps these for versioned static-domain entries
-// (https://static.starcloud.cn/apps/{app}/{ver}/index.html).
+// (https://static.euler.emoera.com/apps/{app}/{ver}/index.html).
 func seedRegistry() Registry {
 	return Registry{
 		Revision: 2,
 		TTL:      300,
 		Apps: []RegistryApp{
-			{AppCode: "console-ecs", AppTitle: "云服务器 ECS", ProductCodes: []string{"scecs"}, ActiveRules: []string{"/scecs"}, EntryURL: "http://localhost:5174/", Version: "0.1.0", KeepAlive: true, Preload: true, Status: "online"},
-			{AppCode: "console-storage", AppTitle: "对象存储 OSS", ProductCodes: []string{"scoss"}, ActiveRules: []string{"/scoss"}, EntryURL: "http://localhost:5176/", Version: "0.1.0", KeepAlive: true, Preload: false, Status: "online"},
-			{AppCode: "console-network", AppTitle: "专有网络 VPC", ProductCodes: []string{"scvpc", "sceip"}, ActiveRules: []string{"/scvpc", "/sceip"}, EntryURL: "http://localhost:5177/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
-			{AppCode: "console-database", AppTitle: "云数据库 RDS", ProductCodes: []string{"scrds"}, ActiveRules: []string{"/scrds"}, EntryURL: "http://localhost:5178/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
-			{AppCode: "console-monitor", AppTitle: "云监控", ProductCodes: []string{"scmon"}, ActiveRules: []string{"/scmon"}, EntryURL: "http://localhost:5179/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-ecs", AppTitle: "云服务器 ECS", ProductCodes: []string{"euecs"}, ActiveRules: []string{"/euecs"}, EntryURL: "http://localhost:5174/", Version: "0.1.0", KeepAlive: true, Preload: true, Status: "online"},
+			{AppCode: "console-storage", AppTitle: "对象存储 OSS", ProductCodes: []string{"euoss"}, ActiveRules: []string{"/euoss"}, EntryURL: "http://localhost:5176/", Version: "0.1.0", KeepAlive: true, Preload: false, Status: "online"},
+			{AppCode: "console-network", AppTitle: "专有网络 VPC", ProductCodes: []string{"euvpc", "eueip"}, ActiveRules: []string{"/euvpc", "/eueip"}, EntryURL: "http://localhost:5177/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-database", AppTitle: "云数据库 RDS", ProductCodes: []string{"eurds"}, ActiveRules: []string{"/eurds"}, EntryURL: "http://localhost:5178/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-monitor", AppTitle: "云监控", ProductCodes: []string{"eumon"}, ActiveRules: []string{"/eumon"}, EntryURL: "http://localhost:5179/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 			{AppCode: "web-billing", AppTitle: "费用中心", ProductCodes: []string{}, ActiveRules: []string{"/billing"}, EntryURL: "http://localhost:5180/", Version: "0.1.0", KeepAlive: false, Preload: true, Status: "online"},
 			{AppCode: "web-account", AppTitle: "账号与访问控制", ProductCodes: []string{}, ActiveRules: []string{"/account"}, EntryURL: "http://localhost:5175/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 			{AppCode: "web-ticket", AppTitle: "工单支持", ProductCodes: []string{}, ActiveRules: []string{"/ticket"}, EntryURL: "http://localhost:5181/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
@@ -87,7 +87,7 @@ func (s *registryStore) handleConsoleApps(w http.ResponseWriter, r *http.Request
 
 	// The shell reads revision for change detection (02§4.1).
 	body := map[string]any{
-		"RequestId": w.Header().Get("X-Sc-TraceId"),
+		"RequestId": w.Header().Get("X-Euler-TraceId"),
 		"Code":      "OK",
 		"Data":      reg,
 	}

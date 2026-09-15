@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/starcloud/sc-platform/errors"
+	"github.com/qifalab/euler-platform/errors"
 )
 
 // TestE2ptrNonErrorsxDoesNotPanic pins the comma-ok narrowing: a plain error

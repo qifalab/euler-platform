@@ -15,7 +15,7 @@ var (
 
 func validPolicy() BackupPolicy {
 	return BackupPolicy{
-		PolicyID:           "scbackup-cn-north-1-01-3f4a5b6c",
+		PolicyID:           "eubackup-cn-north-1-01-3f4a5b6c",
 		TargetResourceType: "instance",
 		ScheduleHours:      6,
 		RetentionDays:      7,

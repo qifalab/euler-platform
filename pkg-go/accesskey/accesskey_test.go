@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/kms"
+	"github.com/qifalab/euler-platform/kms"
 )
 
 // memStore is an in-memory Store for tests. Production uses Vitess (vtgate)
@@ -66,7 +66,7 @@ func TestCreateReturnsSKOnceAndStoresCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	// AK format: 32 chars, SC prefix (07§2.5).
+	// AK format: 32 chars, EU prefix (07§2.5).
 	if len(created.Record.AK) != AKLength {
 		t.Fatalf("AK length = %d, want %d", len(created.Record.AK), AKLength)
 	}

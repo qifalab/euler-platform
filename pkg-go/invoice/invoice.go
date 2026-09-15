@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // Status is the lifecycle state of an invoice document.

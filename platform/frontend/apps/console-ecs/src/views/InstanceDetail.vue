@@ -13,7 +13,7 @@
  * The same state machine guards both the saga and the console buttons; a 409
  * means the current state does not allow the action.
  *
- * Monitoring (SCMON metrics), network details, and operation logs are not part
+ * Monitoring (EUMON metrics), network details, and operation logs are not part
  * of the orchestrator's resource record — those tabs are placeholders for the
  * svc-monitor / audit services that own them, rather than fabricated rows.
  */
@@ -161,7 +161,7 @@ async function openUpgrade() {
   if (upgradeSkus.value.length) return; // 已加载过,复用
   skuLoading.value = true;
   try {
-    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=scecs");
+    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euecs");
     upgradeSkus.value = (res.data ?? [])
       .filter((s) => s.status === "1" && s.skuCode !== inst.value?.specCode)
       .map((s) => {
@@ -275,13 +275,13 @@ function goRenew() {
 .detail { padding: 16px 24px; }
 .detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
 .detail-title { font-size: 18px; margin: 0; display: flex; align-items: center; gap: 8px; }
-.detail-id { font-size: 12px; color: var(--sc-text-secondary); margin: 4px 0 0; }
+.detail-id { font-size: 12px; color: var(--eu-text-secondary); margin: 4px 0 0; }
 .detail-actions { display: flex; gap: 8px; }
-.detail-error { color: var(--sc-color-danger); padding: 24px 0; }
-.detail-loading { color: var(--sc-text-secondary); padding: 24px 0; }
-.detail-tabs { background: var(--sc-bg-container); border-radius: var(--sc-radius-md); padding: 0 16px 16px; }
-.detail-back { display: inline-block; margin-top: 16px; color: var(--sc-color-brand); text-decoration: none; font-size: 13px; }
-.upgrade-current { font-size: 13px; color: var(--sc-text-secondary); margin: 0 0 12px; }
-.upgrade-hint { font-size: 13px; color: var(--sc-text-secondary); }
+.detail-error { color: var(--eu-color-danger); padding: 24px 0; }
+.detail-loading { color: var(--eu-text-secondary); padding: 24px 0; }
+.detail-tabs { background: var(--eu-bg-container); border-radius: var(--eu-radius-md); padding: 0 16px 16px; }
+.detail-back { display: inline-block; margin-top: 16px; color: var(--eu-color-brand); text-decoration: none; font-size: 13px; }
+.upgrade-current { font-size: 13px; color: var(--eu-text-secondary); margin: 0 0 12px; }
+.upgrade-hint { font-size: 13px; color: var(--eu-text-secondary); }
 .upgrade-list { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
 </style>

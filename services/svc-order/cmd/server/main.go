@@ -4,7 +4,7 @@
 // the ONLY trigger for provisioning (svc-orchestrator fans out on PAID).
 // Five transaction types share one model: NEW / RENEW / UPGRADE / DOWNGRADE / REFUND.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST   /api/v1/orders             — create an order (TypeNew/RENEW/UPGRADE/...)
 //	GET    /api/v1/orders             — list the account's orders
@@ -39,20 +39,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/order"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/trial"
+	"github.com/qifalab/euler-platform/order"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/trial"
 )
 
 // accountIDHeader carries the caller's account id. TRUST NOTE: this header is
 // injected by the API gateway after authentication; this service trusts it and
 // must therefore never be exposed directly to the public network. Deployments
-// that want defense-in-depth set SC_INTERNAL_TOKEN, which makes the service
-// additionally require a matching X-Sc-Internal-Token shared-secret header
+// that want defense-in-depth set EULER_INTERNAL_TOKEN, which makes the service
+// additionally require a matching X-Euler-Internal-Token shared-secret header
 // (dev default: unset, check disabled).
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
-const internalTokenHeader = "X-Sc-Internal-Token"
+const internalTokenHeader = "X-Euler-Internal-Token"
 
 // maxBodyBytes bounds request bodies before JSON decoding (~1MB).
 const maxBodyBytes = 1 << 20
@@ -78,7 +78,7 @@ func minorToAmount(minor int64) (pricing.Amount, error) {
 }
 
 // orderStore wires the order machine to the HTTP handlers over an orderRepo.
-// The repo decides where orders live: trade_db when SC_DB_DSN is set, the
+// The repo decides where orders live: trade_db when EULER_DB_DSN is set, the
 // in-memory store otherwise. Handlers hold no locks — the repo owns its own
 // synchronisation, which is also what lets the SQL implementation serialise
 // transitions with row locks instead of a process mutex.
@@ -93,7 +93,7 @@ func newOrderStoreWith(repo orderRepo) *orderStore {
 
 // newInMemoryOrderStore builds the demo store, seeded to match console-bff.
 // Handler tests construct it directly, so they never depend on whether the
-// developer's shell has SC_DB_DSN set.
+// developer's shell has EULER_DB_DSN set.
 func newInMemoryOrderStore() *orderStore {
 	s := newOrderStoreWith(newMemOrderRepo())
 	s.seed()
@@ -103,8 +103,8 @@ func newInMemoryOrderStore() *orderStore {
 func (s *orderStore) seed() {
 	// Seed one pending-payment order (matches console-bff seed for account 100123).
 	o, evt, err := s.machine.Create(order.CreateRequest{
-		AccountID: 100123, Type: order.TypeNew, ProductCode: "scecs",
-		ChargeType: pricing.ChargePrepaid, SKUCode: "scecs.c1", RegionID: "cn-north-1",
+		AccountID: 100123, Type: order.TypeNew, ProductCode: "euecs",
+		ChargeType: pricing.ChargePrepaid, SKUCode: "euecs.c1", RegionID: "cn-north-1",
 		Quote: pricing.Result{PayableAmount: pricing.MustParseAmount("2160")},
 		ClientToken: "seed-100123-9001",
 	}, 9001, "SO202608110001")
@@ -249,7 +249,7 @@ func (s *orderStore) handleDetail(w http.ResponseWriter, r *http.Request) {
 //
 // This endpoint is the payment service's callback, not a customer-facing
 // "pay" button: it must carry the payment-side reference and the amount that
-// was actually paid. Hardened deployments additionally set SC_INTERNAL_TOKEN,
+// was actually paid. Hardened deployments additionally set EULER_INTERNAL_TOKEN,
 // which makes the shared-secret middleware reject any caller that is not the
 // payment service / gateway.
 type payRequest struct {
@@ -585,25 +585,25 @@ func (s *trialStore) handleTrialStatus(w http.ResponseWriter, r *http.Request) {
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -611,21 +611,21 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("order-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }
 
 // internalTokenMiddleware optionally enforces a shared-secret header for
-// service-to-service calls. When SC_INTERNAL_TOKEN is set, every request must
-// carry a matching X-Sc-Internal-Token; unset (dev default) the check is off.
-// This complements — not replaces — the gateway trust on X-Sc-Account-Id.
+// service-to-service calls. When EULER_INTERNAL_TOKEN is set, every request must
+// carry a matching X-Euler-Internal-Token; unset (dev default) the check is off.
+// This complements — not replaces — the gateway trust on X-Euler-Account-Id.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return h
 	}

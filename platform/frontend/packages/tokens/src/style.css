@@ -1,36 +1,36 @@
 /**
- * @sc/tokens CSS variable surface (02§10.1).
- * Emitted as a side-effect stylesheet; consumed via `@sc/tokens/style.css`.
+ * @eu/tokens CSS variable surface (02§10.1).
+ * Emitted as a side-effect stylesheet; consumed via `@eu/tokens/style.css`.
  *
  * Theme: "Google Cloud Glass" — Google Cloud palette + acrylic glass surfaces.
  * The base shell sets these on :root; sub-apps consume them read-only and must
- * not redefine the `--sc-` prefix (02 §6.3 red line).
+ * not redefine the `--eu-` prefix (02 §6.3 red line).
  */
 :root {
   color-scheme: light;
 
   /* color — Google Cloud palette */
-  --sc-color-brand: #1a73e8;
-  --sc-color-brand-hover: #1967d2;
-  --sc-color-brand-active: #185abc;
-  --sc-color-brand-soft: rgba(26, 115, 232, 0.08);
-  --sc-color-danger: #d93025;
-  --sc-color-danger-soft: rgba(217, 48, 37, 0.08);
-  --sc-color-success: #188038;
-  --sc-color-success-soft: rgba(24, 128, 56, 0.08);
-  --sc-color-warning: #f9ab00;
-  --sc-color-warning-text: #b06000;
-  --sc-color-warning-soft: rgba(249, 171, 0, 0.12);
-  --sc-text-on-brand: #ffffff;
-  --sc-bg-page: #f8fafd;
-  --sc-bg-container: #ffffff;
-  --sc-text-primary: #202124;
-  --sc-text-secondary: #5f6368;
-  --sc-text-disabled: #bdc1c6;
-  --sc-border: #dadce0;
+  --eu-color-brand: #1a73e8;
+  --eu-color-brand-hover: #1967d2;
+  --eu-color-brand-active: #185abc;
+  --eu-color-brand-soft: rgba(26, 115, 232, 0.08);
+  --eu-color-danger: #d93025;
+  --eu-color-danger-soft: rgba(217, 48, 37, 0.08);
+  --eu-color-success: #188038;
+  --eu-color-success-soft: rgba(24, 128, 56, 0.08);
+  --eu-color-warning: #f9ab00;
+  --eu-color-warning-text: #b06000;
+  --eu-color-warning-soft: rgba(249, 171, 0, 0.12);
+  --eu-text-on-brand: #ffffff;
+  --eu-bg-page: #f8fafd;
+  --eu-bg-container: #ffffff;
+  --eu-text-primary: #202124;
+  --eu-text-secondary: #5f6368;
+  --eu-text-disabled: #bdc1c6;
+  --eu-border: #dadce0;
 
   /* page backdrop — soft blue/teal mesh under the glass layers */
-  --sc-bg-mesh:
+  --eu-bg-mesh:
     linear-gradient(180deg, rgba(26, 115, 232, 0.1), transparent 340px),
     radial-gradient(1200px 560px at 88% -8%, rgba(26, 115, 232, 0.16), transparent 60%),
     radial-gradient(900px 520px at -6% 18%, rgba(138, 180, 248, 0.24), transparent 58%),
@@ -38,91 +38,91 @@
     radial-gradient(700px 400px at 30% 108%, rgba(26, 115, 232, 0.08), transparent 60%);
 
   /* acrylic glass surfaces */
-  --sc-glass-bg: rgba(255, 255, 255, 0.62);
-  --sc-glass-bg-strong: rgba(255, 255, 255, 0.8);
-  --sc-glass-bg-soft: rgba(255, 255, 255, 0.5);
-  --sc-glass-blur: blur(20px) saturate(180%);
-  --sc-glass-blur-soft: blur(10px) saturate(160%);
-  --sc-glass-border: rgba(255, 255, 255, 0.6);
-  --sc-glass-shadow: 0 1px 2px rgba(60, 64, 67, 0.08), 0 8px 24px rgba(60, 64, 67, 0.12);
-  --sc-overlay: rgba(32, 33, 36, 0.55);
-  --sc-overlay-light: rgba(32, 33, 36, 0.28);
+  --eu-glass-bg: rgba(255, 255, 255, 0.62);
+  --eu-glass-bg-strong: rgba(255, 255, 255, 0.8);
+  --eu-glass-bg-soft: rgba(255, 255, 255, 0.5);
+  --eu-glass-blur: blur(20px) saturate(180%);
+  --eu-glass-blur-soft: blur(10px) saturate(160%);
+  --eu-glass-border: rgba(255, 255, 255, 0.6);
+  --eu-glass-shadow: 0 1px 2px rgba(60, 64, 67, 0.08), 0 8px 24px rgba(60, 64, 67, 0.12);
+  --eu-overlay: rgba(32, 33, 36, 0.55);
+  --eu-overlay-light: rgba(32, 33, 36, 0.28);
 
   /* font */
-  --sc-font-family: "Google Sans", "Roboto", "Segoe UI", "Helvetica Neue",
+  --eu-font-family: "Google Sans", "Roboto", "Segoe UI", "Helvetica Neue",
     "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --sc-font-size-xs: 12px;
-  --sc-font-size-sm: 13px;
-  --sc-font-size-md: 14px;
-  --sc-font-size-lg: 16px;
-  --sc-font-size-xl: 20px;
+  --eu-font-size-xs: 12px;
+  --eu-font-size-sm: 13px;
+  --eu-font-size-md: 14px;
+  --eu-font-size-lg: 16px;
+  --eu-font-size-xl: 20px;
 
   /* spacing (4px base) */
-  --sc-spacing-1: 4px;
-  --sc-spacing-2: 8px;
-  --sc-spacing-3: 12px;
-  --sc-spacing-4: 16px;
-  --sc-spacing-5: 20px;
-  --sc-spacing-6: 24px;
-  --sc-spacing-7: 32px;
-  --sc-spacing-8: 40px;
+  --eu-spacing-1: 4px;
+  --eu-spacing-2: 8px;
+  --eu-spacing-3: 12px;
+  --eu-spacing-4: 16px;
+  --eu-spacing-5: 20px;
+  --eu-spacing-6: 24px;
+  --eu-spacing-7: 32px;
+  --eu-spacing-8: 40px;
 
   /* radius / shadow (Google elevation tint: grey 700 @ low alpha) */
-  --sc-radius-sm: 6px;
-  --sc-radius-md: 8px;
-  --sc-radius-lg: 12px;
-  --sc-radius-xl: 16px;
-  --sc-shadow-sm: 0 1px 2px rgba(60, 64, 67, 0.1);
-  --sc-shadow-md: 0 1px 3px rgba(60, 64, 67, 0.1), 0 4px 12px rgba(60, 64, 67, 0.12);
-  --sc-shadow-lg: 0 2px 6px rgba(60, 64, 67, 0.1), 0 12px 32px rgba(60, 64, 67, 0.16);
+  --eu-radius-sm: 6px;
+  --eu-radius-md: 8px;
+  --eu-radius-lg: 12px;
+  --eu-radius-xl: 16px;
+  --eu-shadow-sm: 0 1px 2px rgba(60, 64, 67, 0.1);
+  --eu-shadow-md: 0 1px 3px rgba(60, 64, 67, 0.1), 0 4px 12px rgba(60, 64, 67, 0.12);
+  --eu-shadow-lg: 0 2px 6px rgba(60, 64, 67, 0.1), 0 12px 32px rgba(60, 64, 67, 0.16);
 
   /* motion — Material standard easing */
-  --sc-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --eu-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
 
   /* layout */
-  --sc-topbar-height: 56px;
-  --sc-sider-width: 208px;
+  --eu-topbar-height: 56px;
+  --eu-sider-width: 208px;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --sc-color-brand: #8ab4f8;
-  --sc-color-brand-hover: #a5c6f9;
-  --sc-color-brand-active: #c6dbfb;
-  --sc-color-brand-soft: rgba(138, 180, 248, 0.12);
-  --sc-color-danger: #f28b82;
-  --sc-color-danger-soft: rgba(242, 139, 130, 0.12);
-  --sc-color-success: #81c995;
-  --sc-color-success-soft: rgba(129, 201, 149, 0.12);
-  --sc-color-warning: #fdd663;
-  --sc-color-warning-text: #fdd663;
-  --sc-color-warning-soft: rgba(253, 214, 99, 0.12);
-  --sc-text-on-brand: #202124;
-  --sc-bg-page: #121316;
-  --sc-bg-container: #1e2024;
-  --sc-text-primary: #e8eaed;
-  --sc-text-secondary: #9aa0a6;
-  --sc-text-disabled: #5f6368;
-  --sc-border: #3c4043;
+  --eu-color-brand: #8ab4f8;
+  --eu-color-brand-hover: #a5c6f9;
+  --eu-color-brand-active: #c6dbfb;
+  --eu-color-brand-soft: rgba(138, 180, 248, 0.12);
+  --eu-color-danger: #f28b82;
+  --eu-color-danger-soft: rgba(242, 139, 130, 0.12);
+  --eu-color-success: #81c995;
+  --eu-color-success-soft: rgba(129, 201, 149, 0.12);
+  --eu-color-warning: #fdd663;
+  --eu-color-warning-text: #fdd663;
+  --eu-color-warning-soft: rgba(253, 214, 99, 0.12);
+  --eu-text-on-brand: #202124;
+  --eu-bg-page: #121316;
+  --eu-bg-container: #1e2024;
+  --eu-text-primary: #e8eaed;
+  --eu-text-secondary: #9aa0a6;
+  --eu-text-disabled: #5f6368;
+  --eu-border: #3c4043;
 
-  --sc-bg-mesh:
+  --eu-bg-mesh:
     linear-gradient(180deg, rgba(138, 180, 248, 0.1), transparent 340px),
     radial-gradient(1200px 560px at 88% -8%, rgba(138, 180, 248, 0.14), transparent 60%),
     radial-gradient(900px 520px at -6% 18%, rgba(26, 115, 232, 0.18), transparent 58%),
     radial-gradient(1000px 640px at 102% 74%, rgba(66, 94, 251, 0.12), transparent 62%);
 
-  --sc-glass-bg: rgba(30, 32, 36, 0.6);
-  --sc-glass-bg-strong: rgba(30, 32, 36, 0.8);
-  --sc-glass-bg-soft: rgba(30, 32, 36, 0.45);
-  --sc-glass-border: rgba(255, 255, 255, 0.09);
-  --sc-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
-  --sc-overlay: rgba(0, 0, 0, 0.6);
-  --sc-overlay-light: rgba(0, 0, 0, 0.4);
+  --eu-glass-bg: rgba(30, 32, 36, 0.6);
+  --eu-glass-bg-strong: rgba(30, 32, 36, 0.8);
+  --eu-glass-bg-soft: rgba(30, 32, 36, 0.45);
+  --eu-glass-border: rgba(255, 255, 255, 0.09);
+  --eu-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+  --eu-overlay: rgba(0, 0, 0, 0.6);
+  --eu-overlay-light: rgba(0, 0, 0, 0.4);
 
-  --sc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --sc-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.4);
-  --sc-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --eu-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --eu-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.4);
+  --eu-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
 /* ---------------------------------------------------------------------------
@@ -131,49 +131,49 @@
  * ------------------------------------------------------------------------- */
 body {
   margin: 0;
-  font-family: var(--sc-font-family);
-  color: var(--sc-text-primary);
-  background-color: var(--sc-bg-page);
-  background-image: var(--sc-bg-mesh);
+  font-family: var(--eu-font-family);
+  color: var(--eu-text-primary);
+  background-color: var(--eu-bg-page);
+  background-image: var(--eu-bg-mesh);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
 }
 
 /* ---------------------------------------------------------------------------
  * Glass utilities — the single acrylic recipe consumed across all apps.
- *   .sc-glass        strong glass: topbar, ⌘K palette, dialogs, dropdowns
- *   .sc-glass-soft   soft glass: content cards, table containers
- *   .sc-glass-strong near-opaque glass for readability-critical surfaces
+ *   .eu-glass        strong glass: topbar, ⌘K palette, dialogs, dropdowns
+ *   .eu-glass-soft   soft glass: content cards, table containers
+ *   .eu-glass-strong near-opaque glass for readability-critical surfaces
  * ------------------------------------------------------------------------- */
-.sc-glass,
-.sc-glass-soft,
-.sc-glass-strong {
-  border: 1px solid var(--sc-glass-border);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  box-shadow: var(--sc-glass-shadow);
+.eu-glass,
+.eu-glass-soft,
+.eu-glass-strong {
+  border: 1px solid var(--eu-glass-border);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  box-shadow: var(--eu-glass-shadow);
 }
-.sc-glass {
-  background: var(--sc-glass-bg);
+.eu-glass {
+  background: var(--eu-glass-bg);
 }
-.sc-glass-soft {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  box-shadow: var(--sc-shadow-sm);
+.eu-glass-soft {
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  box-shadow: var(--eu-shadow-sm);
 }
-.sc-glass-strong {
-  background: var(--sc-glass-bg-strong);
+.eu-glass-strong {
+  background: var(--eu-glass-bg-strong);
 }
 /* Fallback for engines without backdrop-filter: keep surfaces readable. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .sc-glass {
-    background: var(--sc-glass-bg-strong);
+  .eu-glass {
+    background: var(--eu-glass-bg-strong);
   }
-  .sc-glass-soft {
-    background: var(--sc-glass-bg);
+  .eu-glass-soft {
+    background: var(--eu-glass-bg);
   }
-  .sc-glass-strong {
-    background: var(--sc-bg-container);
+  .eu-glass-strong {
+    background: var(--eu-bg-container);
   }
 }

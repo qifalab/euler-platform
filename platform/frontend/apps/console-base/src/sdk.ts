@@ -4,7 +4,7 @@
  * (memory-only). In dev the vite proxy forwards /console/* to the BFF and
  * injects the dev account header; in prod the APISIX gateway does that.
  */
-import { createSDK, type SDK } from "@sc/sdk";
+import { createSDK, type SDK } from "@eu/sdk";
 import { useAuthStore } from "./stores/auth";
 
 let _sdk: SDK | null = null;

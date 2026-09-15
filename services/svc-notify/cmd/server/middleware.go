@@ -20,7 +20,7 @@ type ctxKey string
 const requestIDKey ctxKey = "request_id"
 
 // requestIDMiddleware generates a request id (≡ trace_id for the platform),
-// injects it into the context and the X-Sc-TraceId response header, and
+// injects it into the context and the X-Euler-TraceId response header, and
 // aligns with the APISIX request-id plugin (04§3.1 global plugins).
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +28,7 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		if rid == "" {
 			rid = uuid.NewString()
 		}
-		w.Header().Set("X-Sc-TraceId", rid)
+		w.Header().Set("X-Euler-TraceId", rid)
 		ctx := context.WithValue(r.Context(), requestIDKey, rid)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

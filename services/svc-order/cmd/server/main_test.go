@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/starcloud/sc-platform/order"
+	"github.com/qifalab/euler-platform/order"
 )
 
 func doCreate(t *testing.T, s *orderStore, body string) *httptest.ResponseRecorder {
@@ -32,7 +32,7 @@ func dataOf(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 
 func TestCreateRejectsNegativeAmount(t *testing.T) {
 	s := newInMemoryOrderStore()
-	w := doCreate(t, s, `{"productCode":"scecs","amountMinor":-1}`)
+	w := doCreate(t, s, `{"productCode":"euecs","amountMinor":-1}`)
 	if w.Code != 400 {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
@@ -40,7 +40,7 @@ func TestCreateRejectsNegativeAmount(t *testing.T) {
 
 func TestCreateClientTokenIdempotent(t *testing.T) {
 	s := newInMemoryOrderStore()
-	body := `{"productCode":"scecs","amountMinor":2160,"clientToken":"tok-1"}`
+	body := `{"productCode":"euecs","amountMinor":2160,"clientToken":"tok-1"}`
 	first := dataOf(t, doCreate(t, s, body))
 	second := dataOf(t, doCreate(t, s, body))
 	if first["orderId"] != second["orderId"] {
@@ -50,7 +50,7 @@ func TestCreateClientTokenIdempotent(t *testing.T) {
 
 func TestCreateAmountMinorUnits(t *testing.T) {
 	s := newInMemoryOrderStore()
-	d := dataOf(t, doCreate(t, s, `{"productCode":"scecs","amountMinor":2160,"clientToken":"tok-amt"}`))
+	d := dataOf(t, doCreate(t, s, `{"productCode":"euecs","amountMinor":2160,"clientToken":"tok-amt"}`))
 	// 2160 分 = ¥21.60 → pricing.Amount string "21.6".
 	if got := d["payableAmount"]; got != "21.6" {
 		t.Fatalf("want payableAmount 21.6, got %v", got)
@@ -145,7 +145,7 @@ func TestPayIsIdempotentPerPayment(t *testing.T) {
 // them instead of wrapping into a plausible-looking amount.
 func TestCreateRejectsOverflowingAmount(t *testing.T) {
 	s := newInMemoryOrderStore()
-	w := doCreate(t, s, `{"productCode":"scecs","amountMinor":1000000000000000000}`)
+	w := doCreate(t, s, `{"productCode":"euecs","amountMinor":1000000000000000000}`)
 	if w.Code != 400 {
 		t.Fatalf("want 400 on overflowing amountMinor, got %d: %s", w.Code, w.Body.String())
 	}
@@ -153,7 +153,7 @@ func TestCreateRejectsOverflowingAmount(t *testing.T) {
 
 func TestCancelVersionIncrementsOnce(t *testing.T) {
 	s := newInMemoryOrderStore()
-	d := dataOf(t, doCreate(t, s, `{"productCode":"scecs","amountMinor":100,"clientToken":"tok-c"}`))
+	d := dataOf(t, doCreate(t, s, `{"productCode":"euecs","amountMinor":100,"clientToken":"tok-c"}`))
 	id := int64(d["orderId"].(float64))
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/orders/x/cancel", nil)
 	r.SetPathValue("id", jsonNum(id))

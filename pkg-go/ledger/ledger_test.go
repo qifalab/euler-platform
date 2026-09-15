@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 var testNow = time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
@@ -474,7 +474,7 @@ func TestEntryCarriesBizLinkage(t *testing.T) {
 	// ticket waiting to happen.
 	l, store := newTestLedger()
 	_, _, _ = l.Recharge(acct, amt("1000"), "recharge-abc", "idem-1", "支付宝充值")
-	_, _, _ = l.Consume(acct, amt("153"), "order", "9001", "idem-2", "新购 SCECS")
+	_, _, _ = l.Consume(acct, amt("153"), "order", "9001", "idem-2", "新购 EUECS")
 
 	entries, _ := store.ListEntries(acct)
 	for _, e := range entries {

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // sqlStore is the MySQL-backed orgStore over account_db's org_project,
@@ -45,7 +45,7 @@ const statementTimeout = 10 * time.Second
 var errInvalidAccount = errors.New("org: account id must be numeric")
 
 // newStore picks the backend. Persistence is opt-in (pkg-go/storage doc): with
-// SC_DB_DSN set, projects, resource membership and tags live in account_db, so a
+// EULER_DB_DSN set, projects, resource membership and tags live in account_db, so a
 // restart keeps the org tree; unset, the in-memory store keeps the demo and
 // `go test` dependency-free.
 //

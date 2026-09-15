@@ -1,12 +1,12 @@
-module github.com/starcloud/sc-platform/services/svc-iam
+module github.com/qifalab/euler-platform/services/svc-iam
 
 go 1.26
 
-require github.com/starcloud/sc-platform v0.0.0
+require github.com/qifalab/euler-platform v0.0.0
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/go-sql-driver/mysql v1.9.0 // indirect
 )
 
-replace github.com/starcloud/sc-platform => ../../pkg-go
+replace github.com/qifalab/euler-platform => ../../pkg-go

@@ -2,7 +2,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 import vue from "@vitejs/plugin-vue";
 
 /**
- * Root Vitest config for the StarCloud frontend monorepo (02§10.2).
+ * Root Vitest config for the Euler frontend monorepo (02§10.2).
  *
  * Per-package vite.config.ts files register @vitejs/plugin-vue for builds,
  * but `vitest run` (the repo `test` script) resolves this root config first,

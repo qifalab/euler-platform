@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/trial"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/trial"
 )
 
 // The claim endpoint is the HTTP surface of pkg-go/trial's admission engine
@@ -175,7 +175,7 @@ func TestTrialClaimRequiresAccountHeader(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.handleTrialClaim(w, r)
 	if w.Code != 403 {
-		t.Fatalf("want 403 without X-Sc-Account-Id, got %d", w.Code)
+		t.Fatalf("want 403 without X-Euler-Account-Id, got %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "Common.MissingAccountId") {
 		t.Errorf("body should carry Common.MissingAccountId: %s", w.Body.String())

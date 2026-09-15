@@ -28,7 +28,7 @@ flowchart TB
         WAF["WAF<br/>(APISIX + Coraza 引擎)"]
     end
     subgraph L2["L2 接入与认证层"]
-        GW["APISIX 网关<br/>统一鉴权插件 sc-auth / sc-authorize"]
+        GW["APISIX 网关<br/>统一鉴权插件 eu-auth / eu-authorize"]
         IAM["svc-iam<br/>账号/RAM/STS/AK/Policy/令牌签发"]
         KMS["svc-kms 密钥服务<br/>信封加密/密钥轮转"]
     end
@@ -146,7 +146,7 @@ CREATE TABLE access_key (
   id BIGINT PRIMARY KEY, account_id BIGINT UNSIGNED NOT NULL,
   owner_type TINYINT COMMENT '1主账号 2RAM用户 3角色',
   owner_id BIGINT NOT NULL,
-  ak_id VARCHAR(32) NOT NULL UNIQUE COMMENT 'AK,前缀 SC(替代阿里云 LTAI)',
+  ak_id VARCHAR(32) NOT NULL UNIQUE COMMENT 'AK,前缀 EU(替代阿里云 LTAI)',
   sk_cipher VARBINARY(512) NOT NULL COMMENT 'SK 信封加密密文',
   sk_key_version INT NOT NULL COMMENT 'KMS主密钥版本',
   status TINYINT COMMENT '1启用 2禁用 3已删除(保留7天可恢复)',
@@ -283,15 +283,15 @@ stateDiagram-v2
 **资源标识 ARN(平台资源名,PRN)格式**:
 
 ```
-sc:<service>:<region>:<account_id>:<relative-resource>
+eu:<service>:<region>:<account_id>:<relative-resource>
 示例:
-sc:ecs:cn-east-1:1001234567890:instance/scecs-cn-east-1-01-a1b2c3d4
-sc:oss:cn-east-1:1001234567890:bucket/my-app-data/logs/*
-sc:iam:*:1001234567890:user/dev-*
+eu:ecs:cn-east-1:1001234567890:instance/euecs-cn-east-1-01-a1b2c3d4
+eu:oss:cn-east-1:1001234567890:bucket/my-app-data/logs/*
+eu:iam:*:1001234567890:user/dev-*
 ```
 
-- `region` 允许 `*`(全局资源如 IAM);`relative-resource` 由各产品注册时申报,支持 `*` 通配(§3.2 匹配规则)。资源 ID 内嵌 2 位分片因子,格式 `{productCode}-{regionId}-{分片因子2位}-{随机8位}`(如 `scecs-cn-east-1-01-a1b2c3d4`,详见《00-overview.md》附录A 全局标识规范)。
-- **新产品接入规范**:立项时必须向 svc-iam 注册 `<service>` 命名空间、资源类型树、Action 清单(格式 `{productCode}:{Operation}`,如 `scecs:StartInstance`),缺注册不予挂网关路由——这是"计量计费先于产品"之外的第二条产品准入红线(参见《01-product-catalog.md》§1.1 决策 D0 产品 code 体系)。
+- `region` 允许 `*`(全局资源如 IAM);`relative-resource` 由各产品注册时申报,支持 `*` 通配(§3.2 匹配规则)。资源 ID 内嵌 2 位分片因子,格式 `{productCode}-{regionId}-{分片因子2位}-{随机8位}`(如 `euecs-cn-east-1-01-a1b2c3d4`,详见《00-overview.md》附录A 全局标识规范)。
+- **新产品接入规范**:立项时必须向 svc-iam 注册 `<service>` 命名空间、资源类型树、Action 清单(格式 `{productCode}:{Operation}`,如 `euecs:StartInstance`),缺注册不予挂网关路由——这是"计量计费先于产品"之外的第二条产品准入红线(参见《01-product-catalog.md》§1.1 决策 D0 产品 code 体系)。
 
 ### 3.2 Policy JSON 语法
 
@@ -303,13 +303,13 @@ sc:iam:*:1001234567890:user/dev-*
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["scecs:Describe*", "scecs:StartInstance", "scecs:StopInstance"],
+      "Action": ["euecs:Describe*", "euecs:StartInstance", "euecs:StopInstance"],
       "Resource": [
-        "sc:ecs:cn-east-1:1001234567890:instance/*"
+        "eu:ecs:cn-east-1:1001234567890:instance/*"
       ],
       "Condition": {
-        "IpAddress": { "sc:SourceIp": ["10.0.0.0/8"] },
-        "DateLessThan": { "sc:CurrentTime": "2027-01-01T00:00:00Z" }
+        "IpAddress": { "eu:SourceIp": ["10.0.0.0/8"] },
+        "DateLessThan": { "eu:CurrentTime": "2027-01-01T00:00:00Z" }
       }
     },
     {
@@ -317,7 +317,7 @@ sc:iam:*:1001234567890:user/dev-*
       "Action": ["*"],
       "Resource": ["*"],
       "Condition": {
-        "NotIpAddress": { "sc:SourceIp": ["203.0.113.0/24"] }
+        "NotIpAddress": { "eu:SourceIp": ["203.0.113.0/24"] }
       }
     }
   ]
@@ -328,12 +328,12 @@ sc:iam:*:1001234567890:user/dev-*
 1. 默认 Deny;
 2. 任一策略显式 Deny → 最终 Deny(Deny 优先);
 3. 存在匹配 Allow 且无 Deny → Allow;
-4. Condition 支持的运算符一期提供:`StringEquals/NotEquals`、`IpAddress/NotIpAddress`、`DateGreaterThan/LessThan`、`Bool`;`sc:` 前缀上下文键一期提供 `SourceIp`、`CurrentTime`、`MFAPresent`、`ResourceGroupId` 四个。
+4. Condition 支持的运算符一期提供:`StringEquals/NotEquals`、`IpAddress/NotIpAddress`、`DateGreaterThan/LessThan`、`Bool`;`eu:` 前缀上下文键一期提供 `SourceIp`、`CurrentTime`、`MFAPresent`、`ResourceGroupId` 四个。
 
 **策略分类**:
 | 类型 | 维护方 | 示例 |
 |---|---|---|
-| 系统策略 | 平台内置,随产品 API 注册自动生成只读/管理两档 | `ScECSFullAccess`、`ScECSReadOnlyAccess`、`ScBillingReadOnlyAccess` |
+| 系统策略 | 平台内置,随产品 API 注册自动生成只读/管理两档 | `EuECSFullAccess`、`EuECSReadOnlyAccess`、`EuBillingReadOnlyAccess` |
 | 自定义策略 | 租户自建 | 上例"仅允许启动停机且限源 IP" |
 | 信任策略 | 挂在角色上 | 声明"允许 account_id=200xxx 的 RAM 用户 AssumeRole 本角色" |
 | 权限边界(二期) | 主账号限制子身份的最大权限上限 | 财务组永不能碰 `iam:*` |
@@ -363,7 +363,7 @@ sequenceDiagram
         GW->>RD: 写 L1/L2 缓存
     end
     alt Allow
-        GW->>SVC: 转发(注入 X-Sc-Account-Id/X-Sc-Identity/X-Sc-TraceId)
+        GW->>SVC: 转发(注入 X-Euler-Account-Id/X-Euler-Identity/X-Euler-TraceId)
         SVC->>SVC: 数据面属主二次校验(防越权,§5.2)
     else Deny
         GW-->>C: 403 NoPermission(含决策编号,不泄露策略细节)
@@ -374,7 +374,7 @@ sequenceDiagram
 **网关鉴权 vs 服务内鉴权分工**:
 - **网关层**:认证(签名/JWT)+ "接口级"粗粒度鉴权(action 维度)+ 限流。保证非法身份进不了内网。
 - **服务层**:资源属主校验(account_id 必须等于资源 owner)+ 业务语义鉴权(如"该实例是否允许此操作状态")。网关不做资源属主查询,避免鉴权链路依赖所有产品 DB。
-- 对需要资源级策略生效的高敏接口(SCECS 删除、SCOSS 下载、RAM 变更),网关调用 svc-iam `CheckAccess` 带上具体 ARN,做细粒度评估。
+- 对需要资源级策略生效的高敏接口(EUECS 删除、EUOSS 下载、RAM 变更),网关调用 svc-iam `CheckAccess` 带上具体 ARN,做细粒度评估。
 
 ### 3.4 鉴权缓存策略与失效
 
@@ -393,7 +393,7 @@ sequenceDiagram
 对标阿里云"资源组",平台提供 **Project(资源组)** 作为租户内的二级隔离单元:
 
 - 每个资源创建时必须携带 `resource_group_id`(默认 `default`);
-- ARN 与策略 Condition 键 `sc:ResourceGroupId` 支持按资源组授权:`"Condition":{"StringEquals":{"sc:ResourceGroupId":"rg-002"}}`;
+- ARN 与策略 Condition 键 `eu:ResourceGroupId` 支持按资源组授权:`"Condition":{"StringEquals":{"eu:ResourceGroupId":"rg-002"}}`;
 - 控制台所有列表接口强制带资源组过滤器;跨资源组移动 = 资源属主不变、归属组变更,需 `rg:MoveResource` 权限并留审计。
 
 ```sql
@@ -408,7 +408,7 @@ CREATE TABLE resource_group (
 --   region VARCHAR(32) NOT NULL,并建立 (account_id, resource_group_id) 联合索引
 ```
 
-**标签(tag)与 ABAC**:资源表统一挂 `tag` 扩展(JSON 或独立 tag 表),Condition 键 `sc:ResourceTag/<key>` 二期开放;一期仅提供资源组维度的 ABAC 能力,避免评估引擎复杂度失控。
+**标签(tag)与 ABAC**:资源表统一挂 `tag` 扩展(JSON 或独立 tag 表),Condition 键 `eu:ResourceTag/<key>` 二期开放;一期仅提供资源组维度的 ABAC 能力,避免评估引擎复杂度失控。
 
 ---
 
@@ -420,7 +420,7 @@ CREATE TABLE resource_group (
 
 > **契约权威声明**:本节是全平台 OpenAPI 签名算法(CPS1-HMAC-SHA256)的**唯一权威定义**。《03-backend-services.md》§9.2(OpenAPI 规范,签名节已重写为引用本节 CPS1 契约,不再用查询参数式 HMAC)、《04-middleware-infrastructure.md》§3.4/§3.8(网关认证设计与 forward-auth `request_headers` 清单,已改为 `x-cps-*` 头集,替换 `x-acs-*` 阿里云风格)均按本节实现;SDK 签名模块(见《03-backend-services.md》§9.4)、文档站签名示例与 OpenAPI Explorer 在线调试与本契约同步发布。网关签名实现仅此一套,**任何产品、SDK 或文档不得另行定义或描述第二套签名方案**。`x-cps-` 头前缀为签名协议专用名(与品牌前缀 `sc` 解耦,见裁决书 C9),全书保留不改。
 
-> **域名与路由形态(见裁决书 S6)**:OpenAPI 统一"一产品一子域名 `{productCode}.api.starcloud.cn`"+ RPC 风格 `Action` + 日期型 `Version` 参数(URI 不承载版本号,如 `scecs.api.starcloud.cn/?Action=RunInstances&Version=2026-08-01`);废弃单一主域名 + 查询参数签名、废弃 `/v1/{service}/*` 路径段形态。
+> **域名与路由形态(见裁决书 S6)**:OpenAPI 统一"一产品一子域名 `{productCode}.api.euler.emoera.com`"+ RPC 风格 `Action` + 日期型 `Version` 参数(URI 不承载版本号,如 `euecs.api.euler.emoera.com/?Action=RunInstances&Version=2026-08-01`);废弃单一主域名 + 查询参数签名、废弃 `/v1/{service}/*` 路径段形态。
 
 **请求头约定**:
 
@@ -476,15 +476,15 @@ Step 4  Signature = HexEncode(HMAC-SHA256(kSigning, StringToSign))
 flowchart LR
     R["外部请求"] --> P1["① ip-restriction<br/>黑名单/地域封禁"]
     P1 --> P2["② limit-req<br/>未认证限流(按源IP)"]
-    P2 --> P3["③ sc-auth<br/>自研插件:签名/JWT二选一"]
-    P3 --> P4["④ sc-authorize<br/>自研插件:接口级/资源级鉴权"]
+    P2 --> P3["③ eu-auth<br/>自研插件:签名/JWT二选一"]
+    P3 --> P4["④ eu-authorize<br/>自研插件:接口级/资源级鉴权"]
     P4 --> P5["⑤ 审计旁路<br/>serverless-post-function→Kafka"]
     P5 --> UP["上游服务<br/>(注入身份头)"]
 ```
 
-- 自研插件两个:`sc-auth`(认证)、`sc-authorize`(鉴权),Lua 实现,策略计算通过 HTTP 调 svc-iam(连接池 + 本地 L1 缓存),遵循《04-middleware-infrastructure.md》APISIX 部署规范;
-- **内网防伪**:网关注入的 `X-Sc-Account-Id` 等身份头,上游服务只信任来自网关 mTLS/内网 CIDR 的连接;非网关来源携带该头直接 403。东西向服务间调用使用短 TTL 内部 JWT(由 svc-iam 签发,`iss=sc-internal`),与外部凭证体系隔离;
-- 路由规划:所有 OpenAPI 统一挂"一产品一子域名 `{productCode}.api.starcloud.cn`,RPC 风格 `Action` + 日期型 `Version` 参数(URI 不承载版本号,如 `scecs.api.starcloud.cn/?Action=RunInstances&Version=2026-08-01`)";控制台 BFF 走 `console.starcloud.cn/*`,两类路由分别绑定鉴权插件链,互不混用(域名与版本载体形态以《04-middleware-infrastructure.md》§3.2 为事实源,详见《02-frontend-architecture.md》与《04》路由规划)。
+- 自研插件两个:`eu-auth`(认证)、`eu-authorize`(鉴权),Lua 实现,策略计算通过 HTTP 调 svc-iam(连接池 + 本地 L1 缓存),遵循《04-middleware-infrastructure.md》APISIX 部署规范;
+- **内网防伪**:网关注入的 `X-Euler-Account-Id` 等身份头,上游服务只信任来自网关 mTLS/内网 CIDR 的连接;非网关来源携带该头直接 403。东西向服务间调用使用短 TTL 内部 JWT(由 svc-iam 签发,`iss=eu-internal`),与外部凭证体系隔离;
+- 路由规划:所有 OpenAPI 统一挂"一产品一子域名 `{productCode}.api.euler.emoera.com`,RPC 风格 `Action` + 日期型 `Version` 参数(URI 不承载版本号,如 `euecs.api.euler.emoera.com/?Action=RunInstances&Version=2026-08-01`)";控制台 BFF 走 `console.euler.emoera.com/*`,两类路由分别绑定鉴权插件链,互不混用(域名与版本载体形态以《04-middleware-infrastructure.md》§3.2 为事实源,详见《02-frontend-architecture.md》与《04》路由规划)。
 
 ### 4.4 OpenAPI 通用安全规范
 
@@ -511,9 +511,9 @@ flowchart LR
 |---|---|---|
 | 横向越权 | 租户 A 用合法身份操作租户 B 的资源(改 resourceId 参数) | ① 所有数据访问强制 `WHERE account_id = ?`(Vitess 分片键即 account_id,物理上跨库);② 服务侧统一"属主校验拦截器":操作前查资源属主,不等于调用者 account_id 直接 404(不暴露存在性);③ 公共 SDK 封装,禁止业务代码手写属主过滤 |
 | 纵向越权 | RAM 用户执行超出授权的操作(如只读角色发起删除) | ① 网关 action 级鉴权兜底;② 服务端不信任前端按钮/参数中的"角色";③ 管理面高危操作(删库、释放实例、改实名信息)强制二次确认 + MFA 重校验 |
-| 身份伪造 | 伪造 `X-Sc-Account-Id` 头直连服务 | 内网防伪(§4.3)+ NetworkPolicy 禁止外部直达 Pod |
+| 身份伪造 | 伪造 `X-Euler-Account-Id` 头直连服务 | 内网防伪(§4.3)+ NetworkPolicy 禁止外部直达 Pod |
 
-**统一鉴权 SDK(Go 版本)**:提供 `RequireAuth(action="scecs:StopInstance")` 拦截器(如 Kratos middleware / gRPC interceptor)与资源属主校验中间件;新产品代码评审必查项:是否使用该 SDK、是否存在裸 SQL 缺 account_id 条件。SDK 发布纳入《08-devops-delivery.md》统一制品库管理。
+**统一鉴权 SDK(Go 版本)**:提供 `RequireAuth(action="euecs:StopInstance")` 拦截器(如 Kratos middleware / gRPC interceptor)与资源属主校验中间件;新产品代码评审必查项:是否使用该 SDK、是否存在裸 SQL 缺 account_id 条件。SDK 发布纳入《08-devops-delivery.md》统一制品库管理。
 
 ### 5.3 敏感数据加密与密钥管理(KMS)
 
@@ -579,17 +579,17 @@ flowchart LR
 {
   "event_id": "ev-20260804-000123",
   "event_time": "2026-08-04T09:30:00Z",
-  "event_source": "scecs.api.starcloud.cn",
+  "event_source": "euecs.api.euler.emoera.com",
   "event_name": "StopInstance",
   "source_ip": "203.0.113.9",
-  "user_agent": "sc-sdk-go/1.2.0",
+  "user_agent": "eu-sdk-go/1.2.0",
   "identity": {
     "type": "ram-user", "account_id": "1001234567890",
-    "principal": "user/alice", "ak_id": "SC****3F", "mfa_present": true
+    "principal": "user/alice", "ak_id": "EU****3F", "mfa_present": true
   },
-  "resource": ["sc:ecs:cn-east-1:1001234567890:instance/scecs-cn-east-1-01-a1b2c3d4"],
+  "resource": ["eu:ecs:cn-east-1:1001234567890:instance/euecs-cn-east-1-01-a1b2c3d4"],
   "decision": "allow",
-  "request_params": {"InstanceId": "scecs-cn-east-1-01-a1b2c3d4"},
+  "request_params": {"InstanceId": "euecs-cn-east-1-01-a1b2c3d4"},
   "response_code": "200",
   "trace_id": "5b8e...c2",
   "chain_hash": "<上一条事件哈希+本事件哈希,防篡改链>"
@@ -634,7 +634,7 @@ flowchart LR
 | KMS 对外版 | 后置 | 一期仅内部使用(svc-kms) | 二期 BYOK/密钥托管商品化 |
 | 操作审计 | **真做** | §6.2 即是产品本体,合规基线 180 天 + 付费长保留/投递(365 天/18 个月) | - |
 
-**售卖安全产品的通用产品化要求**(与《01-product-catalog.md》产品注册规范一致):独立的资源类型与计量项(如 `scwaf:instance`、`sccert:certificate`,产品 code 前缀统一 `sc`,见《00-overview.md》附录A 全局标识规范)、独立控制台微前端子应用、OpenAPI 与文档同步发布、纳入统一订单/计费(参见计费章节与《03-backend-services.md》订单中心)。
+**售卖安全产品的通用产品化要求**(与《01-product-catalog.md》产品注册规范一致):独立的资源类型与计量项(如 `euwaf:instance`、`eucert:certificate`,产品 code 前缀统一 `sc`,见《00-overview.md》附录A 全局标识规范)、独立控制台微前端子应用、OpenAPI 与文档同步发布、纳入统一订单/计费(参见计费章节与《03-backend-services.md》订单中心)。
 
 ---
 

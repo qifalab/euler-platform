@@ -10,14 +10,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: starcloud-root
+  name: euler-root
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: https://gitlab.internal/starcloud/platform-manifests.git
+    repoURL: https://gitlab.internal/euler/platform-manifests.git
     targetRevision: main
     # Points at the directory that holds applicationset.yaml. The include
     # filter restricts the sync to Argo CD ApplicationSet resources only —

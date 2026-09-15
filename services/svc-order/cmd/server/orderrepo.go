@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/order"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/order"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // orderRepo is the persistence boundary for the order centre. The handlers talk
@@ -733,7 +733,7 @@ func nullableString(s string) any {
 // --- wiring ------------------------------------------------------------------
 
 // newOrderRepo picks the backend. Persistence is opt-in (pkg-go/storage doc):
-// with SC_DB_DSN set, orders, their journal and their events live in trade_db, so
+// with EULER_DB_DSN set, orders, their journal and their events live in trade_db, so
 // a restart keeps them; unset, the in-memory repo keeps the demo and `go test`
 // dependency-free.
 //

@@ -44,8 +44,8 @@
 
 **决策 D0:平台品牌与产品前缀**
 
-- **结论**:平台品牌名"辰云 StarCloud",主域名统一为 `starcloud.cn`(域名/品牌前缀统一规范见《00-overview.md》附录A 全局标识规范);产品线统一前缀 `SC`(StarCloud),同时也是平台品牌前缀(替代 02 的 `cldp`、07 的 `cps`/`CPSA`,详见《00-overview.md》附录A 全局标识规范);产品 code 采用 `sc` + 品类缩写 + 功能缩写,全小写无分隔符,如云服务器 `scecs`、对象存储 `scoss`。对外展示名采用"辰云 + 通用品类词",如"辰云服务器"、"辰云对象存储"。
-- **理由**:① 产品 code 是贯穿商品化中台、计量、API 路由、控制台微前端注册、权限 action 的全局主键,必须 Day 1 定规范;② 三字母品类段与阿里云/腾讯云习惯接近,降低用户迁移心智成本;③ 避免与开源组件同名(如不叫 "mysql" 而叫 "scrds",强调托管服务而非引擎);④ `sc` 同时是平台品牌前缀(替代 02 的 `cldp`、07 的 `cps`/`CPSA`,详见《00-overview.md》附录A 全局标识规范)。
+- **结论**:平台品牌名"辰云 Euler",主域名统一为 `euler.emoera.com`(域名/品牌前缀统一规范见《00-overview.md》附录A 全局标识规范);产品线统一前缀 `EU`(Euler),同时也是平台品牌前缀(替代 02 的 `cldp`、07 的 `cps`/`CPSA`,详见《00-overview.md》附录A 全局标识规范);产品 code 采用 `sc` + 品类缩写 + 功能缩写,全小写无分隔符,如云服务器 `euecs`、对象存储 `euoss`。对外展示名采用"辰云 + 通用品类词",如"辰云服务器"、"辰云对象存储"。
+- **理由**:① 产品 code 是贯穿商品化中台、计量、API 路由、控制台微前端注册、权限 action 的全局主键,必须 Day 1 定规范;② 三字母品类段与阿里云/腾讯云习惯接近,降低用户迁移心智成本;③ 避免与开源组件同名(如不叫 "mysql" 而叫 "eurds",强调托管服务而非引擎);④ `sc` 同时是平台品牌前缀(替代 02 的 `cldp`、07 的 `cps`/`CPSA`,详见《00-overview.md》附录A 全局标识规范)。
 - **备选**:纯英文自造词品牌(如 AWS 的 EC2/S3 式命名)。
 - **改选条件**:若法务评估"辰云"商标不可注册,仅更换品牌词,code 规范不变。
 
@@ -53,19 +53,19 @@
 
 | 项 | 规范 | 示例 |
 |---|---|---|
-| 产品 code | `sc` + 3~6 字母,全局唯一,创建后不可改 | `scecs`、`scoss`、`scrds` |
-| OpenAPI 域 | `{productCode}.api.starcloud.cn` | `scecs.api.starcloud.cn` |
-| 控制台路由 | `/console/{productCode}` | `/console/scecs` |
-| 权限 action | `{productCode}:{Operation}` | `scecs:CreateInstance` |
-| 资源 ID | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | `scecs-cn-north-1-01-a1b2c3d4` |
-| 计量项 code | `{productCode}.{metric}` | `scoss.storage_bytes` |
+| 产品 code | `sc` + 3~6 字母,全局唯一,创建后不可改 | `euecs`、`euoss`、`eurds` |
+| OpenAPI 域 | `{productCode}.api.euler.emoera.com` | `euecs.api.euler.emoera.com` |
+| 控制台路由 | `/console/{productCode}` | `/console/euecs` |
+| 权限 action | `{productCode}:{Operation}` | `euecs:CreateInstance` |
+| 资源 ID | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | `euecs-cn-north-1-01-a1b2c3d4` |
+| 计量项 code | `{productCode}.{metric}` | `euoss.storage_bytes` |
 
 ### 1.2 品类规划框架
 
 **决策 D1:品类节奏——先 IaaS + 基础 PaaS,大数据/AI/云市场后置**
 
 - **结论**:产品体系规划 9 大品类约 35 个产品,但按三批节奏上架:第一批只做"最小可售骨架"(IAM、计算、存储、网络、基础数据库、计费监控),大数据数仓、AI 平台、云市场、行业解决方案明确放入第三批或更后。
-- **理由**:① 对标调研结论(《10-research-and-selection-decisions.md》§3.1 品类全景、§3.4 对标启示 7)——计算(VM 形态产品,一期以 KubeVirt on K8s 交付 SCECS,见《09-roadmap.md》决策 D-03)+对象/块存储+VPC/负载均衡是最小可售骨架,托管数据库第二步;② IaaS 是其他一切产品(含自研中间件、大数据)的资源底座,先有底座才能自托管上层产品;③ 大数据/AI 依赖大规模资源池与生态运营,早期投入产出比最低。
+- **理由**:① 对标调研结论(《10-research-and-selection-decisions.md》§3.1 品类全景、§3.4 对标启示 7)——计算(VM 形态产品,一期以 KubeVirt on K8s 交付 EUECS,见《09-roadmap.md》决策 D-03)+对象/块存储+VPC/负载均衡是最小可售骨架,托管数据库第二步;② IaaS 是其他一切产品(含自研中间件、大数据)的资源底座,先有底座才能自托管上层产品;③ 大数据/AI 依赖大规模资源池与生态运营,早期投入产出比最低。
 - **备选**:先做差异化单品(如直接做托管 K8s 或 Serverless)切入细分市场。
 - **改选条件**:若公司商业模式明确锚定单一场景(如只做 AI 推理云),可倒置节奏,但 IAM/计量/订单仍不可跳过。
 
@@ -143,7 +143,7 @@ mindmap
 
 所有产品资源从第一天起携带 `region_id` + `zone_id` 作用域字段,即使 MVP 只部署单地域(cn-north-1):
 
-- 资源 ID 全局格式:`{productCode}-{regionId}-{分片因子2位}-{随机8位}`,内嵌 2 位分片因子以支撑 account_id 分片库定位(对齐《00-overview.md》附录A 全局标识规范与《04-middleware-infrastructure.md》§6.6),例:`scecs-cn-north-1-01-a1b2c3d4`;
+- 资源 ID 全局格式:`{productCode}-{regionId}-{分片因子2位}-{随机8位}`,内嵌 2 位分片因子以支撑 account_id 分片库定位(对齐《00-overview.md》附录A 全局标识规范与《04-middleware-infrastructure.md》§6.6),例:`euecs-cn-north-1-01-a1b2c3d4`;
 - 商品定价按 region 维度配置,支持地域差价;
 - OpenAPI 请求头/参数必须显式携带 region;
 - 跨 region 能力(容灾、多活)在第二批产品具备后启用,模型无需变更。
@@ -158,21 +158,21 @@ mindmap
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 辰云服务器 SCECS | 云上虚拟服务器,一切资源的基础算力载体 | ECS | 实例创建/启停/重启/释放、公共镜像与自定义镜像、系统盘与数据盘挂载、安全组、VPC 组网、密码与密钥对登录 | 虚拟化资源池(KVM)、块存储、VPC、镜像仓库、IAM、监控 | 高 |
-| 轻量应用服务器 SCSAS | 面向中小用户的一价全包套餐化主机 | 轻量应用服务器 | 套餐化售卖(CPU/内存/流量包/带宽打包)、应用镜像一键部署(WordPress 等)、简化控制台 | SCECS 能力复用、商品化中台套餐 SKU、CDN 流量包 | 低 |
-| GPU 计算型实例 SCGPU | AI 训练与推理的 GPU 算力实例 | GPU 计算型 | GPU 直通实例、驱动与 CUDA 镜像、按卡时计费 | SCECS、GPU 物理机资源池、镜像服务 | 高 |
-| 辰云容器引擎 SCCKE | 企业级托管 Kubernetes 集群服务 | ACK | 托管控制面(免运维 master)、自管 Worker 节点池、集群生命周期管理、对接镜像仓库与监控 | K8s 平台能力(参见《06-kubernetes-productization.md》)、VPC、负载均衡、镜像仓库 | 高 |
-| 弹性容器实例 SCECI | 秒级拉起、按秒计费的 Serverless 容器 | ECI | 单 Pod 粒度 API、按 vCPU/内存秒级计费、与 K8s Virtual Kubelet 联动 | K8s、安全沙箱运行时、计量(秒级) | 高 |
-| 函数计算 SCFC | 事件驱动 FaaS,按调用次数与执行时长计费 | FC | HTTP 触发器与定时触发器、JS/Python/Go 运行时、按 100ms 粒度计量、并发上限控制 | K8s(Knative/冷启动优化)、API 网关、对象存储(代码包)、计量 | 高 |
+| 辰云服务器 EUECS | 云上虚拟服务器,一切资源的基础算力载体 | ECS | 实例创建/启停/重启/释放、公共镜像与自定义镜像、系统盘与数据盘挂载、安全组、VPC 组网、密码与密钥对登录 | 虚拟化资源池(KVM)、块存储、VPC、镜像仓库、IAM、监控 | 高 |
+| 轻量应用服务器 EUSAS | 面向中小用户的一价全包套餐化主机 | 轻量应用服务器 | 套餐化售卖(CPU/内存/流量包/带宽打包)、应用镜像一键部署(WordPress 等)、简化控制台 | EUECS 能力复用、商品化中台套餐 SKU、CDN 流量包 | 低 |
+| GPU 计算型实例 EUGPU | AI 训练与推理的 GPU 算力实例 | GPU 计算型 | GPU 直通实例、驱动与 CUDA 镜像、按卡时计费 | EUECS、GPU 物理机资源池、镜像服务 | 高 |
+| 辰云容器引擎 EUCKE | 企业级托管 Kubernetes 集群服务 | ACK | 托管控制面(免运维 master)、自管 Worker 节点池、集群生命周期管理、对接镜像仓库与监控 | K8s 平台能力(参见《06-kubernetes-productization.md》)、VPC、负载均衡、镜像仓库 | 高 |
+| 弹性容器实例 EUECI | 秒级拉起、按秒计费的 Serverless 容器 | ECI | 单 Pod 粒度 API、按 vCPU/内存秒级计费、与 K8s Virtual Kubelet 联动 | K8s、安全沙箱运行时、计量(秒级) | 高 |
+| 函数计算 EUFC | 事件驱动 FaaS,按调用次数与执行时长计费 | FC | HTTP 触发器与定时触发器、JS/Python/Go 运行时、按 100ms 粒度计量、并发上限控制 | K8s(Knative/冷启动优化)、API 网关、对象存储(代码包)、计量 | 高 |
 
-**品类说明**:计算品类的自研核心是 SCECS(虚拟化资源池),其余产品均为其上的封装或平行 Serverless 路线。轻量应用服务器是"用 ECS 能力换套餐商品"的低成本高转化产品,建议与 ECS 同批开发、同批上架。GPU 实例受供应链影响大,MVP 可先以少量 A10/L20 卡试点。
+**品类说明**:计算品类的自研核心是 EUECS(虚拟化资源池),其余产品均为其上的封装或平行 Serverless 路线。轻量应用服务器是"用 ECS 能力换套餐商品"的低成本高转化产品,建议与 ECS 同批开发、同批上架。GPU 实例受供应链影响大,MVP 可先以少量 A10/L20 卡试点。
 
 ### 2.2 存储
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 辰云对象存储 SCOSS | RESTful 海量非结构化存储,生态锚点产品 | OSS | Bucket CRUD、S3 兼容 API、控制台上传下载、生命周期规则、静态网站托管、预签名 URL | MinIO 集群(K8s Operator 部署,参见《04-middleware-infrastructure.md》)、IAM、计量 | 低 |
-| 辰云块存储 SCBS | 挂载云服务器的高性能云盘 | ESSD 云盘 | 云盘创建/挂载/卸载/扩容、快照创建与回滚、按容量小时计费 | 分布式块存储后端(Ceph RBD 或 MinIO 不适用,需 Ceph)、SCECS 挂载通道 | 中 |
+| 辰云对象存储 EUOSS | RESTful 海量非结构化存储,生态锚点产品 | OSS | Bucket CRUD、S3 兼容 API、控制台上传下载、生命周期规则、静态网站托管、预签名 URL | MinIO 集群(K8s Operator 部署,参见《04-middleware-infrastructure.md》)、IAM、计量 | 低 |
+| 辰云块存储 EUBS | 挂载云服务器的高性能云盘 | ESSD 云盘 | 云盘创建/挂载/卸载/扩容、快照创建与回滚、按容量小时计费 | 分布式块存储后端(Ceph RBD 或 MinIO 不适用,需 Ceph)、EUECS 挂载通道 | 中 |
 | 辰云文件存储 SCFS | NFS 共享文件系统,多机共享读写 | NAS | NFS v4 挂载点、容量弹性伸缩、按使用量计费 | CephFS 或 NFS-Ganesha、VPC | 中 |
 
 **品类说明**:块存储与文件存储后端统一规划 Ceph 集群(块用 RBD、文件用 CephFS),与对象存储 MinIO 分离部署——对象存储走 S3 语义与多租户 API 面,块/文件存储走存储网络面,两者运维模型不同,强行统一反而增加复杂度。此决策与《04-middleware-infrastructure.md》中间件章节的存储集群规划对齐。
@@ -181,21 +181,21 @@ mindmap
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 辰云专有网络 SCVPC | 租户逻辑隔离网络,一切资源的网络边界 | VPC | VPC/子网/路由表 CRUD、安全组、ECS 网卡接入、CIDR 规划 | SDN 方案(OVN 或 VPC 原生方案,参见《04-middleware-infrastructure.md》)、IAM | 高 |
+| 辰云专有网络 EUVPC | 租户逻辑隔离网络,一切资源的网络边界 | VPC | VPC/子网/路由表 CRUD、安全组、ECS 网卡接入、CIDR 规划 | SDN 方案(OVN 或 VPC 原生方案,参见《04-middleware-infrastructure.md》)、IAM | 高 |
 | 辰云负载均衡 SCCLB | 四层流量分发,基础高可用入口 | CLB/SLB | TCP/UDP 监听、后端服务器组、健康检查、按实例+流量计费 | LVS/DPVS 集群、VPC、EIP | 中 |
 | 应用型负载均衡 SCALB | 七层负载均衡,托管 APISIX 实例形态 | ALB | HTTP/HTTPS 监听、域名路径转发、证书托管、灰度权重路由 | APISIX 集群托管化、证书服务、VPC | 中 |
-| 弹性公网 IP SCEIP | 可独立购买与动态绑定的公网地址 | EIP | IP 购买/绑定/解绑/释放、按带宽或按流量计费、绑定 ECS/CLB/NAT | 公网 IP 池管理、BGP 出口、计量 | 中 |
+| 弹性公网 IP EUEIP | 可独立购买与动态绑定的公网地址 | EIP | IP 购买/绑定/解绑/释放、按带宽或按流量计费、绑定 ECS/CLB/NAT | 公网 IP 池管理、BGP 出口、计量 | 中 |
 | NAT 网关 SCNAT | 私网出公网与端口映射 | NAT 网关 | SNAT 条目、DNAT 端口映射、绑定 EIP | VPC、EIP | 中 |
 | 内容分发网络 SCCDN | 静态内容加速,降低源站带宽成本 | CDN | 域名接入、缓存刷新/预热、HTTPS 回源、用量报表 | CDN 边缘节点自建或商业 CDN 转售、DNS、证书 | 中 |
 
-**品类说明**:网络品类中 SCVPC 是全平台依赖的关键路径产品,必须第一批交付;SCALB 选择"托管 APISIX 实例"形态实现,与平台自身 API 网关选型(APISIX)技术栈复用,一套引擎两处变现。CDN 边缘节点自建成本高,MVP 可先与商业 CDN 厂商合作转售 + 统一计量出账,自建节点放第三批。
+**品类说明**:网络品类中 EUVPC 是全平台依赖的关键路径产品,必须第一批交付;SCALB 选择"托管 APISIX 实例"形态实现,与平台自身 API 网关选型(APISIX)技术栈复用,一套引擎两处变现。CDN 边缘节点自建成本高,MVP 可先与商业 CDN 厂商合作转售 + 统一计量出账,自建节点放第三批。
 
 ### 2.4 数据库
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 辰云数据库 MySQL 版 SCRDS | 托管 MySQL 关系型数据库,上云标配 | RDS MySQL | 5.7/8.0 双版本、一主一备高可用、参数模板、自动备份与按时间点恢复、账号管理、白名单 | DB 管控面自研(实例编排基于 K8s Operator)、VPC、块存储、监控 | 中 |
-| 辰云缓存 Redis 版 SCREDIS | 托管 Redis 缓存与 KV 存储 | Tair/Redis | 社区版 6.x/7.x、主备与集群形态、备份恢复、性能监控 | K8s Operator 编排、VPC、监控 | 中 |
+| 辰云数据库 MySQL 版 EURDS | 托管 MySQL 关系型数据库,上云标配 | RDS MySQL | 5.7/8.0 双版本、一主一备高可用、参数模板、自动备份与按时间点恢复、账号管理、白名单 | DB 管控面自研(实例编排基于 K8s Operator)、VPC、块存储、监控 | 中 |
+| 辰云缓存 Redis 版 EUREDIS | 托管 Redis 缓存与 KV 存储 | Tair/Redis | 社区版 6.x/7.x、主备与集群形态、备份恢复、性能监控 | K8s Operator 编排、VPC、监控 | 中 |
 | 检索分析服务 SCES | 托管 Elasticsearch,搜索与日志分析 | Elasticsearch 阿里云版 | ES 7.x/8.x 集群托管、Kibana 托管、按节点规格计费、快照备份 | K8s Operator(ECK)、VPC、块存储、监控 | 中 |
 
 **品类说明**:三个数据库产品统一采用"K8s Operator 编排 + 统一管控面"架构:管控面负责下单/变配/备份/监控的商业闭环,Operator 负责实例生命周期。管控面是一个服务还是三个服务,见《03-backend-services.md》领域划分。托管数据库是第二批产品的商业主力——中小企业上云第一采购项通常就是数据库。
@@ -204,8 +204,8 @@ mindmap
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 消息队列 Kafka 版 SCKAFKA | 托管高吞吐消息流平台 | 消息队列 Kafka 版 | 实例/Topic/消费组管理、ACL、消费位点与积压监控、按规格+流量计费 | Kafka 集群托管化(K8s Operator)、VPC、监控 | 中 |
-| API 网关 SCGW | API 托管、鉴权、限流、发布管理 | API 网关 | 托管 APISIX 实例、API 分组与版本、Key/JWT 认证、限流配额、调用日志与统计 | APISIX 多租户化、日志服务、计量 | 中 |
+| 消息队列 Kafka 版 EUKAFKA | 托管高吞吐消息流平台 | 消息队列 Kafka 版 | 实例/Topic/消费组管理、ACL、消费位点与积压监控、按规格+流量计费 | Kafka 集群托管化(K8s Operator)、VPC、监控 | 中 |
+| API 网关 EUGW | API 托管、鉴权、限流、发布管理 | API 网关 | 托管 APISIX 实例、API 分组与版本、Key/JWT 认证、限流配额、调用日志与统计 | APISIX 多租户化、日志服务、计量 | 中 |
 | 微服务引擎 SCMSE | 托管 Nacos 注册配置中心 | MSE | 托管 Nacos 集群(按规格)、命名空间管理、配置版本与灰度、与用户 VPC 打通 | Nacos 托管化、VPC、监控 | 低 |
 
 **品类说明**:中间件品类全部采用"开源引擎托管化"路线,不自研引擎。平台内部已在用 Kafka/Nacos/APISIX(参见《04-middleware-infrastructure.md》),对外售卖是把内部运维能力产品化——先内部自用打磨托管工具链,再对外开售。
@@ -215,7 +215,7 @@ mindmap
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
 | 辰云日志服务 SCSLS | 日志/指标统一采集、存储、检索与分析 | SLS | Logtail 兼容采集端(Vector)、Logstore 模型、SQL 查询、索引与 TTL 分层、按写入+存储计费 | ClickHouse 多租户集群、计量、IAM | 中 |
-| 辰云监控 SCMON | 资源与自定义指标监控、告警 | 云监控 CloudMonitor | 云产品基础指标自动采集、自定义打点上报、告警规则与通知渠道、Grafana 托管视图 | Prometheus/VictoriaMetrics 多租户、Alertmanager、短信/邮件通道 | 中 |
+| 辰云监控 EUMON | 资源与自定义指标监控、告警 | 云监控 CloudMonitor | 云产品基础指标自动采集、自定义打点上报、告警规则与通知渠道、Grafana 托管视图 | Prometheus/VictoriaMetrics 多租户、Alertmanager、短信/邮件通道 | 中 |
 
 **品类说明**:这两个产品与平台自身可观测体系(参见《05-data-observability.md》)是"一套底座、两个视图"——对内是运维可观测,对外是多租户商品。多租户隔离(数据/配额/权限)是产品化的主要工作量。ARMS 级别的 APM 商品放第三批,先以 OpenTelemetry 接入指引 + Grafana 托管满足初期需求。
 
@@ -224,27 +224,27 @@ mindmap
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
 | 密钥管理服务 SCKMS | 密钥托管与信封加密,数据加密基石 | KMS | 主密钥创建与轮换、信封加密 API、BYOK 导入、审计日志 | 加密模块(HSM 或软加密)、IAM 审计(参见《07-security.md》) | 中 |
-| Web 应用防火墙 SCWAF | Web 应用攻击防护 | WAF | CNAME 接入、OWASP CRS 规则集、CC 防护、黑白名单 | APISIX + ModSecurity/CRS、DNS、证书 | 中 |
+| Web 应用防火墙 EUWAF | Web 应用攻击防护 | WAF | CNAME 接入、OWASP CRS 规则集、CC 防护、黑白名单 | APISIX + ModSecurity/CRS、DNS、证书 | 中 |
 | DDoS 防护基础版 SCDPS | 出口流量清洗与黑洞 | DDoS 高防 | 流量基线统计、阈值黑洞、商业清洗线路联动 | 流量采集(sFlow/NetFlow)、BGP 联动、商业高防供应商 API | 高 |
-| SSL 证书服务 SCCERT | 证书申请、托管与自动轮换 | SSL 证书服务 | ACME 自动签发(Let's Encrypt 类 CA)、证书库、绑定 CLB/ALB/CDN、到期提醒 | CA 对接、CLB/ALB/CDN 集成 | 低 |
+| SSL 证书服务 EUCERT | 证书申请、托管与自动轮换 | SSL 证书服务 | ACME 自动签发(Let's Encrypt 类 CA)、证书库、绑定 CLB/ALB/CDN、到期提醒 | CA 对接、CLB/ALB/CDN 集成 | 低 |
 
-**品类说明**:IAM/RAM 属于平台地基而非售卖产品,设计见《07-security.md》。安全品类中 SCCERT 成本极低且是 HTTPS 类产品的共同依赖,建议第一批随网络产品一起交付;DDoS 深度清洗自研不现实,MVP 走"自有黑洞 + 商业清洗线路转售"模式。
+**品类说明**:IAM/RAM 属于平台地基而非售卖产品,设计见《07-security.md》。安全品类中 EUCERT 成本极低且是 HTTPS 类产品的共同依赖,建议第一批随网络产品一起交付;DDoS 深度清洗自研不现实,MVP 走"自有黑洞 + 商业清洗线路转售"模式。
 
 ### 2.8 DevOps
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 容器镜像服务 SCACR | 镜像托管、分发与安全扫描 | ACR | Harbor 多租户项目、镜像推拉鉴权、Trivy 漏洞扫描、仓库配额 | Harbor 托管化、IAM、VPC | 低 |
-| 流水线服务 SCPIPE | CI/CD 流水线即代码 | 云效 Flow | 图形化与 YAML 双模流水线、构建/测试/部署步骤、对接 GitLab CI 引擎与 ArgoCD | GitLab CI Runner 池、ArgoCD 多租户、制品仓库 | 中 |
+| 容器镜像服务 EUACR | 镜像托管、分发与安全扫描 | ACR | Harbor 多租户项目、镜像推拉鉴权、Trivy 漏洞扫描、仓库配额 | Harbor 托管化、IAM、VPC | 低 |
+| 流水线服务 EUPIPE | CI/CD 流水线即代码 | 云效 Flow | 图形化与 YAML 双模流水线、构建/测试/部署步骤、对接 GitLab CI 引擎与 ArgoCD | GitLab CI Runner 池、ArgoCD 多租户、制品仓库 | 中 |
 | 制品仓库 SCARTIFACT | Maven/npm/Docker 通用制品托管 | 云效 Packages | Maven/npm 代理与私有仓库、权限控制、配额 | Nexus/Verdaccio 托管化、IAM | 低 |
-**品类说明**:DevOps 品类的底座即平台自身交付体系(参见《08-devops-delivery.md》),对外售卖形态是把内部 GitLab CI + ArgoCD 体系多租户化。建议先卖 SCACR(容器生态刚需、成本最低),SCPIPE 待内部流水线平台稳定后再开放。
+**品类说明**:DevOps 品类的底座即平台自身交付体系(参见《08-devops-delivery.md》),对外售卖形态是把内部 GitLab CI + ArgoCD 体系多租户化。建议先卖 EUACR(容器生态刚需、成本最低),EUPIPE 待内部流水线平台稳定后再开放。
 
 ### 2.9 域名与建站
 
 | 产品名 | 一句话定位 | 对标阿里云 | MVP 功能范围 | 依赖的内部能力 | 难度 |
 |---|---|---|---|---|---|
-| 域名注册服务 SCDOMAIN | 域名查询、注册、续费、转入 | 万网域名 | 域名查询与下单、实名资料收集、续费管理(注册局通道初期代理接入) | 订单中心、实名审核流、注册商资质或上游代理 | 低 |
-| 云解析 SCDNS | 权威 DNS 解析托管 | 云解析 DNS | A/CNAME/MX 等记录管理、按套餐分级的 TTL 与线路、秒级生效 | 权威 DNS 集群(Knot/PowerDNS)、Anycast IP | 中 |
+| 域名注册服务 EUDOMAIN | 域名查询、注册、续费、转入 | 万网域名 | 域名查询与下单、实名资料收集、续费管理(注册局通道初期代理接入) | 订单中心、实名审核流、注册商资质或上游代理 | 低 |
+| 云解析 EUDNS | 权威 DNS 解析托管 | 云解析 DNS | A/CNAME/MX 等记录管理、按套餐分级的 TTL 与线路、秒级生效 | 权威 DNS 集群(Knot/PowerDNS)、Anycast IP | 中 |
 | 轻量建站 SCSITE | 模板化企业官网搭建 | 云·企业官网 | 模板选择、可视化编辑、绑定域名与证书、一键发布到 OSS+CDN | OSS、CDN、DNS、证书 | 低 |
 
 **品类说明**:域名是获客入口(对标启示:域名/备案是上云入口,见《10-research-and-selection-decisions.md》§3.4),但域名注册局资质审批周期长,MVP 以"上游注册商代理 + 自建控制台与订单流"过渡,解析服务自建。轻量建站是低成本的长尾增收产品,技术上是 OSS 静态托管 + 编辑器,优先级最低。
@@ -260,31 +260,31 @@ flowchart TB
         PHY[物理资源池与机房网络]
     end
     subgraph T1[第一批·平台骨架]
-        VPC[SCVPC 专有网络]
-        BS[SCBS 块存储]
-        ECS[SCECS 云服务器]
-        OSS[SCOSS 对象存储]
-        RDS[SCRDS 数据库]
-        MON[SCMON 云监控]
+        VPC[EUVPC 专有网络]
+        BS[EUBS 块存储]
+        ECS[EUECS 云服务器]
+        OSS[EUOSS 对象存储]
+        RDS[EURDS 数据库]
+        MON[EUMON 云监控]
     end
     subgraph T2[第二批·增收层]
         CLB[SCCLB/SCALB 负载均衡]
-        EIP[SCEIP/NAT]
-        REDIS[SCREDIS/SCES]
-        KAFKA[SCKAFKA 消息队列]
-        CKE[SCCKE 容器引擎]
-        ACR[SCACR 镜像服务]
-        GW[SCGW API 网关]
+        EIP[EUEIP/NAT]
+        REDIS[EUREDIS/SCES]
+        KAFKA[EUKAFKA 消息队列]
+        CKE[EUCKE 容器引擎]
+        ACR[EUACR 镜像服务]
+        GW[EUGW API 网关]
         SLS[SCSLS 日志服务]
         CDN[SCCDN]
     end
     subgraph T3[第三批·生态层]
-        FC[SCFC 函数计算]
-        ECI[SCECI 弹性容器]
-        GPU[SCGPU]
-        WAF[SCWAF/DDoS]
-        DNS[SCDNS/域名]
-        PIPE[SCPIPE 流水线]
+        FC[EUFC 函数计算]
+        ECI[EUECI 弹性容器]
+        GPU[EUGPU]
+        WAF[EUWAF/DDoS]
+        DNS[EUDNS/域名]
+        PIPE[EUPIPE 流水线]
         SITE[轻量建站]
     end
     IAM --> T1
@@ -332,24 +332,24 @@ flowchart TB
 |---|---|---|---|---|---|
 | **第一批·平台骨架** | IAM(内部能力) | 地基 | 中 | M0–M3 | 一切产品的前置鉴权,晚做全线返工 |
 | | 商品化中台+订单+计费出账(内部能力) | 地基 | 中 | M0–M3 | 商业闭环中枢,产品上架门禁 |
-| | SCOSS 对象存储 | 售卖 | 低 | M1–M3 | 集成 MinIO 最快可售,生态锚点,验证全链路(下单→开通→计量→出账) |
-| | SCVPC 专有网络 | 售卖 | 高 | M0–M4 | ECS/RDS/容器的网络边界,关键路径 |
-| | SCECS 云服务器 + SCBS 块存储 | 售卖 | 高 | M1–M6 | 最小可售骨架的核心,决定平台"是不是云" |
-| | SCRDS MySQL | 售卖 | 中 | M4–M7 | 企业上云第一采购项,商业主力 |
-| | SCCERT 证书 + SCEIP | 售卖 | 低/中 | M5–M7 | HTTPS 与公网访问的最小依赖,低成本搭车 |
-| | SCMON 云监控 | 售卖 | 中 | M4–M7 | 资源可观测是运维信任底线,且是所有产品共同依赖 |
+| | EUOSS 对象存储 | 售卖 | 低 | M1–M3 | 集成 MinIO 最快可售,生态锚点,验证全链路(下单→开通→计量→出账) |
+| | EUVPC 专有网络 | 售卖 | 高 | M0–M4 | ECS/RDS/容器的网络边界,关键路径 |
+| | EUECS 云服务器 + EUBS 块存储 | 售卖 | 高 | M1–M6 | 最小可售骨架的核心,决定平台"是不是云" |
+| | EURDS MySQL | 售卖 | 中 | M4–M7 | 企业上云第一采购项,商业主力 |
+| | EUCERT 证书 + EUEIP | 售卖 | 低/中 | M5–M7 | HTTPS 与公网访问的最小依赖,低成本搭车 |
+| | EUMON 云监控 | 售卖 | 中 | M4–M7 | 资源可观测是运维信任底线,且是所有产品共同依赖 |
 | | 官网/控制台/文档/账号/费用/工单 | 地基 | 中 | M0–M6 | 六大站点 MVP,与第一批产品同步上线(参见第 4 节) |
 | **第二批·可售能力完善** | SCCLB/SCALB 负载均衡 | 售卖 | 中 | M7–M9 | 高可用架构刚需,与 ECS 组合成完整方案 |
-| | SCREDIS / SCES | 售卖 | 中 | M7–M10 | 数据库品类补全,托管 Operator 复用 RDS 管控面 |
-| | SCKAFKA / SCGW / SCMSE | 售卖 | 中/低 | M8–M11 | 内部组件产品化,边际成本低 |
-| | SCCKE 容器引擎 + SCACR 镜像 | 售卖 | 高/低 | M7–M12 | 容器是第二批的商业亮点,依赖内部 K8s 平台成熟(参见《06-kubernetes-productization.md》) |
+| | EUREDIS / SCES | 售卖 | 中 | M7–M10 | 数据库品类补全,托管 Operator 复用 RDS 管控面 |
+| | EUKAFKA / EUGW / SCMSE | 售卖 | 中/低 | M8–M11 | 内部组件产品化,边际成本低 |
+| | EUCKE 容器引擎 + EUACR 镜像 | 售卖 | 高/低 | M7–M12 | 容器是第二批的商业亮点,依赖内部 K8s 平台成熟(参见《06-kubernetes-productization.md》) |
 | | SCSLS 日志服务 | 售卖 | 中 | M9–M12 | 复用内部 ClickHouse 底座多租户化 |
 | | SCNAT / SCCDN(转售起步) | 售卖 | 中 | M9–M12 | 完善网络方案完整度 |
-| | SCDOMAIN 域名代理 + SCDNS | 售卖 | 低/中 | M10–M12 | 获客入口,补"上云第一步" |
-| | SCSAS 轻量应用服务器 | 售卖 | 低 | M7–M8 | ECS 能力套餐化,纯商品层工作 |
-| **第三批·生态与差异化** | SCFC 函数计算 / SCECI | 售卖 | 高 | M12+ | Serverless 依赖 K8s 与计量精细度成熟 |
-| | SCGPU / SCFS / SCWAF / SCDPS | 售卖 | 高/中 | M12+ | 细分市场与合规安全增值 |
-| | SCPIPE / SCARTIFACT / SCES 企业版 | 售卖 | 中/低 | M12+ | DevOps 品类补全 |
+| | EUDOMAIN 域名代理 + EUDNS | 售卖 | 低/中 | M10–M12 | 获客入口,补"上云第一步" |
+| | EUSAS 轻量应用服务器 | 售卖 | 低 | M7–M8 | ECS 能力套餐化,纯商品层工作 |
+| **第三批·生态与差异化** | EUFC 函数计算 / EUECI | 售卖 | 高 | M12+ | Serverless 依赖 K8s 与计量精细度成熟 |
+| | EUGPU / SCFS / EUWAF / SCDPS | 售卖 | 高/中 | M12+ | 细分市场与合规安全增值 |
+| | EUPIPE / SCARTIFACT / SCES 企业版 | 售卖 | 中/低 | M12+ | DevOps 品类补全 |
 | | 资源包商城、推荐返佣、云市场雏形 | 运营 | — | M12+ | 运营体系,对标启示 10(《10-research-and-selection-decisions.md》§3.4)明确可后置 |
 | **明确后置/不做(一期)** | 大数据数仓、AI 平台、行业解决方案、价格计算器高级版、多账号治理 | — | — | 视商业化数据再启动 | 投入产出比低,先以"合作伙伴方案"形式补位 |
 
@@ -373,21 +373,21 @@ flowchart TB
 
 **决策 D5:六站点多子域隔离**
 
-- **结论**:营销官网(www)、控制台(console)、文档(docs)、账号(account)、费用(billing)、工单(ticket)六个站点独立子域、独立前端应用、独立发布流水线;控制台与账号/费用之间通过 SSO 会话打通,营销站不持有登录态强依赖。账号中心 account 同时是 SSO 中心,由根域 `.starcloud.cn` Cookie 签发统一会话,各子域共享。
+- **结论**:营销官网(www)、控制台(console)、文档(docs)、账号(account)、费用(billing)、工单(ticket)六个站点独立子域、独立前端应用、独立发布流水线;控制台与账号/费用之间通过 SSO 会话打通,营销站不持有登录态强依赖。账号中心 account 同时是 SSO 中心,由根域 `.euler.emoera.com` Cookie 签发统一会话,各子域共享。
 - **理由**:① 营销站面向匿名流量,静态化+CDN 极致优化,控制台是重交互 SPA,性能与发布节奏完全不同,必须隔离;② 安全域隔离:控制台/账号中心是高价值攻击面,独立子域便于 CSP、Cookie 域隔离与 WAF 策略分域;③ 微前端基座只需承载 console 域内子应用,避免营销页污染控制台 bundle。
-- **备选**:单域名路由式合并(www.starcloud.cn/console)。
+- **备选**:单域名路由式合并(www.euler.emoera.com/console)。
 - **改选条件**:若 SEO 团队强烈要求统一域名权重,可将 docs 合并回 www 路径下(docs 对 SEO 贡献大),其余站点保持隔离。
 
 | 站点 | 域名 | 定位 | 形态 | 主要技术 |
 |---|---|---|---|---|
-| 营销官网 | www.starcloud.cn | 品牌信任 + 产品发现 + 转化获客 | SSR/SSG 静态化,CDN 分发 | Vue + SSG,详见《02-frontend-architecture.md》 |
-| 控制台 | console.starcloud.cn | 资源购买、管理、运维 | 微前端基座 + 产品子应用 | Vue + Wujie 微前端 |
-| 文档站 | docs.starcloud.cn | 开发者第一触点 | 静态站生成 + 版本化 | VitePress/Docusaurus 类 + CI 构建 |
-| 账号中心 | account.starcloud.cn | 注册、登录、实名、RAM、AK | 独立 SPA,SSO 中心 | Vue + 统一认证服务 |
-| 费用中心 | billing.starcloud.cn | 账单、订单、续费、发票 | 独立 SPA(可作控制台子应用双入口) | Vue |
-| 工单支持 | ticket.starcloud.cn | 工单、支持计划、健康看板 | 独立 SPA | Vue |
+| 营销官网 | www.euler.emoera.com | 品牌信任 + 产品发现 + 转化获客 | SSR/SSG 静态化,CDN 分发 | Vue + SSG,详见《02-frontend-architecture.md》 |
+| 控制台 | console.euler.emoera.com | 资源购买、管理、运维 | 微前端基座 + 产品子应用 | Vue + Wujie 微前端 |
+| 文档站 | docs.euler.emoera.com | 开发者第一触点 | 静态站生成 + 版本化 | VitePress/Docusaurus 类 + CI 构建 |
+| 账号中心 | account.euler.emoera.com | 注册、登录、实名、RAM、AK | 独立 SPA,SSO 中心 | Vue + 统一认证服务 |
+| 费用中心 | billing.euler.emoera.com | 账单、订单、续费、发票 | 独立 SPA(可作控制台子应用双入口) | Vue |
+| 工单支持 | ticket.euler.emoera.com | 工单、支持计划、健康看板 | 独立 SPA | Vue |
 
-SSO 会话拓扑:account.starcloud.cn 为唯一认证域,签发会话 Cookie(根域 .starcloud.cn 下 HttpOnly),console/billing/ticket 共享会话;www 营销站仅在用户已登录时读取用户标识用于个性化,不做鉴权强依赖。
+SSO 会话拓扑:account.euler.emoera.com 为唯一认证域,签发会话 Cookie(根域 .euler.emoera.com 下 HttpOnly),console/billing/ticket 共享会话;www 营销站仅在用户已登录时读取用户标识用于个性化,不做鉴权强依赖。
 
 ### 4.2 营销官网页面地图
 
@@ -485,11 +485,11 @@ mindmap
 | 路由模式 | 说明 |
 |---|---|
 | `/console` | 总览页(基座自带) |
-| `/console/{productCode}` | 产品控制台默认页(如 `/console/scecs`) |
+| `/console/{productCode}` | 产品控制台默认页(如 `/console/euecs`) |
 | `/console/{productCode}/list?region={r}` | 资源列表(统一列表交互规范) |
 | `/console/{productCode}/detail/{resourceId}` | 资源详情 |
 | `/console/{productCode}/buy` | 购买页(调用商品化中台询价下单) |
-| `/console/{productCode}/monitor/{resourceId}` | 资源监控页(嵌入 SCMON 子组件) |
+| `/console/{productCode}/monitor/{resourceId}` | 资源监控页(嵌入 EUMON 子组件) |
 
 控制台子应用拆分粒度决策:按产品大类合并拆 7 个品类子应用(console-compute/console-storage/console-network/console-database/console-middleware/console-monitor/console-security),而非一产品一子应用——子应用数量直接影响基座加载调度与发布协调成本,品类内产品共享列表/详情交互骨架。每个品类子应用对应一个独立仓库,与商品目录一级分类对齐(D9)。此结论与《02-frontend-architecture.md》的 Wujie 拆分方案一致。
 
@@ -837,10 +837,10 @@ erDiagram
 
 | 概念 | 定义 | 示例 |
 |---|---|---|
-| 产品 Product | 可售卖的服务类目,绑定资源类型与计量项 | 辰云服务器(scecs) |
+| 产品 Product | 可售卖的服务类目,绑定资源类型与计量项 | 辰云服务器(euecs) |
 | 规格组 SpecGroup | 一组可选配置维度 | ECS 的 CPU/内存/系统盘/带宽 |
 | 规格值 SpecValue | 规格组下的合法取值(含互斥与依赖约束) | 2C4G、4C8G…… |
-| SKU | 产品 + 规格组合 + 计费形态的最小售卖单元 | scecs 标准型 s2.large 包年包月 |
+| SKU | 产品 + 规格组合 + 计费形态的最小售卖单元 | euecs 标准型 s2.large 包年包月 |
 | 定价规则 PricingRule | SKU 在某 region/某时长档位/某客户等级下的目录价 | s2.large cn-east-1 包月 ¥180,包年 85 折 |
 | 促销策略 PromoPolicy | 限时改价或发放抵扣物 | 新客首购 3 折、双十一全场券 |
 | 代金券 Coupon | 定额/定比例抵扣物,带适用范围与有效期 | 满 100 减 20,仅限新购 |
@@ -851,7 +851,7 @@ erDiagram
 ```sql
 -- 产品主数据
 CREATE TABLE t_product (
-  product_code   VARCHAR(32)  PRIMARY KEY COMMENT '产品code,如scecs',
+  product_code   VARCHAR(32)  PRIMARY KEY COMMENT '产品code,如euecs',
   product_name   VARCHAR(64)  NOT NULL,
   category       VARCHAR(32)  NOT NULL COMMENT '一级分类:compute/storage/...',
   description    VARCHAR(512) COMMENT '一句话定位,驱动官网详情页',
@@ -865,7 +865,7 @@ CREATE TABLE t_product (
 
 -- 计量项注册表(与《05-data-observability.md》计量模型同源)
 CREATE TABLE t_metering_item (
-  item_code      VARCHAR(64) PRIMARY KEY COMMENT '如 scoss.storage_bytes',
+  item_code      VARCHAR(64) PRIMARY KEY COMMENT '如 euoss.storage_bytes',
   product_code   VARCHAR(32) NOT NULL,
   metric_name    VARCHAR(64) NOT NULL,
   precision      VARCHAR(8)  NOT NULL DEFAULT 'HOUR' COMMENT 'SECOND/MINUTE/HOUR',
@@ -985,7 +985,7 @@ CREATE TABLE t_price_snapshot (
 | 六站点形态、控制台微前端拆分(Wujie) | 《02-frontend-architecture.md》 |
 | MinIO/Kafka/Nacos/APISIX/ClickHouse 等底座的部署形态 | 《04-middleware-infrastructure.md》 |
 | 计量采集链路、小时级出账、账单存储与抵扣明细 | 《05-data-observability.md》 |
-| SCCKE/SCECI/SCFC 的容器底座与多租户隔离 | 《06-kubernetes-productization.md》 |
+| EUCKE/EUECI/EUFC 的容器底座与多租户隔离 | 《06-kubernetes-productization.md》 |
 | IAM/RAM、KMS、安全产品与平台安全基线 | 《07-security.md》 |
 | 文档站/控制台/官网的 CI/CD 与发布流水线 | 《08-devops-delivery.md》 |
 | 三批次排期、团队配置与里程碑细化 | 《09-roadmap.md》 |
@@ -996,7 +996,7 @@ CREATE TABLE t_price_snapshot (
 供架构评审会重点质询:
 
 1. D3(商品化中台先行)的资源投入是否被排期计划真实保障?(联动《09-roadmap.md》)
-2. SCECS 虚拟化方案(OVN/KVM 资源池)的自研风险与第二批产品的耦合?(联动《04-middleware-infrastructure.md》)
+2. EUECS 虚拟化方案(OVN/KVM 资源池)的自研风险与第二批产品的耦合?(联动《04-middleware-infrastructure.md》)
 3. 欠费宽限期与释放前通知的合规审查(用户协议条款、数据删除告知义务);
 4. 定价"不可改写、只留痕"规则在分库分表下的对账实现(联动《03-backend-services.md》订单域);
 5. 域名注册的注册商资质过渡方案的法律风险。

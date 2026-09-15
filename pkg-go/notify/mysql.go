@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // SQLStore is the MySQL-backed Store over support_db.notification and

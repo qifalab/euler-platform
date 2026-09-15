@@ -79,8 +79,8 @@ FROM region_replication_status WHERE region='cn-east-1';
 ```
 # 把公网 API/控制台解析切到 cn-east-1 入口
 # 期望: TTL 内生效; OpenAPI + 控制台可登录、可询价、可下单
-curl -s https://console.starcloud.cn/healthz   # 200
-curl -s https://api.starcloud.cn/healthz       # 200
+curl -s https://console.euler.emoera.com/healthz   # 200
+curl -s https://api.euler.emoera.com/healthz       # 200
 ```
 
 ### 3.5 T0+~20min: 验证 Kafka 异地重建 (00§4.5)

@@ -16,7 +16,7 @@
 // trust-critical warning.
 //
 // The gateway injects the caller's identity; the handlers read account_id from
-// the X-Sc-Account-Id header (04§3.1 / 07§3.3) and reject with 403 when it is
+// the X-Euler-Account-Id header (04§3.1 / 07§3.3) and reject with 403 when it is
 // absent. Service name follows the 全局标识规范: svc-{domain} for control-plane.
 package main
 
@@ -37,8 +37,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/starcloud/sc-platform/notify"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/notify"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 func main() {
@@ -49,7 +49,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	// The notification store decides where the evidence lives. Persistence is
-	// opt-in (pkg-go/storage doc): with SC_DB_DSN set, notifications and their
+	// opt-in (pkg-go/storage doc): with EULER_DB_DSN set, notifications and their
 	// per-channel deliveries land in support_db — "you never told me" is then
 	// answerable by query; unset, the in-memory store keeps the demo.
 	//
@@ -156,7 +156,7 @@ type announcement struct {
 // handleAnnouncements implements GET /api/v1/announcements — the public site
 // content board, filterable by ?type=news|program|video (and ?tab= for
 // programs). Anonymous by design: the marketing site is browsed pre-login, so
-// there is no X-Sc-Account-Id to require; the payload carries no tenant data.
+// there is no X-Euler-Account-Id to require; the payload carries no tenant data.
 func (a *app) handleAnnouncements(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, r, http.StatusMethodNotAllowed, "Common.InvalidAction", "method not allowed")
@@ -226,7 +226,7 @@ func readyz(w http.ResponseWriter, _ *http.Request) {
 
 func metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }
 
 // --- JSON request/response shapes --------------------------------------------
@@ -295,12 +295,12 @@ func (a *app) handleNotifications(w http.ResponseWriter, r *http.Request) {
 
 // dispatch implements POST /internal/notifications.
 //
-// account_id is taken from the X-Sc-Account-Id header the gateway injects
+// account_id is taken from the X-Euler-Account-Id header the gateway injects
 // (04§3.1); it is the shard key and must never be trusted from the body.
 func (a *app) dispatch(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := accountIDFromHeader(r)
 	if !ok {
-		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Sc-Account-Id header required")
+		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Euler-Account-Id header required")
 		return
 	}
 
@@ -360,7 +360,7 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID, ok := accountIDFromHeader(r)
 	if !ok {
-		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Sc-Account-Id header required")
+		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Euler-Account-Id header required")
 		return
 	}
 
@@ -388,7 +388,7 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 func (a *app) list(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := accountIDFromHeader(r)
 	if !ok {
-		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Sc-Account-Id header required")
+		writeErr(w, r, http.StatusForbidden, "Common.MissingAccount", "X-Euler-Account-Id header required")
 		return
 	}
 	ns, err := a.store.ListByAccount(accountID)
@@ -407,7 +407,7 @@ func (a *app) list(w http.ResponseWriter, r *http.Request) {
 // the shard key for the notification store, so it must come from the gateway,
 // never from the request body (07§3.3).
 func accountIDFromHeader(r *http.Request) (int64, bool) {
-	raw := strings.TrimSpace(r.Header.Get("X-Sc-Account-Id"))
+	raw := strings.TrimSpace(r.Header.Get("X-Euler-Account-Id"))
 	if raw == "" {
 		return 0, false
 	}

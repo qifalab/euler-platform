@@ -53,7 +53,7 @@ func Simulate(policies []NamedPolicy, principal string, action, resource string)
 	return SimulateCtx(policies, principal, Request{Action: action, Resource: resource})
 }
 
-// SimulateCtx is Simulate with a condition context (sc:SourceIp, sc:MFAPresent,
+// SimulateCtx is Simulate with a condition context (eu:SourceIp, eu:MFAPresent,
 // etc). Conditions are part of the match — a statement whose Condition block
 // does not pass does not match, so it neither allows nor denies.
 func SimulateCtx(policies []NamedPolicy, principal string, req Request) Verdict {

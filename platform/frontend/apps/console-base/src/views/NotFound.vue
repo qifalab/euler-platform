@@ -13,7 +13,7 @@ const router = useRouter();
 
 <style scoped>
 .not-found { padding: 64px 24px; text-align: center; }
-.not-found h1 { font-size: 48px; margin: 0 0 8px; color: var(--sc-text-disabled); }
-.not-found p { color: var(--sc-text-secondary); }
-.not-found a { color: var(--sc-color-brand); }
+.not-found h1 { font-size: 48px; margin: 0 0 8px; color: var(--eu-text-disabled); }
+.not-found p { color: var(--eu-text-secondary); }
+.not-found a { color: var(--eu-color-brand); }
 </style>

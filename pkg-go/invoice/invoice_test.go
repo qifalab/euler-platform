@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 var testNow = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)

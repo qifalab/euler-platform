@@ -1,7 +1,7 @@
 /** 产品编码 → 展示名 composable。
  *  数据源 svc-catalog GET /api/v1/catalog/products;模块级缓存,多视图共享一次请求。 */
 import { ref, type Ref } from "vue";
-import { createSDK } from "@sc/sdk";
+import { createSDK } from "@eu/sdk";
 
 const sdk = createSDK({ baseURL: "" });
 

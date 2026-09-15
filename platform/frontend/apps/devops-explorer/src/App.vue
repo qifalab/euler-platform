@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** devops-explorer shell — RouterView host (02§3.4). */
 import { RouterView } from "vue-router";
-import { inWujieSandbox } from "@sc/wujie-bridge";
-import { SiteTopbar } from "@sc/ui";
+import { inWujieSandbox } from "@eu/wujie-bridge";
+import { SiteTopbar } from "@eu/ui";
 
 const sandboxed = inWujieSandbox();
 </script>
@@ -16,7 +16,7 @@ const sandboxed = inWujieSandbox();
         <router-link to="/community">开发者社区</router-link>
       </template>
       <template #actions>
-        <a class="explorer-console" href="https://console.starcloud.cn">返回控制台</a>
+        <a class="explorer-console" href="https://console.euler.emoera.com">返回控制台</a>
       </template>
     </SiteTopbar>
     <main class="explorer-body"><RouterView /></main>
@@ -25,8 +25,8 @@ const sandboxed = inWujieSandbox();
 
 <style>
 .explorer-shell { min-height: 100vh; }
-.explorer-console { color: var(--sc-color-brand); text-decoration: none; font-size: var(--sc-font-size-md); transition: color var(--sc-transition); }
-.explorer-console:hover { color: var(--sc-color-brand-hover); }
-.explorer-body { min-height: calc(100vh - var(--sc-topbar-height)); }
+.explorer-console { color: var(--eu-color-brand); text-decoration: none; font-size: var(--eu-font-size-md); transition: color var(--eu-transition); }
+.explorer-console:hover { color: var(--eu-color-brand-hover); }
+.explorer-body { min-height: calc(100vh - var(--eu-topbar-height)); }
 .explorer-subapp { min-height: 100vh; }
 </style>

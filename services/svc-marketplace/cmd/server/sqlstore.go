@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // sqlStore is the MySQL-backed Store over trade_db's marketplace_listing and
@@ -57,7 +57,7 @@ func newSQLStore(ctx context.Context, db *sql.DB) (*sqlStore, error) {
 }
 
 // newStore picks the backend. Persistence is opt-in (pkg-go/storage doc): with
-// SC_DB_DSN set, listings and settlements live in trade_db; unset, the in-memory
+// EULER_DB_DSN set, listings and settlements live in trade_db; unset, the in-memory
 // store keeps the demo and `go test` dependency-free.
 func newStore(ctx context.Context) (Store, error) {
 	db, ok, err := storage.MustOpenFor(ctx, "trade_db")

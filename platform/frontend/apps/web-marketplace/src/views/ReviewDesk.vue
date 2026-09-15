@@ -2,7 +2,7 @@
 /** 上架审核 — GET /api/v1/marketplace/listings?status=PENDING_APPROVAL + POST /listings/{id}/approve. */
 import { ref, onMounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { PageHeader } from "@sc/ui";
+import { PageHeader } from "@eu/ui";
 import { fetchListings, sdk, categoryLabel, bpsPercent, type ListingDTO } from "@/marketplace";
 
 const queue = ref<ListingDTO[]>([]);
@@ -71,34 +71,34 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.review { padding: var(--sc-spacing-6); max-width: 1200px; }
-.rv-hint { color: var(--sc-text-secondary); font-size: 13px; margin: 0 0 var(--sc-spacing-4); }
+.review { padding: var(--eu-spacing-6); max-width: 1200px; }
+.rv-hint { color: var(--eu-text-secondary); font-size: 13px; margin: 0 0 var(--eu-spacing-4); }
 .rv-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
 .rv-table { width: 100%; border-collapse: collapse; background: transparent; }
-.rv-table th, .rv-table td { padding: var(--sc-spacing-3) var(--sc-spacing-4); text-align: left; border-bottom: 1px solid var(--sc-border); }
-.rv-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.rv-table td { font-size: 13px; color: var(--sc-text-primary); }
-.rv-table tbody tr { transition: background var(--sc-transition); }
-.rv-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.rv-table th, .rv-table td { padding: var(--eu-spacing-3) var(--eu-spacing-4); text-align: left; border-bottom: 1px solid var(--eu-border); }
+.rv-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.rv-table td { font-size: 13px; color: var(--eu-text-primary); }
+.rv-table tbody tr { transition: background var(--eu-transition); }
+.rv-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .rv-table tbody tr:last-child td { border-bottom: none; }
 .rv-url { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rv-actions { display: flex; gap: var(--sc-spacing-2); }
+.rv-actions { display: flex; gap: var(--eu-spacing-2); }
 .rv-btn {
-  padding: 5px 12px; border-radius: var(--sc-radius-sm); border: 1px solid transparent;
-  font-size: 12px; cursor: pointer; transition: all var(--sc-transition);
+  padding: 5px 12px; border-radius: var(--eu-radius-sm); border: 1px solid transparent;
+  font-size: 12px; cursor: pointer; transition: all var(--eu-transition);
 }
-.rv-btn.approve { background: var(--sc-color-brand); color: var(--sc-color-on-brand); }
-.rv-btn.approve:hover { background: var(--sc-color-brand-hover); }
-.rv-btn.reject { background: transparent; border-color: var(--sc-color-danger); color: var(--sc-color-danger); }
-.rv-btn.reject:hover { background: var(--sc-color-danger-soft); }
-.rv-error, .rv-loading, .rv-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.rv-error { color: var(--sc-color-danger); }
+.rv-btn.approve { background: var(--eu-color-brand); color: var(--eu-color-on-brand); }
+.rv-btn.approve:hover { background: var(--eu-color-brand-hover); }
+.rv-btn.reject { background: transparent; border-color: var(--eu-color-danger); color: var(--eu-color-danger); }
+.rv-btn.reject:hover { background: var(--eu-color-danger-soft); }
+.rv-error, .rv-loading, .rv-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.rv-error { color: var(--eu-color-danger); }
 </style>

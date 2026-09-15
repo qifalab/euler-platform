@@ -9,12 +9,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/workflow"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/workflow"
 )
 
 // newStore picks the backend. Persistence is opt-in (pkg-go/storage doc): with
-// SC_DB_DSN set, flow instances live in resource_db, so a restart keeps the record
+// EULER_DB_DSN set, flow instances live in resource_db, so a restart keeps the record
 // of which sagas ran, which failed, and what was compensated; unset, the in-memory
 // store keeps the demo and `go test` dependency-free.
 //

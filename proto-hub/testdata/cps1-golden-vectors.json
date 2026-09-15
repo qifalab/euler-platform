@@ -6,107 +6,107 @@
       "name": "get-no-body",
       "description": "GET with query parameters and an empty body",
       "method": "GET",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/",
       "query": {
         "Action": "DescribeInstances",
         "Version": "2026-08-01"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000"
       },
       "body": "",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=ef3bfb4d941d96779ed111c7110b6c7da68417de632e392729d137580391479f",
-      "expected_signature": "ef3bfb4d941d96779ed111c7110b6c7da68417de632e392729d137580391479f"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=e63a1a2cff7c8f36c892ea53aea810a37c2adba59c4ea8fd7827652fcfcccc7a",
+      "expected_signature": "e63a1a2cff7c8f36c892ea53aea810a37c2adba59c4ea8fd7827652fcfcccc7a"
     },
     {
       "name": "post-json-body",
       "description": "POST with a JSON body; body hash binds the payload to the signature",
       "method": "POST",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/",
       "query": {
         "Action": "RunInstances",
         "Version": "2026-08-01"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "75f3340d3d49adb89545f48d652021024eb31c67af83c036e0cd14a589de309a",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000"
       },
       "body": "{\"ImageId\":\"img-001\",\"InstanceType\":\"s2.large\"}",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=0fcdbc71bb755b6b8d911e62be0de8ccd8944b1baf604f5ea8f1ad52aee113f7",
-      "expected_signature": "0fcdbc71bb755b6b8d911e62be0de8ccd8944b1baf604f5ea8f1ad52aee113f7"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=b4d92c75c15bb47a5fa7488b12a14aebcac70f0db71b120b86dc16a99d8f81d5",
+      "expected_signature": "b4d92c75c15bb47a5fa7488b12a14aebcac70f0db71b120b86dc16a99d8f81d5"
     },
     {
       "name": "path-with-encoding",
       "description": "Path segments requiring percent-encoding; '/' separators preserved",
       "method": "GET",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/buckets/my bucket/objects",
       "query": {
         "Action": "GetObject",
         "Version": "2026-08-01"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000"
       },
       "body": "",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=a297749dd8af9d2c867e41749c453015a86d29d28b2171eba416a9422c17b626",
-      "expected_signature": "a297749dd8af9d2c867e41749c453015a86d29d28b2171eba416a9422c17b626"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=f738e8d740ac9050b4f07e173d57b7fe28f3c586a3ade5b013d9a3bb81528316",
+      "expected_signature": "f738e8d740ac9050b4f07e173d57b7fe28f3c586a3ade5b013d9a3bb81528316"
     },
     {
       "name": "path-reserved-chars",
       "description": "Path with $ @ : = \u0026 + — characters where naive encoders disagree. Strict RFC 3986 escapes all of them; Go's url.PathEscape does not. This vector pins the interoperable behaviour across SDK languages.",
       "method": "GET",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/objects/a$b@c:d=e\u0026f+g",
       "query": {
         "Action": "GetObject",
         "Version": "2026-08-01"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000"
       },
       "body": "",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=6eade5be521e67fa634afedefdacb80d179b641d01f53d94aa0687e79c1e9749",
-      "expected_signature": "6eade5be521e67fa634afedefdacb80d179b641d01f53d94aa0687e79c1e9749"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=52a82868ffde72496033a708d0c379ca632e9561b9b8e804e36dd661564532e2",
+      "expected_signature": "52a82868ffde72496033a708d0c379ca632e9561b9b8e804e36dd661564532e2"
     },
     {
       "name": "query-reserved-chars",
       "description": "Query values containing reserved characters must be strictly encoded",
       "method": "GET",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/",
       "query": {
         "Action": "ListObjects",
@@ -114,25 +114,25 @@
         "Version": "2026-08-01"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000"
       },
       "body": "",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=351decb7d2ba6830fcc39583a05460e32b7566c0f862f6b37dd42b988be8841f",
-      "expected_signature": "351decb7d2ba6830fcc39583a05460e32b7566c0f862f6b37dd42b988be8841f"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=5cfe871cb4149e4bb689b9ce163e0a0e305a1e7a865cd7008592c61121ba00bf",
+      "expected_signature": "5cfe871cb4149e4bb689b9ce163e0a0e305a1e7a865cd7008592c61121ba00bf"
     },
     {
       "name": "query-ordering",
       "description": "Query keys must sort lexicographically regardless of input order",
       "method": "GET",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/",
       "query": {
         "Action": "List",
@@ -141,45 +141,45 @@
         "Zebra": "1"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000"
       },
       "body": "",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=cb6dfabfce0336be4a3ed9d77ce60e05ff6e5971499307c91783f5b5296bb702",
-      "expected_signature": "cb6dfabfce0336be4a3ed9d77ce60e05ff6e5971499307c91783f5b5296bb702"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce, Signature=1657856b18869d73a853f3d301826c29de0333da296d88370fd315c284f55ec1",
+      "expected_signature": "1657856b18869d73a853f3d301826c29de0333da296d88370fd315c284f55ec1"
     },
     {
       "name": "sts-security-token",
       "description": "STS temporary credential; x-cps-security-token participates in the signature",
       "method": "POST",
-      "host": "scecs.api.starcloud.cn",
+      "host": "euecs.api.euler.emoera.com",
       "path": "/",
       "query": {
         "Action": "RunInstances",
         "Version": "2026-08-01"
       },
       "headers": {
-        "host": "scecs.api.starcloud.cn",
+        "host": "euecs.api.euler.emoera.com",
         "x-cps-content-sha256": "5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
         "x-cps-date": "20260804T093000Z",
         "x-cps-nonce": "550e8400-e29b-41d4-a716-446655440000",
         "x-cps-security-token": "sts-token-abcdef0123456789"
       },
       "body": "{\"x\":1}",
-      "ak": "SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ak": "EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "sk": "test-secret-key-0123456789",
       "region": "cn-north-1",
       "service": "ecs",
       "date": "2026-08-04T09:30:00Z",
-      "expected_authorization": "CPS1-HMAC-SHA256 Credential=SCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce;x-cps-security-token, Signature=654c6640adfd05bd99a512087df4c61696c835712303ce1f01394f7ec785a6ca",
-      "expected_signature": "654c6640adfd05bd99a512087df4c61696c835712303ce1f01394f7ec785a6ca"
+      "expected_authorization": "CPS1-HMAC-SHA256 Credential=EUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/20260804/cn-north-1/ecs/cps1_request, SignedHeaders=host;x-cps-content-sha256;x-cps-date;x-cps-nonce;x-cps-security-token, Signature=9fc1a42e575614605186b79e1b21f4278c3ea5e3f790acd5b80ebb258101c876",
+      "expected_signature": "9fc1a42e575614605186b79e1b21f4278c3ea5e3f790acd5b80ebb258101c876"
     }
   ]
 }

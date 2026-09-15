@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // catalogData is one loaded snapshot of the quote-path catalogue.
@@ -231,7 +231,7 @@ func validateCatalog(data catalogData) error {
 }
 
 // newCatalogRepo picks the backend. Persistence is opt-in (pkg-go/storage doc):
-// with SC_DB_DSN set the catalogue is loaded from trade_db — ops edits prices
+// with EULER_DB_DSN set the catalogue is loaded from trade_db — ops edits prices
 // and placements in the database and a restart picks them up; unset, the seed
 // lists keep the demo and `go test` dependency-free.
 //

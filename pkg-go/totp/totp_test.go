@@ -245,16 +245,16 @@ func TestGeneratedSecretsAreUnique(t *testing.T) {
 // --- provisioning URI ---
 
 func TestProvisioningURI(t *testing.T) {
-	uri := ProvisioningURI(rfcSeed, "admin@starcloud.cn", "StarCloud")
+	uri := ProvisioningURI(rfcSeed, "admin@euler.emoera.com", "Euler")
 	// '@' is legal in a URI path segment, so PathEscape keeps the email intact
 	// — matching how every authenticator app renders the label.
-	if !strings.HasPrefix(uri, "otpauth://totp/StarCloud:admin@starcloud.cn?") {
+	if !strings.HasPrefix(uri, "otpauth://totp/Euler:admin@euler.emoera.com?") {
 		t.Fatalf("unexpected URI shape: %s", uri)
 	}
 	if !strings.Contains(uri, "secret="+SecretBase32(rfcSeed)) {
 		t.Errorf("URI missing secret parameter: %s", uri)
 	}
-	if !strings.Contains(uri, "issuer=StarCloud") {
+	if !strings.Contains(uri, "issuer=Euler") {
 		t.Errorf("URI missing issuer: %s", uri)
 	}
 }

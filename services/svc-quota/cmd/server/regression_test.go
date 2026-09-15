@@ -19,7 +19,7 @@ func TestOccupyTokenIDsAreProcessUnique(t *testing.T) {
 	occupy := func(acct int64) map[string]any {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/quota/occupy",
-			strings.NewReader(`{"productCode":"scecs","count":1}`))
+			strings.NewReader(`{"productCode":"euecs","count":1}`))
 		req.Header.Set(accountIDHeader, fmt.Sprintf("%d", acct))
 		rr := httptest.NewRecorder()
 		s.handleOccupy(rr, req)

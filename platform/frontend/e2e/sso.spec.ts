@@ -11,9 +11,9 @@ test("login with real credentials reaches the console", async ({ page }) => {
   });
 
   await page.goto("http://localhost:5175/login");
-  await page.fill('input[type=email], input[placeholder*="邮箱"]', "admin@starcloud.cn");
+  await page.fill('input[type=email], input[placeholder*="邮箱"]', "admin@euler.emoera.com");
   const pwds = await page.$$('input[type=password]');
-  await pwds[0].fill("starcloud123");
+  await pwds[0].fill("euler123");
   await page.click('button:has-text("登录")');
   // Login succeeded (200) and redirected to the console.
   await page.waitForURL("http://localhost:5173/**", { timeout: 10_000 }).catch(() => {});
@@ -23,7 +23,7 @@ test("login with real credentials reaches the console", async ({ page }) => {
 
 test("wrong password is rejected", async ({ page }) => {
   await page.goto("http://localhost:5175/login");
-  await page.fill('input[type=email], input[placeholder*="邮箱"]', "admin@starcloud.cn");
+  await page.fill('input[type=email], input[placeholder*="邮箱"]', "admin@euler.emoera.com");
   const pwds = await page.$$('input[type=password]');
   await pwds[0].fill("wrongpassword");
   await page.click('button:has-text("登录")');

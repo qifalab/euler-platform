@@ -5,7 +5,7 @@
  * Element Plus el-table under the hood (externals, not bundled).
  */
 import { ElTable, ElTableColumn, ElPagination, ElEmpty } from "element-plus";
-import { StatusBadge } from "@sc/ui";
+import { StatusBadge } from "@eu/ui";
 import type { Column } from "./useResourceTable";
 
 const props = defineProps<{
@@ -23,7 +23,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="sc-resource-table">
+  <div class="eu-resource-table">
     <ElTable :data="rows" v-loading="loading" stripe style="width: 100%">
       <ElTableColumn
         v-for="col in columns"
@@ -32,7 +32,7 @@ const emit = defineEmits<{
         :label="col.title"
       >
         <template #default="{ row }">
-          <a v-if="col.link" :href="col.link(row as Record<string, unknown>)" class="sc-rt-link">
+          <a v-if="col.link" :href="col.link(row as Record<string, unknown>)" class="eu-rt-link">
             {{ col.render ? col.render(row as Record<string, unknown>) : row[col.key] }}
           </a>
           <span v-else-if="col.key === 'status'">
@@ -43,7 +43,7 @@ const emit = defineEmits<{
       </ElTableColumn>
     </ElTable>
     <ElEmpty v-if="!loading && rows.length === 0" description="暂无资源" />
-    <div v-if="(total ?? 0) > (pageSize ?? 20)" class="sc-rt-pagination">
+    <div v-if="(total ?? 0) > (pageSize ?? 20)" class="eu-rt-pagination">
       <ElPagination
         :current-page="page ?? 1"
         :page-size="pageSize ?? 20"
@@ -57,22 +57,22 @@ const emit = defineEmits<{
 
 <style>
 /* Soft-glass container; the el-table inside stays readable (tokens only). */
-.sc-resource-table {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
+.eu-resource-table {
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
   overflow: hidden;
 }
 /* Let the glass show through; hover highlight uses the brand-soft token. */
-.sc-resource-table .el-table {
+.eu-resource-table .el-table {
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
-  --el-table-row-hover-bg-color: var(--sc-color-brand-soft);
+  --el-table-row-hover-bg-color: var(--eu-color-brand-soft);
 }
-.sc-resource-table .el-table th.el-table__cell { background-color: var(--sc-glass-bg-soft); }
-.sc-rt-link { color: var(--sc-color-brand); text-decoration: none; }
-.sc-rt-link:hover { color: var(--sc-color-brand-hover); }
-.sc-rt-pagination { display: flex; justify-content: flex-end; padding: 12px; }
+.eu-resource-table .el-table th.el-table__cell { background-color: var(--eu-glass-bg-soft); }
+.eu-rt-link { color: var(--eu-color-brand); text-decoration: none; }
+.eu-rt-link:hover { color: var(--eu-color-brand-hover); }
+.eu-rt-pagination { display: flex; justify-content: flex-end; padding: 12px; }
 </style>

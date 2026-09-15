@@ -11,14 +11,14 @@ func TestAssumeRoleIssuesValidCredentials(t *testing.T) {
 		t.Fatalf("NewIssuer: %v", err)
 	}
 	now := time.Now()
-	c, err := i.AssumeRole("ScEcsFullAccess", "100123")
+	c, err := i.AssumeRole("EuEcsFullAccess", "100123")
 	if err != nil {
 		t.Fatalf("AssumeRole: %v", err)
 	}
 	if !c.Valid(now) {
 		t.Fatalf("fresh credentials must be valid: %+v", c)
 	}
-	if len(c.AccessKey) != 32 || c.AccessKey[:2] != "SC" {
+	if len(c.AccessKey) != 32 || c.AccessKey[:2] != "EU" {
 		t.Fatalf("AK format wrong: %q", c.AccessKey)
 	}
 }

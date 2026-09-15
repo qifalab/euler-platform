@@ -1,10 +1,10 @@
-module github.com/starcloud/sc-platform/services/svc-org
+module github.com/qifalab/euler-platform/services/svc-org
 
 go 1.26
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/starcloud/sc-platform v0.0.0-00010101000000-000000000000
+	github.com/qifalab/euler-platform v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -12,4 +12,4 @@ require (
 	github.com/go-sql-driver/mysql v1.9.0 // indirect
 )
 
-replace github.com/starcloud/sc-platform => ../../pkg-go
+replace github.com/qifalab/euler-platform => ../../pkg-go

@@ -1,5 +1,5 @@
 /**
- * @sc/sdk — unified request client (02-frontend-architecture.md §9.1, §7.5).
+ * @eu/sdk — unified request client (02-frontend-architecture.md §9.1, §7.5).
  *
  * The ONLY sanctioned way for any sub-app to talk to the backend. Lint forbids
  * bare axios/fetch. Interceptors handle: token injection, 401 single-flight
@@ -11,7 +11,7 @@
  */
 
 /** Structured error model (03§9.3 unified OpenAPI error model). */
-export interface ScError extends Error {
+export interface EuError extends Error {
   code: string;
   message: string;
   requestId?: string;
@@ -20,27 +20,27 @@ export interface ScError extends Error {
   status?: number;
 }
 
-export interface ScResponse<T> {
+export interface EuResponse<T> {
   data: T;
   requestId?: string;
 }
 
 export interface SdkOptions {
-  /** Base gateway URL, e.g. https://api.starcloud.cn. Empty = same-origin. */
+  /** Base gateway URL, e.g. https://api.euler.emoera.com. Empty = same-origin. */
   baseURL?: string;
   /** Returns the current access token (memory-only in base). */
   getToken?: () => string | undefined;
   /** Called on 401 to refresh; resolves with a fresh token, or rejects. */
   onUnauthorized?: () => Promise<string | undefined>;
   /** Called with the structured error after a request fails. */
-  onError?: (err: ScError) => void;
+  onError?: (err: EuError) => void;
   /** Default timeout, ms. */
   timeout?: number;
 }
 
 const DEFAULT_TIMEOUT = 15_000;
 
-function toError(payload: unknown, status: number, requestId?: string): ScError {
+function toError(payload: unknown, status: number, requestId?: string): EuError {
   // Go services write {Code, Message, RequestId} (capitalized); the lower-case
   // variants cover gateway-generated error bodies.
   const body = (payload ?? {}) as {
@@ -49,7 +49,7 @@ function toError(payload: unknown, status: number, requestId?: string): ScError 
     detailUrl?: string; requestId?: string;
   };
   const message = body.message ?? body.Message;
-  const err = new Error(message ?? "request failed") as ScError;
+  const err = new Error(message ?? "request failed") as EuError;
   err.code = body.code ?? body.Code ?? `HTTP_${status}`;
   err.message = message ?? "request failed";
   err.requestId = body.requestId ?? requestId;
@@ -79,7 +79,7 @@ export function createSDK(options: SdkOptions = {}) {
   async function request<T>(
     path: string,
     init: RequestInit & { retries?: number; _skipToken?: boolean; idempotencyKey?: string } = {},
-  ): Promise<ScResponse<T>> {
+  ): Promise<EuResponse<T>> {
     const { retries = 1, _skipToken = false, idempotencyKey, ...fetchInit } = init;
     const url = baseURL + path;
 
@@ -153,7 +153,7 @@ export function createSDK(options: SdkOptions = {}) {
 
     // Unwrap the platform envelope { RequestId, Code, Message, Data } (03§9.3).
     // Callers receive Data directly; non-envelope bodies pass through unchanged.
-    // HTTP 200 with Code != "OK" is a BUSINESS error — surface it as ScError
+    // HTTP 200 with Code != "OK" is a BUSINESS error — surface it as EuError
     // instead of silently handing callers an error envelope as data.
     const body = payload as { Code?: string; Message?: string; RequestId?: string; Data?: unknown };
     if (body && typeof body === "object" && typeof body.Code === "string" && body.Code !== "OK") {

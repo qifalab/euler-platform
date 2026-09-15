@@ -11,11 +11,11 @@
 import { createApp, type App as VueApp } from "vue";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
-import "@sc/tokens/style.css";
-import "@sc/ui/style.css";
-import "@sc/console-kit/style.css";
+import "@eu/tokens/style.css";
+import "@eu/ui/style.css";
+import "@eu/console-kit/style.css";
 import App from "./App.vue";
-import { inWujieSandbox, readSharedProps } from "@sc/wujie-bridge";
+import { inWujieSandbox, readSharedProps } from "@eu/wujie-bridge";
 
 let app: VueApp | null = null;
 
@@ -27,13 +27,13 @@ export async function mount(el: HTMLElement | string) {
   // Standalone mode: resolve shared deps from own node_modules. In Wujie mode
   // the base injects them via props; here we just create a fresh Vue app —
   // the externals resolve from this bundle's imports in standalone, and from
-  // the injected globals in the sandbox (handled by the @sc/* shim layer).
+  // the injected globals in the sandbox (handled by the @eu/* shim layer).
   app = createApp(App);
   app.use(ElementPlus);
 
   // Read region/token the base injected (no-op in standalone).
   const props = readSharedProps();
-  app.provide("sc:props", props);
+  app.provide("eu:props", props);
 
   app.mount(root);
 }

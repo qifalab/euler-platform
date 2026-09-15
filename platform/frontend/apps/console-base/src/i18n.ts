@@ -7,7 +7,7 @@ import { createI18n } from "vue-i18n";
 import zhCN from "./locales/zh-CN.json";
 import en from "./locales/en.json";
 
-const saved = typeof localStorage !== "undefined" ? localStorage.getItem("sc:locale") : null;
+const saved = typeof localStorage !== "undefined" ? localStorage.getItem("eu:locale") : null;
 
 export const i18n = createI18n({
   legacy: false,
@@ -18,5 +18,5 @@ export const i18n = createI18n({
 
 export function setLocale(locale: string) {
   i18n.global.locale.value = locale as "zh-CN" | "en";
-  if (typeof localStorage !== "undefined") localStorage.setItem("sc:locale", locale);
+  if (typeof localStorage !== "undefined") localStorage.setItem("eu:locale", locale);
 }

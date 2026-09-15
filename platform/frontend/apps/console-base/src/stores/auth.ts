@@ -76,7 +76,7 @@ export const useAuthStore = defineStore("auth", {
             }
           }
           // Refresh failed — not authenticated. Real deploy: bounce to
-          // account.starcloud.cn (02§5.3). In dev the overview still renders
+          // account.euler.emoera.com (02§5.3). In dev the overview still renders
           // via the BFF proxy's injected account header.
           return undefined;
         } catch {

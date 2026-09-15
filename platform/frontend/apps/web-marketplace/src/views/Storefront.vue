@@ -3,7 +3,7 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
-import { PageHeader } from "@sc/ui";
+import { PageHeader } from "@eu/ui";
 import { fetchListings, categoryLabel, bpsPercent, CATEGORIES, type ListingDTO } from "@/marketplace";
 
 const router = useRouter();
@@ -63,35 +63,35 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.storefront { padding: var(--sc-spacing-6); max-width: 1200px; }
-.sf-tabs { display: flex; gap: var(--sc-spacing-2); margin-bottom: var(--sc-spacing-5); }
+.storefront { padding: var(--eu-spacing-6); max-width: 1200px; }
+.sf-tabs { display: flex; gap: var(--eu-spacing-2); margin-bottom: var(--eu-spacing-5); }
 .sf-tab {
-  padding: 8px 16px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-md);
-  background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 13px; cursor: pointer;
-  transition: all var(--sc-transition);
+  padding: 8px 16px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-md);
+  background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 13px; cursor: pointer;
+  transition: all var(--eu-transition);
 }
-.sf-tab:hover { color: var(--sc-color-brand); border-color: var(--sc-color-brand); }
-.sf-tab.active { background: var(--sc-color-brand); border-color: var(--sc-color-brand); color: var(--sc-color-on-brand); }
-.sf-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--sc-spacing-4); }
+.sf-tab:hover { color: var(--eu-color-brand); border-color: var(--eu-color-brand); }
+.sf-tab.active { background: var(--eu-color-brand); border-color: var(--eu-color-brand); color: var(--eu-color-on-brand); }
+.sf-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--eu-spacing-4); }
 .sf-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-5);
-  display: flex; flex-direction: column; gap: var(--sc-spacing-2);
-  transition: box-shadow var(--sc-transition), transform var(--sc-transition);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-5);
+  display: flex; flex-direction: column; gap: var(--eu-spacing-2);
+  transition: box-shadow var(--eu-transition), transform var(--eu-transition);
 }
-.sf-card:hover { box-shadow: var(--sc-shadow-md); transform: translateY(-2px); }
+.sf-card:hover { box-shadow: var(--eu-shadow-md); transform: translateY(-2px); }
 .sf-card-head { display: flex; justify-content: space-between; align-items: center; }
-.sf-cat { font-size: 12px; padding: 2px 8px; border-radius: var(--sc-radius-sm); color: var(--sc-color-brand); background: var(--sc-color-brand-soft); }
-.sf-rate { font-size: 12px; color: var(--sc-text-secondary); }
-.sf-name { margin: 0; font-size: 16px; font-weight: 500; color: var(--sc-text-primary); }
-.sf-url { margin: 0; font-size: 12px; color: var(--sc-text-secondary); word-break: break-all; }
-.sf-card-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--sc-spacing-2); }
-.sf-id { font-size: 12px; color: var(--sc-text-secondary); }
-.sf-error, .sf-loading, .sf-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.sf-error { color: var(--sc-color-danger); }
+.sf-cat { font-size: 12px; padding: 2px 8px; border-radius: var(--eu-radius-sm); color: var(--eu-color-brand); background: var(--eu-color-brand-soft); }
+.sf-rate { font-size: 12px; color: var(--eu-text-secondary); }
+.sf-name { margin: 0; font-size: 16px; font-weight: 500; color: var(--eu-text-primary); }
+.sf-url { margin: 0; font-size: 12px; color: var(--eu-text-secondary); word-break: break-all; }
+.sf-card-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--eu-spacing-2); }
+.sf-id { font-size: 12px; color: var(--eu-text-secondary); }
+.sf-error, .sf-loading, .sf-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.sf-error { color: var(--eu-color-danger); }
 </style>

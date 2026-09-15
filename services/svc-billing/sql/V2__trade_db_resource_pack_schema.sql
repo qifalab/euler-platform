@@ -35,7 +35,7 @@ CREATE TABLE `resource_pack` (
   `pack_id`       VARCHAR(64) NOT NULL COMMENT '资源包ID;购买订单生成,全局唯一',
   `account_id`    BIGINT UNSIGNED NOT NULL COMMENT '分片键(≡uid≡user_id≡tenant_id)',
   `product_code`  VARCHAR(32) NOT NULL DEFAULT '' COMMENT '限定抵扣的产品;空表示通用包',
-  `sku_code`      VARCHAR(64) NOT NULL COMMENT '资源包SKU;如 scecs.pack.1000cpu.hour',
+  `sku_code`      VARCHAR(64) NOT NULL COMMENT '资源包SKU;如 euecs.pack.1000cpu.hour',
   `face_value`    DECIMAL(18,6) NOT NULL COMMENT '购买额度(面值);micro-units,禁浮点(03§6)',
   `remaining`     DECIMAL(18,6) NOT NULL COMMENT '剩余额度;∈[0,face_value],终态为0',
   `purchased_at`  DATETIME NOT NULL COMMENT '购买订单结算时间;额度到账时刻',

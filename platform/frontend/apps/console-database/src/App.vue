@@ -1,21 +1,21 @@
 <script setup lang="ts">
 /**
- * console-database — RDS instance list (SCRDS / MySQL), the database category
+ * console-database — RDS instance list (EURDS / MySQL), the database category
  * sub-app (02§7.2 list-page pattern). Demonstrates the declarative ResourceTable
- * from @sc/console-kit with unified StatusBadge, polling on transitional
+ * from @eu/console-kit with unified StatusBadge, polling on transitional
  * states (Restoring), and EmptyGuide when empty.
  */
 import { computed, h, onMounted, onUnmounted, ref } from "vue";
 import { ElButton } from "element-plus";
-import { ResourceTable, useResourceTable } from "@sc/console-kit";
-import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
-import { createSDK, type ScError } from "@sc/sdk";
+import { ResourceTable, useResourceTable } from "@eu/console-kit";
+import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
+import { createSDK, type EuError } from "@eu/sdk";
 import InstanceDetail from "./views/InstanceDetail.vue";
-import "@sc/tokens/style.css";
+import "@eu/tokens/style.css";
 
 // Internal hash routing (no vue-router instance in this sub-app, mirroring the
 // console-network reference 02§3.4). The list links to
-// #/scrds/instances/<id>; when the hash matches that shape the detail page
+// #/eurds/instances/<id>; when the hash matches that shape the detail page
 // takes over. Before this the link only changed the URL — InstanceDetail
 // existed but was never rendered, so every instance link was a dead end.
 const hashRoute = ref(location.hash);
@@ -23,24 +23,24 @@ function onHash() { hashRoute.value = location.hash; }
 onMounted(() => window.addEventListener("hashchange", onHash));
 onUnmounted(() => window.removeEventListener("hashchange", onHash));
 const detailInstanceId = computed(() => {
-  const m = hashRoute.value.match(/scrds\/instances\/([^/?#]+)/);
+  const m = hashRoute.value.match(/eurds\/instances\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : null;
 });
 const showDetail = computed(() => detailInstanceId.value !== null);
 
 type InstanceRow = Record<string, unknown>;
 
-// In the real build @sc/sdk is generated from OpenAPI; here a typed fetcher.
+// In the real build @eu/sdk is generated from OpenAPI; here a typed fetcher.
 const sdk = createSDK({ baseURL: "" });
 
-// Real fetcher: console-bff /console/resources filtered to scrds. The BFF
+// Real fetcher: console-bff /console/resources filtered to eurds. The BFF
 // returns the shared Resource shape; the list maps SpecCode to the spec
 // column (engine-specific fields await the svc-rds list endpoint).
 const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTable<InstanceRow>({
   api: async () => {
     const res = await sdk.get<InstanceRow[]>("/console/resources");
     const items = (res.data ?? [])
-      .filter((r) => r.ProductCode === "scrds")
+      .filter((r) => r.ProductCode === "eurds")
       .map((r) => ({
         instanceId: r.ResourceId,
         instanceName: r.ResourceId,
@@ -54,7 +54,7 @@ const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTa
     return { items, total: items.length };
   },
   columns: [
-    { key: "instanceId", title: "资源ID/名称", link: (r) => `#/scrds/instances/${r.instanceId}` },
+    { key: "instanceId", title: "资源ID/名称", link: (r) => `#/eurds/instances/${r.instanceId}` },
     { key: "status", title: "状态" },
     { key: "spec", title: "规格" },
     { key: "region", title: "地域" },
@@ -83,7 +83,7 @@ const tableColumns = computed(() =>
 
 // Suppress unused-warning for sdk/error wiring in the scaffold (real deploy
 // wires onError → toast / page error bar, 02§7.5).
-void sdk; void (null as unknown as ScError);
+void sdk; void (null as unknown as EuError);
 </script>
 
 <template>
@@ -111,7 +111,7 @@ void sdk; void (null as unknown as ScError);
       title="暂无云数据库实例"
       description="创建您的第一个 RDS 实例,开始使用托管 MySQL 数据库。"
       action-label="创建实例"
-      action-href="#/scrds/buy"
+      action-href="#/eurds/buy"
     />
     </template>
   </section>

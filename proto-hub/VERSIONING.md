@@ -7,7 +7,7 @@ the same class of wire-breaking changes where `buf` is not installed.
 
 ## 1. Versioning
 
-- Every proto package lives under a **version directory**: `starcloud/{domain}/v1/*.proto`.
+- Every proto package lives under a **version directory**: `euler/{domain}/v1/*.proto`.
   An unversioned package cannot be retired compatibly — the checker rejects it.
 - Versions are `vN` (stable) and `vNbetaM` (preview). The directory name is the
   wire version; there is no per-file version field.

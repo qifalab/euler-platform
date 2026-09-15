@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/starcloud/sc-platform/audit"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/audit"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // TestCheckpointSurvivesRestart pins the anti-truncation property end to end:

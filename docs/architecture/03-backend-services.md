@@ -442,7 +442,7 @@ flowchart LR
   ```protobuf
   service MonitorService {
     rpc PutMetricRule / DeleteMetricRule / DescribeMetricRules;  // Monitor.PutMetricRule 等
-    rpc DescribeMetricRuleTemplates(product_code);               // 平台预置规则模板(scecs CPU/内存/磁盘等)
+    rpc DescribeMetricRuleTemplates(product_code);               // 平台预置规则模板(euecs CPU/内存/磁盘等)
     rpc QueryMetricData(resource_id, metric, range);             // Monitor.QueryMetricData
   }
   ```
@@ -493,7 +493,7 @@ flowchart LR
 #### 4.5.1 OpenAPI 网关(APISIX)+ svc-api-meta(API 元数据与 SDK)
 
 - **职责**:
-  - **APISIX**:唯一 OpenAPI 南北向入口——AK/SK 签名校验(CPS1-HMAC-SHA256,见《07-security.md》§4.1)、路由到产品 Action、限流、审计打点、RequestId 生成。路由规划:一产品一子域名 `{productCode}.api.starcloud.cn`(如 `scecs.api.starcloud.cn`),按 `product_code` 路由到对应产品控制面服务,域名形态与路由表以《04-middleware-infrastructure.md》§3.2/§3.3 为准;
+  - **APISIX**:唯一 OpenAPI 南北向入口——AK/SK 签名校验(CPS1-HMAC-SHA256,见《07-security.md》§4.1)、路由到产品 Action、限流、审计打点、RequestId 生成。路由规划:一产品一子域名 `{productCode}.api.euler.emoera.com`(如 `euecs.api.euler.emoera.com`),按 `product_code` 路由到对应产品控制面服务,域名形态与路由表以《04-middleware-infrastructure.md》§3.2/§3.3 为准;
   - **svc-api-meta(Go)**:API 元数据中心——存储每个 Action 的参数 schema、错误码、版本;驱动文档自动生成(文档中心,见《01-product-catalog.md》;对标杆源与选型坑清单见《10-research-and-selection-decisions.md》§3.4/§4.2/§4.4)与 SDK 生成(9.4);提供 OpenAPI Explorer 调试台后端。
 - **语言栈**:APISIX(选型结论,见《10-research-and-selection-decisions.md》§4.2);svc-api-meta 用 Go(元数据读多写少、与文档/SDK 工具链同生态)。
 - **兼容性注意**:APISIX 依赖 etcd,纳入《04-middleware-infrastructure.md》运维清单;Nacos discovery 插件版本锁定见 2.3.1。
@@ -508,18 +508,18 @@ flowchart LR
 
 **资源类型注册表**(svc-catalog 持有,新增产品填槽):
 
-| 字段 | 示例(scecs 类) | 说明 |
+| 字段 | 示例(euecs 类) | 说明 |
 |---|---|---|
-| product_code | `scecs`(SC 云服务器) | 产品代号(《01-product-catalog.md》§1.1 决策 D0,`sc` 前缀体系) |
+| product_code | `euecs`(EU 云服务器) | 产品代号(《01-product-catalog.md》§1.1 决策 D0,`sc` 前缀体系) |
 | resource_type | `instance` | 资源类型 |
 | controller_endpoint | `rc-compute:9000` | 控制器 gRPC 地址(Nacos 服务名) |
 | supported_ops | create/delete/start/stop/resize | 支持操作集 |
 | metering_items | `cpu_core_hour, mem_gb_hour, disk_gb_hour` | 计量项(计费契约) |
-| id_prefix | `scecs-` | 资源 ID 前缀(与 product_code 一致) |
+| id_prefix | `euecs-` | 资源 ID 前缀(与 product_code 一致) |
 | charge_types | prepay/postpay/package | 支持的计费形态 |
-| default_quotas | `quota_scecs_instance=20` | 默认配额 |
+| default_quotas | `quota_euecs_instance=20` | 默认配额 |
 
-**资源 ID 规范**:`{productCode}-{regionId}-{分片因子2位}-{随机8位}`,如 `scecs-cn-north-1-01-a1b2c3d4`,全局唯一,前缀即产品,肉眼可读,内嵌 2 位分片因子供反查路由(分片因子格式与《04-middleware-infrastructure.md》§6.4/§6.6 一致,region 命名见《00-overview.md》附录 A 全局标识规范)。
+**资源 ID 规范**:`{productCode}-{regionId}-{分片因子2位}-{随机8位}`,如 `euecs-cn-north-1-01-a1b2c3d4`,全局唯一,前缀即产品,肉眼可读,内嵌 2 位分片因子供反查路由(分片因子格式与《04-middleware-infrastructure.md》§6.4/§6.6 一致,region 命名见《00-overview.md》附录 A 全局标识规范)。
 
 ### 5.2 资源状态机
 
@@ -699,7 +699,7 @@ CREATE TABLE `ram_policy` (
 
 ```sql
 CREATE TABLE `resource_instance` (
-  `resource_id`   VARCHAR(64) NOT NULL COMMENT 'scecs-cn-north-1-01-a1b2c3d4,全局唯一,内嵌2位分片因子',
+  `resource_id`   VARCHAR(64) NOT NULL COMMENT 'euecs-cn-north-1-01-a1b2c3d4,全局唯一,内嵌2位分片因子',
   `account_id`    BIGINT UNSIGNED NOT NULL,
   `project_id`    BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `product_code`  VARCHAR(32) NOT NULL,
@@ -820,7 +820,7 @@ CREATE TABLE `bill_main` (
 
 ```sql
 CREATE TABLE `quota_definition` (
-  `quota_code`    VARCHAR(64) NOT NULL COMMENT 'quota_scecs_instance',
+  `quota_code`    VARCHAR(64) NOT NULL COMMENT 'quota_euecs_instance',
   `product_code`  VARCHAR(32) NOT NULL,
   `default_value` INT NOT NULL,
   `scope`         VARCHAR(16) NOT NULL COMMENT 'GLOBAL/REGION',
@@ -964,7 +964,7 @@ svc-workflow 中每个流程步骤登记**正向操作 + 补偿操作**:
 
 规范要点:
 
-- **入口**:`POST https://{productCode}.api.starcloud.cn/?Action=RunInstances&Version=2026-08-01`,一产品一子域名(见《04-middleware-infrastructure.md》§3.2),Version 为日期型版本(对齐阿里云惯例),URI 不承载版本号;
+- **入口**:`POST https://{productCode}.api.euler.emoera.com/?Action=RunInstances&Version=2026-08-01`,一产品一子域名(见《04-middleware-infrastructure.md》§3.2),Version 为日期型版本(对齐阿里云惯例),URI 不承载版本号;
 - **兼容性铁律**:已发布 Action 只增参数不改语义、不删参数、不改类型;破坏性变更 = 新 Version;旧版本维护 ≥12 个月,退役前 3 个月站内信 + Response Header `Deprecation` 双通知;
 - **命名**:`{Verb}{Resource}`,Verb 集合固定为 Create/Delete/Describe/Modify/Start/Stop/Reboot/Resize/List,禁止自造动词;
 - **分页**:统一 `PageNumber/PageSize`(上限 100),列表返回 `TotalCount`;
@@ -1034,7 +1034,7 @@ flowchart LR
 | `IAM.SignatureDoesNotMatch` | 403 | 签名不匹配 |
 | `IAM.NoPermission` | 403 | RAM 策略拒绝 |
 | `Order.InvalidClientToken` | 400 | 幂等键冲突且参数不一致 |
-| `Quota.Exceeded.ScecsInstance` | 403 | 配额超限 |
+| `Quota.Exceeded.EuecsInstance` | 403 | 配额超限 |
 | `Resource.NotFound` | 404 | 资源不存在或已释放 |
 | `Resource.IncorrectStatus` | 409 | 状态机不允许该操作 |
 | `Billing.InsufficientBalance` | 403 | 余额不足 |
@@ -1093,13 +1093,13 @@ flowchart LR
 **阶段一(T0~T0+9 月,T0+6 月内测、T0+9 月 GA;可售 MVP)**
 1. svc-iam(账号+AK+最简鉴权)、svc-org(项目从简)——地基先行;
 2. svc-catalog(2~3 个产品的三件套注册)、svc-order(新购/按量)、svc-payment(余额+模拟渠道);
-3. svc-orchestrator + svc-workflow + rc-compute/rc-storage/rc-network/rc-database(计算实例 + 块存储 + 网络 + 托管数据库,见《01-product-catalog.md》MVP 骨架与《09-roadmap.md》一期产品集);SCECI(弹性容器实例)后置二期(裁决 C1+S1);
+3. svc-orchestrator + svc-workflow + rc-compute/rc-storage/rc-network/rc-database(计算实例 + 块存储 + 网络 + 托管数据库,见《01-product-catalog.md》MVP 骨架与《09-roadmap.md》一期产品集);EUECI(弹性容器实例)后置二期(裁决 C1+S1);
 4. svc-billing(按量小时出账)+ svc-metering;svc-notify(站内信+邮件);
 5. APISIX + OpenAPI 签名 + svc-audit 简版。
    ——里程碑:用户可注册→买一台实例→按小时出账→欠费锁定→释放,全链路跑通。
 
 **阶段二(T0+9~T0+18 月)**
-- svc-quota、续费/升降配/退订、包年包月全生命周期;svc-ticket;svc-monitor 产品化(租户 agent + VM 租户集群 + alert-engine/alert-center 对客告警链路,见《05-data-observability.md》§8.5);SDK v1 与文档中心联动;对账体系全量上线;资源包与成本分析;SCECI(弹性容器实例)接入。
+- svc-quota、续费/升降配/退订、包年包月全生命周期;svc-ticket;svc-monitor 产品化(租户 agent + VM 租户集群 + alert-engine/alert-center 对客告警链路,见《05-data-observability.md》§8.5);SDK v1 与文档中心联动;对账体系全量上线;资源包与成本分析;EUECI(弹性容器实例)接入。
 
 **阶段三(T0+18 月起)**
 - ROS 模板编排对外、STS/角色、多地域部署评估(P3 两地三中心,见《00-overview.md》§4.2)。
@@ -1121,7 +1121,7 @@ flowchart LR
 - [x] AK/SK 存储采用 KMS 信封加密可逆方案(sk_cipher + sk_key_version),验签依赖可逆 SK(6.1,事实源《07-security.md》§2.2)
 - [x] 对客告警走 alert-engine/alert-center,租户侧不部署 Prometheus(4.4.1,事实源《05-data-observability.md》§8/§9)
 - [x] 一期规模引用《09-roadmap.md》§3.4 基线表(第 10 节)
-- [x] 一期上线顺序含 rc-network/rc-database,SCECI 后置二期(第 11 节)
+- [x] 一期上线顺序含 rc-network/rc-database,EUECI 后置二期(第 11 节)
 - [x] 余额字段归 trade_db ledger,account 表仅留身份属性(6.1)
 - [x] Nacos 环境 namespace 为 dev/staging/prod 三套(2.3.1)
 - [x] DDL 评审模板见附录 A(供《04-middleware-infrastructure.md》§6.10 引用)

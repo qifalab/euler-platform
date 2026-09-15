@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage/sqltest"
-	"github.com/starcloud/sc-platform/workflow"
+	"github.com/qifalab/euler-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/workflow"
 )
 
 // newSQLTestStore wires the SQL store to a throwaway resource_db built from the

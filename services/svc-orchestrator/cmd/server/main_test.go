@@ -29,7 +29,7 @@ type fulfillData struct {
 // order returns the existing resourceId with 200 rather than a 409.
 func TestFulfillIdempotent(t *testing.T) {
 	s := newStore()
-	req := fulfillRequest{OrderID: 42, OrderNo: "SO42", ProductCode: "scecs", Region: "cn-north-1", SpecCode: "scecs.s2.large"}
+	req := fulfillRequest{OrderID: 42, OrderNo: "SO42", ProductCode: "euecs", Region: "cn-north-1", SpecCode: "euecs.s2.large"}
 
 	rec1 := doFulfill(t, s, req)
 	if rec1.Code != 200 {
@@ -56,7 +56,7 @@ func TestFulfillIdempotent(t *testing.T) {
 // RELEASING → RELEASED path and calls the driver.
 func TestReleaseWalksStateMachine(t *testing.T) {
 	s := newStore()
-	rec := doFulfill(t, s, fulfillRequest{OrderID: 7, ProductCode: "scecs", Region: "cn-north-1"})
+	rec := doFulfill(t, s, fulfillRequest{OrderID: 7, ProductCode: "euecs", Region: "cn-north-1"})
 	var d fulfillData
 	_ = json.Unmarshal(rec.Body.Bytes(), &d)
 	resID := d.Data.ResourceId

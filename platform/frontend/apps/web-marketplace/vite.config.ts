@@ -12,12 +12,12 @@ export default defineConfig({
         target: "http://localhost:9212",
         changeOrigin: true,
         configure: (p) =>
-          p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+          p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")),
       },
     },
   },
   build: {
     rollupOptions: { input: { main: resolve(__dirname, "index.html") },
-      external: ["vue","vue-router","element-plus","@sc/tokens","@sc/ui","@sc/sdk","@sc/wujie-bridge"] },
+      external: ["vue","vue-router","element-plus","@eu/tokens","@eu/ui","@eu/sdk","@eu/wujie-bridge"] },
   },
 });

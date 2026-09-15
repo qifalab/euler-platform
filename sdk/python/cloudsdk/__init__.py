@@ -1,6 +1,6 @@
-"""StarCloud Python SDK (03§9.4 SDK generation).
+"""Euler Python SDK (03§9.4 SDK generation).
 
-The single Python entry point for calling StarCloud product APIs from
+The single Python entry point for calling Euler product APIs from
 off-platform user code and automation, the way the published
 ``cloudsdk-{product}-python`` packages wrap it.
 
@@ -18,9 +18,9 @@ the business code and HTTP status — the same pairing the wire carries.
 
 Usage::
 
-    client = Client(Config(ak="SC...", sk="...", region="cn-north-1"))
+    client = Client(Config(ak="EU...", sk="...", region="cn-north-1"))
     resp = client.call(ApiRequest(
-        product_code="scecs", method="POST", path="/",
+        product_code="euecs", method="POST", path="/",
         query={"Action": "RunInstances", "Version": "2026-08-01"},
         body=b'{"ImageId":"img-001","InstanceType":"s2.large"}',
     ))
@@ -55,8 +55,8 @@ __all__ = [
 ]
 
 # Environment fallback for credentials (mirrors the Go SDK's env chain).
-ENV_ACCESS_KEY_ID = "SC_ACCESS_KEY_ID"
-ENV_SECRET_ACCESS_KEY = "SC_SECRET_ACCESS_KEY"
+ENV_ACCESS_KEY_ID = "EULER_ACCESS_KEY_ID"
+ENV_SECRET_ACCESS_KEY = "EULER_SECRET_ACCESS_KEY"
 
 # --- protocol constants (mirror pkg-go/cps1) ----------------------------------
 
@@ -70,22 +70,22 @@ HEADER_NONCE = "x-cps-nonce"
 HEADER_SECURITY_TOKEN = "x-cps-security-token"
 
 # Default routing subdomain suffix (04-middleware §3.2).
-_API_HOST_SUFFIX = ".api.starcloud.cn"
+_API_HOST_SUFFIX = ".api.euler.emoera.com"
 
 
 def product_api_host(product_code: str) -> str:
-    """Routing subdomain for a product: ``scecs`` -> ``scecs.api.starcloud.cn``."""
+    """Routing subdomain for a product: ``euecs`` -> ``euecs.api.euler.emoera.com``."""
     return product_code + _API_HOST_SUFFIX
 
 
 def service_namespace(product_code: str) -> str:
-    """Derive the signing service from a product code (scecs -> ecs).
+    """Derive the signing service from a product code (euecs -> ecs).
 
     Matches the gateway verifier's derivation and the Go SDK's. Unknown products
     keep the full code as the service so a new product is signable before its
     mapping is taught here (the gateway rejects a service it does not recognise).
     """
-    if product_code.startswith("sc") and len(product_code) > 2:
+    if product_code.startswith("eu") and len(product_code) > 2:
         return product_code[2:]
     return product_code
 
@@ -313,7 +313,7 @@ class Config:
     ak: str
     sk: str = field(repr=False)
     region: str = ""
-    service: str = ""  # derived from product_code when empty (scecs->ecs)
+    service: str = ""  # derived from product_code when empty (euecs->ecs)
     security_token: str = field(default="", repr=False)
     endpoint: str = ""  # overrides the routing subdomain (may carry a path prefix)
     timeout: float = 30.0
@@ -373,7 +373,7 @@ def _open_request(request: urllib.request.Request, timeout: float):
 
 
 def _resolve_credentials(config: Config) -> Credentials:
-    """Config credentials, falling back to SC_ACCESS_KEY_ID/SC_SECRET_ACCESS_KEY."""
+    """Config credentials, falling back to EULER_ACCESS_KEY_ID/EULER_SECRET_ACCESS_KEY."""
     ak = config.ak or os.environ.get(ENV_ACCESS_KEY_ID, "")
     sk = config.sk or os.environ.get(ENV_SECRET_ACCESS_KEY, "")
     return Credentials(ak=ak, sk=sk, security_token=config.security_token)
@@ -419,7 +419,7 @@ class Client:
 
     def call(self, req: ApiRequest) -> ApiResponse:
         if not req.product_code:
-            raise ValueError("scsdk: product_code is required")
+            raise ValueError("eusdk: product_code is required")
         creds = _resolve_credentials(self.config)
         host, path_prefix = self._host_and_prefix(req.product_code)
         service = self.config.service or service_namespace(req.product_code)

@@ -3,8 +3,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
-import { createSDK } from "@sc/sdk";
-import { PageHeader } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PageHeader } from "@eu/ui";
 import { useTicketMeta } from "@/useTicketMeta";
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -91,26 +91,26 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.ticket-list { padding: var(--sc-spacing-6); max-width: 1200px; }
+.ticket-list { padding: var(--eu-spacing-6); max-width: 1200px; }
 .tl-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
 .tl-table { width: 100%; border-collapse: collapse; background: transparent; }
-.tl-table th, .tl-table td { padding: var(--sc-spacing-3) var(--sc-spacing-4); text-align: left; border-bottom: 1px solid var(--sc-border); }
-.tl-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.tl-table td { font-size: 13px; color: var(--sc-text-primary); }
-.tl-table tbody tr { transition: background var(--sc-transition); }
-.tl-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.tl-table th, .tl-table td { padding: var(--eu-spacing-3) var(--eu-spacing-4); text-align: left; border-bottom: 1px solid var(--eu-border); }
+.tl-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.tl-table td { font-size: 13px; color: var(--eu-text-primary); }
+.tl-table tbody tr { transition: background var(--eu-transition); }
+.tl-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .tl-table tbody tr:last-child td { border-bottom: none; }
-.tl-priority { font-size: 12px; padding: 2px 8px; border-radius: var(--sc-radius-sm); }
-.p-urgent { color: var(--sc-color-danger); background: var(--sc-color-danger-soft); }
-.p-normal { color: var(--sc-text-secondary); background: var(--sc-glass-bg-soft); }
-.tl-error, .tl-loading, .tl-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.tl-error { color: var(--sc-color-danger); }
+.tl-priority { font-size: 12px; padding: 2px 8px; border-radius: var(--eu-radius-sm); }
+.p-urgent { color: var(--eu-color-danger); background: var(--eu-color-danger-soft); }
+.p-normal { color: var(--eu-text-secondary); background: var(--eu-glass-bg-soft); }
+.tl-error, .tl-loading, .tl-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.tl-error { color: var(--eu-color-danger); }
 </style>

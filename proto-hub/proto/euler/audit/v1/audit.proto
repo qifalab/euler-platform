@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package euler.audit.v1;
+
+option go_package = "github.com/qifalab/euler-platform/proto/euler/audit/v1;auditv1";
+
+import "euler/event/v1/event.proto";
+
+// AuditService is svc-audit (审计, 03§4.4.3), the全平台操作审计采集与查询 service
+// (对标 ActionTrail). Owns high-throughput ingest from APISIX + service
+// instrumentation, tamper-evident storage, and per-account query/export.
+//
+// Ingest path: every audit point publishes to Kafka `cloud.sys.audit.action`
+// (APISIX plugin records OpenAPI calls; in-service interceptors record console
+// operations); the Go consumer batches writes into ClickHouse (按天分区), then
+// MinIO cold backup. Retention: 平台合规基线 ≥180 天热存 (等保三级) + MinIO 冷备.
+// 禁止业务阻塞等待 (audit is fire-and-forget on the ingest side, 03§7).
+service AuditService {
+  // PutEvent ingests a single audit event. Intended for low-frequency direct
+  // callers; the bulk path is Kafka cloud.sys.audit.action consumed internally.
+  rpc PutEvent(PutEventRequest) returns (Ack);                 // 审计接入
+  // QueryEvents searches audit events by account + filters (console & compliance
+  // export). Always account-scoped.
+  rpc QueryEvents(QueryEventsRequest) returns (QueryEventsResponse); // Audit.QueryEvents
+  // DescribeAuditTrail verifies/returns the hash chain for an account — the
+  // tamper-evidence query over prev_hash/chain_hash/sequence (07§6.2).
+  rpc DescribeAuditTrail(DescribeAuditTrailRequest) returns (DescribeAuditTrailResponse);
+}
+
+// AuditEvent mirrors the audit chain (07§6.2). sequence is the per-account
+// monotonically increasing index; each event links to its predecessor via
+// prev_hash so a deleted/reordered row breaks the chain.
+message AuditEvent {
+  string event_id = 1;           // e.g. ev-20260804-000123
+  int64 event_time = 2;          // unix seconds, UTC
+  string event_source = 3;       // e.g. euecs.api.euler.emoera.com
+  string event_name = 4;         // e.g. StopInstance (OpenAPI Action / console op)
+  string source_ip = 5;
+  string user_agent = 6;
+  euler.event.v1.IdentitySnapshot identity = 7; // ram-user | root | role snapshot
+  repeated string resources = 8; // ARNs
+  string decision = 9;           // "allow" | "deny" (IAM evaluation result)
+  string request_params_json = 10; // sanitized request params (no secrets)
+  int32 response_code = 11;      // HTTP / gRPC status
+  string trace_id = 12;          // 全链路透传, 排障第一索引 (03§9.1)
+  // Tamper-evident chain (07§6.2): prev_hash = chain_hash of previous event for
+  // the same account; chain_hash = H(prev_hash | canonical(event)).
+  string prev_hash = 13;
+  string chain_hash = 14;
+  int64 sequence = 15;           // per-account monotonic chain index
+}
+
+// The actor identity type is the canonical euler.event.v1.IdentitySnapshot
+// (single definition, imported above); type values: "ram-user" | "root" | "role".
+
+// --- Request / response messages ---
+
+message PutEventRequest {
+  AuditEvent event = 1;
+}
+
+message QueryEventsRequest {
+  int64 account_id = 1;
+  string event_name = 2;         // optional filter
+  int64 start_time = 3;          // optional range, unix seconds
+  int64 end_time = 4;
+  string event_source = 5;       // optional filter
+  int32 page_number = 6;
+  int32 page_size = 7;
+}
+
+message QueryEventsResponse {
+  repeated AuditEvent events = 1;
+  int32 total_count = 2;
+}
+
+// DescribeAuditTrail returns the ordered chain for a range so the consumer can
+// re-verify prev_hash/chain_hash integrity (合规导出 / 审计复核).
+message DescribeAuditTrailRequest {
+  int64 account_id = 1;
+  int64 start_sequence = 2;      // inclusive
+  int64 end_sequence = 3;        // inclusive
+}
+
+message DescribeAuditTrailResponse {
+  repeated AuditEvent events = 1;   // ascending by sequence
+  string head_hash = 2;             // chain_hash of the latest event in range
+  bool verified = 3;                // consumer re-verification outcome flag
+}
+
+message Ack {}

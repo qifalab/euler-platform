@@ -7,7 +7,7 @@
  */
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { RouterView } from "vue-router";
-import { RegionSelector } from "@sc/console-kit";
+import { RegionSelector } from "@eu/console-kit";
 import { useRegistry } from "./registry";
 import { useRegionStore } from "./stores/region";
 import { useRouter } from "vue-router";
@@ -45,9 +45,9 @@ onBeforeUnmount(() => {
 });
 
 // Dark mode: follow system preference on first load, then manual toggle.
-// Sets data-theme on :root so the --sc-* token set switches (02§10.1).
+// Sets data-theme on :root so the --eu-* token set switches (02§10.1).
 onMounted(() => {
-  const saved = localStorage.getItem("sc:theme");
+  const saved = localStorage.getItem("eu:theme");
   if (saved) dark.value = saved === "dark";
   else dark.value = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
   applyTheme();
@@ -59,7 +59,7 @@ function applyTheme() {
 }
 function toggleDark() {
   dark.value = !dark.value;
-  localStorage.setItem("sc:theme", dark.value ? "dark" : "light");
+  localStorage.setItem("eu:theme", dark.value ? "dark" : "light");
   applyTheme();
 }
 </script>
@@ -115,72 +115,72 @@ function toggleDark() {
 
 <style>
 /*
- * Google Cloud Glass shell. All colors/blur/radius/shadow come from @sc/tokens
- * (--sc-*); the body mesh gradient is provided by tokens and must not be
+ * Google Cloud Glass shell. All colors/blur/radius/shadow come from @eu/tokens
+ * (--eu-*); the body mesh gradient is provided by tokens and must not be
  * repainted here. The .sub-app-* layout/degrade styles live in SubAppHost.vue
  * (scoped) — do not re-declare them in this global block.
  */
 .shell { min-height: 100vh; }
 .shell-topbar {
   position: sticky; top: 0;
-  height: var(--sc-topbar-height);
+  height: var(--eu-topbar-height);
   display: flex;
   align-items: center;
-  padding: 0 var(--sc-spacing-4);
-  gap: var(--sc-spacing-4);
-  background: var(--sc-glass-bg);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  border-bottom: 1px solid var(--sc-border);
-  box-shadow: var(--sc-glass-shadow);
+  padding: 0 var(--eu-spacing-4);
+  gap: var(--eu-spacing-4);
+  background: var(--eu-glass-bg);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  border-bottom: 1px solid var(--eu-border);
+  box-shadow: var(--eu-glass-shadow);
 }
-.shell-logo { font-weight: 600; color: var(--sc-color-brand); }
-.shell-logo-sub { font-size: 14px; color: var(--sc-text-secondary); margin-left: var(--sc-spacing-1); margin-right: var(--sc-spacing-2); }
+.shell-logo { font-weight: 600; color: var(--eu-color-brand); }
+.shell-logo-sub { font-size: 14px; color: var(--eu-text-secondary); margin-left: var(--eu-spacing-1); margin-right: var(--eu-spacing-2); }
 .shell-search-btn {
-  display: flex; align-items: center; gap: var(--sc-spacing-2);
-  border: 1px solid var(--sc-border);
-  background: var(--sc-glass-bg);
+  display: flex; align-items: center; gap: var(--eu-spacing-2);
+  border: 1px solid var(--eu-border);
+  background: var(--eu-glass-bg);
   border-radius: 999px;
-  padding: 0 var(--sc-spacing-3);
+  padding: 0 var(--eu-spacing-3);
   cursor: pointer; height: 30px;
-  transition: var(--sc-transition);
+  transition: var(--eu-transition);
 }
-.shell-search-btn:hover { background: var(--sc-color-brand-soft); }
-.shell-search-hint { font-size: 13px; color: var(--sc-text-secondary); }
-.shell-kbd { font-size: 11px; color: var(--sc-text-secondary); background: var(--sc-bg-container); border: 1px solid var(--sc-border); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
+.shell-search-btn:hover { background: var(--eu-color-brand-soft); }
+.shell-search-hint { font-size: 13px; color: var(--eu-text-secondary); }
+.shell-kbd { font-size: 11px; color: var(--eu-text-secondary); background: var(--eu-bg-container); border: 1px solid var(--eu-border); border-radius: 3px; padding: 1px 5px; font-family: monospace; }
 .shell-product-menu { position: relative; }
 .shell-menu-btn {
   border: none; background: none; cursor: pointer; font-size: 14px;
-  color: var(--sc-text-secondary); padding: 6px 8px;
-  border-radius: var(--sc-radius-sm);
-  transition: var(--sc-transition);
+  color: var(--eu-text-secondary); padding: 6px 8px;
+  border-radius: var(--eu-radius-sm);
+  transition: var(--eu-transition);
 }
-.shell-menu-btn:hover { color: var(--sc-color-brand); background: var(--sc-color-brand-soft); }
+.shell-menu-btn:hover { color: var(--eu-color-brand); background: var(--eu-color-brand-soft); }
 .shell-menu-dropdown {
   position: absolute; top: 100%; left: 0; min-width: 200px;
-  background: var(--sc-glass-bg-strong);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-glass-shadow);
-  padding: var(--sc-spacing-1) 0; z-index: 2000;
+  background: var(--eu-glass-bg-strong);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-glass-shadow);
+  padding: var(--eu-spacing-1) 0; z-index: 2000;
 }
 .shell-menu-item {
-  display: block; padding: var(--sc-spacing-2) var(--sc-spacing-4);
-  margin: 0 var(--sc-spacing-1);
+  display: block; padding: var(--eu-spacing-2) var(--eu-spacing-4);
+  margin: 0 var(--eu-spacing-1);
   text-decoration: none;
-  color: var(--sc-text-primary); font-size: 14px;
-  border-radius: var(--sc-radius-sm);
-  transition: var(--sc-transition);
+  color: var(--eu-text-primary); font-size: 14px;
+  border-radius: var(--eu-radius-sm);
+  transition: var(--eu-transition);
 }
-.shell-menu-item:hover { background: var(--sc-color-brand-soft); color: var(--sc-color-brand); }
+.shell-menu-item:hover { background: var(--eu-color-brand-soft); color: var(--eu-color-brand); }
 .shell-spacer { flex: 1; }
-.shell-nav-link { color: var(--sc-text-secondary); text-decoration: none; font-size: 14px; transition: var(--sc-transition); }
-.shell-nav-link:hover { color: var(--sc-color-brand); }
-.shell-theme-btn { border: 1px solid var(--sc-border); background: var(--sc-bg-container); color: var(--sc-text-secondary); border-radius: var(--sc-radius-sm); width: 28px; height: 28px; cursor: pointer; font-size: 14px; line-height: 1; transition: var(--sc-transition); }
-.shell-theme-btn:hover { color: var(--sc-color-brand); border-color: var(--sc-color-brand); }
-.shell-account { color: var(--sc-text-secondary); font-size: 14px; cursor: pointer; transition: var(--sc-transition); }
-.shell-account:hover { color: var(--sc-color-brand); }
+.shell-nav-link { color: var(--eu-text-secondary); text-decoration: none; font-size: 14px; transition: var(--eu-transition); }
+.shell-nav-link:hover { color: var(--eu-color-brand); }
+.shell-theme-btn { border: 1px solid var(--eu-border); background: var(--eu-bg-container); color: var(--eu-text-secondary); border-radius: var(--eu-radius-sm); width: 28px; height: 28px; cursor: pointer; font-size: 14px; line-height: 1; transition: var(--eu-transition); }
+.shell-theme-btn:hover { color: var(--eu-color-brand); border-color: var(--eu-color-brand); }
+.shell-account { color: var(--eu-text-secondary); font-size: 14px; cursor: pointer; transition: var(--eu-transition); }
+.shell-account:hover { color: var(--eu-color-brand); }
 .shell-content { padding: 0; }
 </style>

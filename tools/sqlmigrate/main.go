@@ -34,7 +34,7 @@
 // are resolved against the repository root it discovers by walking up — the
 // two anchors differ, so neither can be assumed to be the working directory.
 //
-// The DSN is also read from SC_DB_DSN, which is the same variable the services
+// The DSN is also read from EULER_DB_DSN, which is the same variable the services
 // use to turn persistence on; the migration command appends multiStatements so
 // a whole DDL file executes in one round trip (the server parses the file, so
 // string literals containing ';' stay correct).
@@ -83,7 +83,7 @@ var schemaNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func main() {
 	var (
-		dsn      = flag.String("dsn", "", "MySQL/Vitess DSN without a schema (default: $SC_DB_DSN)")
+		dsn      = flag.String("dsn", "", "MySQL/Vitess DSN without a schema (default: $EULER_DB_DSN)")
 		manifest = flag.String("manifest", "", "migration manifest path (default: tools/sqlmigrate/migrations.json, or migrations.json when run inside this directory)")
 		root     = flag.String("root", "", "repository root that manifest dirs are relative to (default: autodetected)")
 		only     = flag.String("only", "", "apply only entries whose dir contains this substring")
@@ -110,10 +110,10 @@ func main() {
 
 	raw := strings.TrimSpace(*dsn)
 	if raw == "" {
-		raw = strings.TrimSpace(os.Getenv("SC_DB_DSN"))
+		raw = strings.TrimSpace(os.Getenv("EULER_DB_DSN"))
 	}
 	if raw == "" {
-		fatalf("no DSN: pass -dsn or set SC_DB_DSN")
+		fatalf("no DSN: pass -dsn or set EULER_DB_DSN")
 	}
 	baseDSN, err := withMultiStatements(raw)
 	if err != nil {

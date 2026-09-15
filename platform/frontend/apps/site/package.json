@@ -2,7 +2,7 @@
   "name": "site",
   "version": "0.1.0",
   "private": true,
-  "description": "StarCloud marketing portal — Nuxt3 SSR (02§8.1).",
+  "description": "Euler marketing portal — Nuxt3 SSR (02§8.1).",
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --port 3000",
@@ -12,7 +12,7 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
-    "@sc/tokens": "workspace:*",
+    "@eu/tokens": "workspace:*",
     "nuxt": "^3.21.11",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0"

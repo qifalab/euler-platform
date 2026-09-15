@@ -14,12 +14,12 @@ import { useRegionStore } from "./stores/region";
 
 /**
  * The theme in force when a sub-app is set up. The shell writes data-theme on
- * <html> and the --sc-* token set is CSS-variable based, so a live toggle
+ * <html> and the --eu-* token set is CSS-variable based, so a live toggle
  * reaches sub-apps through the cascade; this value only seeds the `theme` prop
  * (which used to be hardcoded "light" even in dark mode).
  */
 function currentTheme(): "light" | "dark" {
-  const saved = localStorage.getItem("sc:theme");
+  const saved = localStorage.getItem("eu:theme");
   if (saved === "dark" || saved === "light") return saved;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }

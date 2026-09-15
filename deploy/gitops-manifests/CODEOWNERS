@@ -4,13 +4,13 @@
 # may bypass MR to push protected branches (08§4.2). Non-prod uses single review.
 
 # Default: staging/dev single review by the platform team
-*                                @starcloud/sre-platform
+*                                @qifalab/sre-platform
 
 # Production environment overrides — dual approval required
-/envs/prod/                      @starcloud/sre-platform @starcloud/owners-services
+/envs/prod/                      @qifalab/sre-platform @qifalab/owners-services
 
 # Platform components (gateway/middleware/observability)
-/platform/                       @starcloud/sre-platform @starcloud/infra-leads
+/platform/                       @qifalab/sre-platform @qifalab/infra-leads
 
 # Admission & sync policies
-/policies/                       @starcloud/architecture-committee
+/policies/                       @qifalab/architecture-committee

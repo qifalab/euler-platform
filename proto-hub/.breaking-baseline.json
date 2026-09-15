@@ -1,6 +1,6 @@
 {
   "messages_by_path": {
-    "proto-hub/proto/starcloud/alert/v1/alert.proto": {
+    "proto-hub/proto/euler/alert/v1/alert.proto": {
       "Ack": {
         "fields": {}
       },
@@ -53,7 +53,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/apimeta/v1/apimeta.proto": {
+    "proto-hub/proto/euler/apimeta/v1/apimeta.proto": {
       "Action": {
         "fields": {
           "1": "string",
@@ -110,7 +110,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/audit/v1/audit.proto": {
+    "proto-hub/proto/euler/audit/v1/audit.proto": {
       "Ack": {
         "fields": {}
       },
@@ -128,7 +128,7 @@
           "4": "string",
           "5": "string",
           "6": "string",
-          "7": "starcloud.event.v1.IdentitySnapshot",
+          "7": "euler.event.v1.IdentitySnapshot",
           "8": "string",
           "9": "string"
         }
@@ -170,7 +170,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/billing/v1/billing.proto": {
+    "proto-hub/proto/euler/billing/v1/billing.proto": {
       "AccountBalance": {
         "fields": {
           "1": "int64",
@@ -285,7 +285,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/catalog/v1/catalog.proto": {
+    "proto-hub/proto/euler/catalog/v1/catalog.proto": {
       "CalculatePriceRequest": {
         "fields": {
           "1": "int64",
@@ -379,7 +379,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/event/v1/event.proto": {
+    "proto-hub/proto/euler/event/v1/event.proto": {
       "AuditAction": {
         "fields": {
           "1": "string",
@@ -526,7 +526,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/iam/v1/iam.proto": {
+    "proto-hub/proto/euler/iam/v1/iam.proto": {
       "AccessDecision": {
         "fields": {
           "1": "bool",
@@ -699,7 +699,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/marketplace/v1/marketplace.proto": {
+    "proto-hub/proto/euler/marketplace/v1/marketplace.proto": {
       "ApproveProductRequest": {
         "fields": {
           "1": "int64",
@@ -763,7 +763,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/metering/v1/metering.proto": {
+    "proto-hub/proto/euler/metering/v1/metering.proto": {
       "DescribeMeteringDataRequest": {
         "fields": {
           "1": "int64",
@@ -776,7 +776,7 @@
       },
       "DescribeMeteringDataResponse": {
         "fields": {
-          "1": "starcloud.event.v1.UsageRecord",
+          "1": "euler.event.v1.UsageRecord",
           "2": "HourlyUsage"
         }
       },
@@ -802,7 +802,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/monitor/v1/monitor.proto": {
+    "proto-hub/proto/euler/monitor/v1/monitor.proto": {
       "Ack": {
         "fields": {}
       },
@@ -899,7 +899,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/notify/v1/notify.proto": {
+    "proto-hub/proto/euler/notify/v1/notify.proto": {
       "ChannelDelivery": {
         "fields": {
           "1": "string",
@@ -964,7 +964,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/orchestrator/v1/orchestrator.proto": {
+    "proto-hub/proto/euler/orchestrator/v1/orchestrator.proto": {
       "Ack": {
         "fields": {}
       },
@@ -1025,7 +1025,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/order/v1/order.proto": {
+    "proto-hub/proto/euler/order/v1/order.proto": {
       "Ack": {
         "fields": {}
       },
@@ -1115,7 +1115,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/org/v1/org.proto": {
+    "proto-hub/proto/euler/org/v1/org.proto": {
       "Ack": {
         "fields": {}
       },
@@ -1183,7 +1183,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/payment/v1/payment.proto": {
+    "proto-hub/proto/euler/payment/v1/payment.proto": {
       "Ack": {
         "fields": {}
       },
@@ -1230,7 +1230,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/quota/v1/quota.proto": {
+    "proto-hub/proto/euler/quota/v1/quota.proto": {
       "Ack": {
         "fields": {}
       },
@@ -1302,7 +1302,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/ticket/v1/ticket.proto": {
+    "proto-hub/proto/euler/ticket/v1/ticket.proto": {
       "CreateTicketRequest": {
         "fields": {
           "1": "int64",
@@ -1357,7 +1357,7 @@
         }
       }
     },
-    "proto-hub/proto/starcloud/workflow/v1/workflow.proto": {
+    "proto-hub/proto/euler/workflow/v1/workflow.proto": {
       "Ack": {
         "fields": {}
       },

@@ -55,7 +55,7 @@
 
 | 阶段 | 时间窗(以 T0=立项为基准) | 主题 | 一句话目标 |
 |---|---|---|---|
-| 一期 MVP | T0 ~ T0+9 个月 | **跑通商业闭环** | 官网+控制台+账号+计费骨架+7 个可售产品(SCVPC/SCECS/SCBS/SCOSS/SCRDS/SCMON/SCEIP),实现"注册→购买→使用→出账→欠费治理"完整闭环 |
+| 一期 MVP | T0 ~ T0+9 个月 | **跑通商业闭环** | 官网+控制台+账号+计费骨架+7 个可售产品(EUVPC/EUECS/EUBS/EUOSS/EURDS/EUMON/EUEIP),实现"注册→购买→使用→出账→欠费治理"完整闭环 |
 | 二期 扩展 | T0+9 ~ T0+18 个月 | **补齐产品矩阵与计费深度** | 产品数翻倍至 10+,四种计费形态齐备,OpenAPI 生态成形,完成同城双 AZ(P2)演进 |
 | 三期 规模化 | T0+18 ~ T0+30 个月 | **规模化与可信度** | 多地域部署、稳定性工程(SLO/混沌/容灾演练)、生态与市场,具备对外规模化售卖条件 |
 
@@ -72,19 +72,19 @@ gantt
     统一账号 IAM 与 AK/SK          : p1b, 2026-09-15, 135d
     官网/文档站/控制台框架         : p1c, 2026-10-01, 150d
     订单中心与计费骨架             : p1d, 2026-10-15, 150d
-    SCVPC 网络产品化               : p1n, 2026-10-01, 165d
-    SCECS 云服务器(VM)产品化       : p1e, 2026-10-15, 165d
-    SCBS 块存储产品化              : p1s, 2026-11-01, 150d
-    SCOSS 对象存储产品化           : p1o, 2026-10-01, 165d
-    SCRDS 托管数据库(MySQL)       : p1g, 2026-11-15, 165d
-    SCMON 监控与 SCEIP 弹性公网IP  : p1h, 2026-12-01, 120d
+    EUVPC 网络产品化               : p1n, 2026-10-01, 165d
+    EUECS 云服务器(VM)产品化       : p1e, 2026-10-15, 165d
+    EUBS 块存储产品化              : p1s, 2026-11-01, 150d
+    EUOSS 对象存储产品化           : p1o, 2026-10-01, 165d
+    EURDS 托管数据库(MySQL)       : p1g, 2026-11-15, 165d
+    EUMON 监控与 EUEIP 弹性公网IP  : p1h, 2026-12-01, 120d
     监控告警与工单通道             : p1i, 2026-12-01, 120d
     内测发布                       : milestone, m1, 2027-03-01, 0d
     一期公测 GA                    : milestone, m2, 2027-05-31, 0d
 
     section 二期·扩展
-    SCECI 弹性容器实例             : p2a, 2027-06-01, 150d
-    负载均衡(SCLB)                : p2b, 2027-06-01, 150d
+    EUECI 弹性容器实例             : p2a, 2027-06-01, 150d
+    负载均衡(EULB)                : p2b, 2027-06-01, 150d
     缓存/消息队列/日志服务         : p2d, 2027-07-01, 180d
     计量计费完善与发票             : p2e, 2027-06-01, 180d
     资源包与抢占式售卖             : p2j, 2027-07-15, 120d
@@ -103,7 +103,7 @@ gantt
 
 > 日期为示例锚点。实际排期以立项日 T0 平移,关键约束是"一期 9 个月、二期再 9 个月、三期 12 个月+"的节奏比例,而不是绝对日期。换算示例:以 T0=2026-09-01 计,T0+6 月=2027-03(GA 内测)、T0+9 月=2027-05-31(GA 正式);全书统一使用"T0+N 月"表述,不使用裸日历月。
 >
-> 内测发布基于各产品 Alpha 版;甘特图任务条终点为该产品的产品化完成(GA 口径),故个别任务终点晚于内测里程碑属预期。**关键路径**:基础设施 → IAM → 订单/计费骨架 → SCECS/SCVPC 产品化 → 内测/GA(最长依赖链),其余任务条带浮动余量,关键路径延误将直接平移里程碑。
+> 内测发布基于各产品 Alpha 版;甘特图任务条终点为该产品的产品化完成(GA 口径),故个别任务终点晚于内测里程碑属预期。**关键路径**:基础设施 → IAM → 订单/计费骨架 → EUECS/EUVPC 产品化 → 内测/GA(最长依赖链),其余任务条带浮动余量,关键路径延误将直接平移里程碑。
 
 ### 2.3 三阶段能力演进对照表
 
@@ -119,7 +119,7 @@ gantt
 
 | 能力域 | 一期 MVP | 二期 扩展 | 三期 规模化 |
 |---|---|---|---|
-| 可售产品数 | 7(SCVPC/SCECS/SCBS/SCOSS/SCRDS/SCMON/SCEIP) | 10~12(+SCECI/SCLB/缓存/消息队列/日志/云监控完整版) | 15~20(+CDN/域名 DNS/弹性伸缩进阶/AI 推理托管等) |
+| 可售产品数 | 7(EUVPC/EUECS/EUBS/EUOSS/EURDS/EUMON/EUEIP) | 10~12(+EUECI/EULB/缓存/消息队列/日志/云监控完整版) | 15~20(+CDN/域名 DNS/弹性伸缩进阶/AI 推理托管等) |
 | 计费形态 | 包年包月 + 按量(两形态 Day1);免费试用=代金券(内测上线) | 四种形态齐备(含抢占式/资源包)+发票+成本分析 | 商务定价体系、大客户折扣、渠道分账 |
 | IAM | 主账号+实名+AK/SK+基础策略 | RAM 式子账号、角色、策略模拟器 | 多账号组织、SSO/SAML、审计日志全量 |
 | 部署形态 | 单 IDC 单可用区(P1) | 同城双可用区双活(P2) | 两地三中心(异地多活属 P3) |
@@ -136,7 +136,7 @@ gantt
 **目标(T0 ~ T0+9 个月)**
 
 1. 打通"注册 → 实名认证 → 充值/下单 → 开通资源 → 计量采集 → 小时级出账 → 欠费锁定/释放"完整商业闭环;
-2. 上线 7 个可售产品:**SCVPC(网络)、SCECS(云服务器 VM)、SCBS(块存储)、SCOSS(对象存储)、SCRDS(托管 MySQL)、SCMON(监控)、SCEIP(弹性公网 IP)**;
+2. 上线 7 个可售产品:**EUVPC(网络)、EUECS(云服务器 VM)、EUBS(块存储)、EUOSS(对象存储)、EURDS(托管 MySQL)、EUMON(监控)、EUEIP(弹性公网 IP)**;
 3. 官网 IA 三件套(目录→详情→定价)+ 文档中心骨架 + 统一控制台(微前端基座);
 4. 平台底座:K8s 集群、APISIX 网关、Nacos、Kafka、MySQL/Redis、GitLab CI+ArgoCD、VictoriaMetrics+SkyWalking OAP+ClickHouse 可观测基线全部就绪。
 
@@ -144,7 +144,7 @@ gantt
 
 | 推迟项 | 推迟理由 | 何时重提 |
 |---|---|---|
-| 弹性容器实例(SCECI) | 依赖 K8s 高级调度与弹性伸缩,工程难度高;VM 形态(SCECS)已是用户预期旗舰产品 | 二期(见 3.2 决策) |
+| 弹性容器实例(EUECI) | 依赖 K8s 高级调度与弹性伸缩,工程难度高;VM 形态(EUECS)已是用户预期旗舰产品 | 二期(见 3.2 决策) |
 | 资源包/抢占式售卖 | Day1 仅包年包月+按量两形态,资源包+抢占式后置二期(见《01-product-catalog.md》D6) | 二期 |
 | 满减/折扣券 | 免费试用一期以代金券最小实现落地,满减/折扣券后置二期 | 二期 |
 | 多地域 | 模型预留 region 字段,部署单 IDC 单 AZ(P1) | 三期 |
@@ -153,14 +153,14 @@ gantt
 
 ### 3.2 首批产品取舍决策(结论 + 理由 + 备选 + 改选条件)
 
-> **决策 D-01:首批可售产品 = SCVPC(网络) + SCECS(云服务器 VM) + SCBS(块存储) + SCOSS(对象存储) + SCRDS(托管 MySQL) + SCMON(监控) + SCEIP(弹性公网 IP),共 7 个。SCECI(弹性容器实例)后置二期。**
+> **决策 D-01:首批可售产品 = EUVPC(网络) + EUECS(云服务器 VM) + EUBS(块存储) + EUOSS(对象存储) + EURDS(托管 MySQL) + EUMON(监控) + EUEIP(弹性公网 IP),共 7 个。EUECI(弹性容器实例)后置二期。**
 >
 > **理由**
 > 1. VPC 是所有资源的网络边界与 ECS 前置依赖,ECS 需块存储做系统盘,VM 是用户预期的旗舰计算产品,这套组合满足《00-overview.md》§1.1"计算+存储+网络+托管数据库"最小可售闭环,与《01-product-catalog.md》§3.2 第一批矩阵一致;
 > 2. 各产品的内核均为成熟开源组件(MinIO / K8s+KubeVirt / MySQL),自建部分集中在**控制面、计量面、运维面**,交付路径可控;
 > 3. 对象存储是生态锚点(S3 兼容),开发者迁移成本最低,适合作为获客第一单品;
 > 4. 产品运行在 K8s 之上,与《06-kubernetes-productization.md》的容器平台产品化路线天然复用,避免同时维护两套资源底座;
-> 5. SCECI 依赖 K8s 高级调度与弹性伸缩,工程难度高,后置二期(见二期新增清单)。
+> 5. EUECI 依赖 K8s 高级调度与弹性伸缩,工程难度高,后置二期(见二期新增清单)。
 >
 > **备选方案 A**(已否决):以对象存储+弹性容器实例+托管 MySQL 为一期组合、VM 与 VPC 后置二期——本方案被否决,理由是 VM 是用户预期旗舰产品、VPC 是 ECS 前置依赖、ECI 依赖 K8s 高级调度难度高(裁决见《11-adjudication-decisions.md》C1+S1)。
 > **备选方案 B**:只做对象存储单产品,极致收敛,6 个月上线。
@@ -168,7 +168,7 @@ gantt
 > **何时改选**
 > - 改选 B:团队规模 < 15 人或融资节奏要求 6 个月内必须有收入,先以对象存储单品验证商业闭环,其余产品顺延。
 
-> **决策 D-02:一期网络能力以 SCVPC(VPC+子网+安全组+弹性公网 IP)落地,基于 K8s 网络模型 + Calico/Cilium 承载。**
+> **决策 D-02:一期网络能力以 EUVPC(VPC+子网+安全组+弹性公网 IP)落地,基于 K8s 网络模型 + Calico/Cilium 承载。**
 >
 > **理由**:VPC 是 ECS 及后续所有资源的网络边界与前置依赖,一期必须随计算同步上线;一期用户规模下,K8s NetworkPolicy + APISIX(七层)+ NodePort/LB(四层)即可交付"隔离 + 负载均衡"的核心体验,SDN(Overlay/虚拟交换机)深度特性后置二期完善。
 > **备选**:直接上 Calico BGP + 自研控制面模拟 VPC。
@@ -183,7 +183,7 @@ gantt
 | 控制台 | Wujie 微前端基座、全局导航/搜索/最近访问、按产品大类合并的子应用(console-compute/console-network/console-storage/console-database/console-security/console-account/console-billing/console-monitor) | 前端组 | 《02-frontend-architecture.md》 |
 | IAM | 注册/登录/实名认证、AK/SK 管理、基础 RBAC 策略、MFA(二期完善) | 平台组 | 《07-security.md》 |
 | 商业化 | 订单中心(新购/续费/退订)、包年包月+按量计费、小时级出账、余额/充值、欠费状态机;免费试用代金券最小实现 | 计费组 | 《03-backend-services.md》 |
-| 产品×7 | SCVPC(网络)、SCECS(云服务器 VM)、SCBS(块存储)、SCOSS(对象存储)、SCRDS(托管 MySQL)、SCMON(监控)、SCEIP(弹性公网 IP) | 产品线组 | 《06-kubernetes-productization.md》 |
+| 产品×7 | EUVPC(网络)、EUECS(云服务器 VM)、EUBS(块存储)、EUOSS(对象存储)、EURDS(托管 MySQL)、EUMON(监控)、EUEIP(弹性公网 IP) | 产品线组 | 《06-kubernetes-productization.md》 |
 | 平台底座 | K8s 多集群、APISIX、Nacos、Kafka、MySQL 分库分表(Vitess,account_id 单键分片)、Redis Cluster | 基础设施组 | 《04-middleware-infrastructure.md》 |
 | 可观测 | VictoriaMetrics(长期指标)+ SkyWalking OAP(trace,trace-ES 存储)+ 搜索 ES(三类搜索)+ ClickHouse 日志、统一告警出口 | SRE 组 | 《05-data-observability.md》 |
 | 交付体系 | GitLab CI 流水线模板、ArgoCD GitOps、灰度发布规范 | SRE 组 | 《08-devops-delivery.md》 |
@@ -258,38 +258,38 @@ flowchart LR
 | 里程碑 | 规划时间点 | 实装状态 | 实装证据(代码路径) |
 |---|---|---|---|
 | M-4 计费四形态 | T0+12 月 | ✅ 已交付 | `pkg-go/reservepack`(额度账本 Consume/Refund/Expire/SweepExpired + `ToPool` 适配 billing.Pool rank 0)+ `pkg-go/spot`(浮动价引擎 + provision `Preemptor` 可选接口 + resource `StatePreempting`)+ `pkg-go/invoice`(Book 红冲=全额负数发票,原票 VOIDED 终态不可逆)+ `billing.CostReport`/`CostAnalysis`;svc-billing 接入资源包购买/到期扫描/发票/成本分析端点;DDL V2/V3 |
-| M-5 OpenAPI 生态 | T0+13 月 | ✅ 已交付 | `pkg-go/scsdk`(Go SDK,Call 用 cps1.Sign)+ `sdk/python`(独立实现,7 golden vectors 跨语言逐字节回归通过)+ svc-api-meta Explorer(`/api/v1/apimeta/explorer` 复用 cps1 单源)+ `proto-hub/VERSIONING.md` + `tools/check-proto-breaking.py`(CI 门禁,699 fields) |
+| M-5 OpenAPI 生态 | T0+13 月 | ✅ 已交付 | `pkg-go/eusdk`(Go SDK,Call 用 cps1.Sign)+ `sdk/python`(独立实现,7 golden vectors 跨语言逐字节回归通过)+ svc-api-meta Explorer(`/api/v1/apimeta/explorer` 复用 cps1 单源)+ `proto-hub/VERSIONING.md` + `tools/check-proto-breaking.py`(CI 门禁,699 fields) |
 | M-6 双可用区(P2) | T0+15 月 | ✅ 已交付 | `pkg-go/topology`(Region/AZ 模型 + 失效存活推理,断言 2-AZ MGR 只在较轻侧存活)+ svc-catalog `RegionScope`(ZONAL 询价强制 zoneId)+ DDL `az_id` + `deploy/.../middleware/`(Kafka KRaft/MySQL MGR/Redis Cluster 跨 AZ manifest)+ Helm `topologySpreadConstraints` + `tools/check-topology-spread.py`(CI 门禁)+ `tools/az-failover-drill.md` |
-| M-7 产品矩阵 GA | T0+18 月 | ✅ 已交付 | 6 新产品经四构件范式(CRD + Operator MockDriver 门槛 06§6.3 + 前端子应用):SCECI/SCLB/SCAS/SCBACKUP/SCREDIS + RAM 子账号(策略模拟器复用 authz Deny-first 引擎);新增域包 `autoscaling`/`backup`;`pkg-go` 26 包 353 测试全绿;5 `rc-*` demo 全部通过 MockDriver 验收 |
+| M-7 产品矩阵 GA | T0+18 月 | ✅ 已交付 | 6 新产品经四构件范式(CRD + Operator MockDriver 门槛 06§6.3 + 前端子应用):EUECI/EULB/EUAS/EUBACKUP/EUREDIS + RAM 子账号(策略模拟器复用 authz Deny-first 引擎);新增域包 `autoscaling`/`backup`;`pkg-go` 26 包 353 测试全绿;5 `rc-*` demo 全部通过 MockDriver 验收 |
 
 **二期新增产品实装清单(对应 §4.2):**
 
 | §4.2 计划产品 | 优先级 | 实装状态 | 说明 |
 |---|---|---|---|
-| 弹性容器实例 SCECI | P0 | ✅ 已交付(M-7.1) | ZONAL 按秒计费,`DriverK8s`;询价 DurationUnit 从规则派生(`pricing.PricingRule.Active/Specificity` 导出)——新计费粒度=目录行非代码分支 |
-| 负载均衡 SCLB | P0 | ✅ 已交付(M-7.2) | REGIONAL CrossAZ,四层+七层按用量计费(LCU/traffic) |
-| 缓存 SCRedis 托管版 | P1 | ✅ 已交付(M-7.5) | 复用 M-6.2a redis-cluster 跨 AZ 拓扑,ZONAL HA 主备,prepay/postpay 双形态 |
-| 消息队列 SCKafka 托管版 | P1 | ✅ 已交付(M-7.5) | 复用 M-6.2a kafka-kraft 跨 AZ 拓扑,ZONAL,prepay/postpay |
+| 弹性容器实例 EUECI | P0 | ✅ 已交付(M-7.1) | ZONAL 按秒计费,`DriverK8s`;询价 DurationUnit 从规则派生(`pricing.PricingRule.Active/Specificity` 导出)——新计费粒度=目录行非代码分支 |
+| 负载均衡 EULB | P0 | ✅ 已交付(M-7.2) | REGIONAL CrossAZ,四层+七层按用量计费(LCU/traffic) |
+| 缓存 EURedis 托管版 | P1 | ✅ 已交付(M-7.5) | 复用 M-6.2a redis-cluster 跨 AZ 拓扑,ZONAL HA 主备,prepay/postpay 双形态 |
+| 消息队列 EUKafka 托管版 | P1 | ✅ 已交付(M-7.5) | 复用 M-6.2a kafka-kraft 跨 AZ 拓扑,ZONAL,prepay/postpay |
 | 日志服务 | P1 | ✅ 已交付(M-7.5) | REGIONAL,Vector+ClickHouse 内核,`ingestion_gb` 按量 + `storage_gb_hour` |
-| 云监控完整版 | P1 | ⏸ 延后三期 | 一期 SCMON 已售卖基础监控告警;高级告警(alert-center)产品化未在二期实装,落三期 |
-| 弹性伸缩 SCAS | P2 | ✅ 已交付(M-7.3) | `pkg-go/autoscaling` 策略引擎(deny-first + cooldown + min/max 钳制),策略层(WHAT)与 HPA/VPA/CA 执行面分离 |
-| 云备份 SCBACKUP | P2 | ✅ 已交付(M-7.4) | `pkg-go/backup`(NextRun/IsDue/ExpiredSnapshots 保留期强制,0=永久) |
+| 云监控完整版 | P1 | ⏸ 延后三期 | 一期 EUMON 已售卖基础监控告警;高级告警(alert-center)产品化未在二期实装,落三期 |
+| 弹性伸缩 EUAS | P2 | ✅ 已交付(M-7.3) | `pkg-go/autoscaling` 策略引擎(deny-first + cooldown + min/max 钳制),策略层(WHAT)与 HPA/VPA/CA 执行面分离 |
+| 云备份 EUBACKUP | P2 | ✅ 已交付(M-7.4) | `pkg-go/backup`(NextRun/IsDue/ExpiredSnapshots 保留期强制,0=永久) |
 
 **二期验收门禁(§4.4)实装核对:**
 
 | # | 验收项 | 实装状态 | 实装证据 |
 |---|---|---|---|
 | B1 | 计费深度 | ✅ 通过 | 四形态全流程单测绿;资源包抵扣 `TestWaterfallIntegration` rank 0 优先 700/现金 300;抢占式回收链路 `PREEMPTING` 态 |
-| B2 | 产品数 | ✅ 通过 | GA 产品 13 个(一期 7 + 二期 SCECI/SCLB/SCAS/SCBACKUP/SCREDIS/SCKafka/SCLog)> 10,全部经 MockDriver 门槛 |
+| B2 | 产品数 | ✅ 通过 | GA 产品 13 个(一期 7 + 二期 EUECI/EULB/EUAS/EUBACKUP/EUREDIS/EUKafka/EULog)> 10,全部经 MockDriver 门槛 |
 | B3 | 可用性 | ✅ 模型层通过 | RTO≤5min:topology 失效存活数学断言 + az-failover-drill.md runbook(2-AZ MGR 只在较轻侧存活是 P2 边界,完整 either-AZ 需 3 AZ P3) |
 | B4 | OpenAPI | ✅ 通过 | Explorer 覆盖 5 seed actions;SDK Go+Python;`check-proto-breaking.py` CI 检测破坏性变更 0 |
-| B5 | 租户隔离 | ✅ 通过 | 新增产品四元标签 + account_id 上下文拦截;account_id 网关注入 `X-Sc-Account-Id`,缺则 403 |
+| B5 | 租户隔离 | ✅ 通过 | 新增产品四元标签 + account_id 上下文拦截;account_id 网关注入 `X-Euler-Account-Id`,缺则 403 |
 | B6 | 财务合规 | ✅ 模型层通过 | invoice 红冲(全额负数发票,原票 VOIDED 终态不可逆,幂等 void)+ 退款 `ledger.Refund` + `order.TypeRefund` |
 | B7 | 运营能力 | ✅ 通过 | 免费试用防薅引擎 `pkg-go/trial`(六规则固定次序逐条裁定:实名前置→在途/终身限额→证件去重→冷静期→全局预算)+ 三类代金券 `pricing.CouponKind`(满减/折扣含封顶/定额,抵扣次序固定 RATE→THRESHOLD→VOUCHER)+ svc-order `/api/v1/trial/{claim,status}` + svc-catalog V3 DDL;异常用量检测已随三期交付(`pkg-go/anomaly`) |
 
-> **延后三期的项**:云监控高级告警产品化、异常用量检测、第二物理地域、云市场/ISV、大数据/AI 平台。其中 SCKafka/日志服务原计划为"M-7.5 可选扩展(时间允许则做,否则落三期)",二期已补做交付(详见 §4.2)。
+> **延后三期的项**:云监控高级告警产品化、异常用量检测、第二物理地域、云市场/ISV、大数据/AI 平台。其中 EUKafka/日志服务原计划为"M-7.5 可选扩展(时间允许则做,否则落三期)",二期已补做交付(详见 §4.2)。
 >
-> **关键实装原则**(供三期与新产品参考):① 新计费粒度是目录行而非代码分支(询价 DurationUnit 从规则派生);② 导出引擎内部选择逻辑而非 fork(`PricingRule.Active/Specificity`、cps1 单源签名、authz 模拟器复用引擎 Deny-first);③ 托管产品=平台中间件运维经验产品化(SCRedis/SCKafka 直接复用 M-6.2a 跨 AZ manifest);④ MockDriver 验收门槛是 source-only 期唯一的真供给全链路测试。
+> **关键实装原则**(供三期与新产品参考):① 新计费粒度是目录行而非代码分支(询价 DurationUnit 从规则派生);② 导出引擎内部选择逻辑而非 fork(`PricingRule.Active/Specificity`、cps1 单源签名、authz 模拟器复用引擎 Deny-first);③ 托管产品=平台中间件运维经验产品化(EURedis/EUKafka 直接复用 M-6.2a 跨 AZ manifest);④ MockDriver 验收门槛是 source-only 期唯一的真供给全链路测试。
 
 **二期收尾实装(2026-08-28 补充)— B7 试用体系 / MFA / VMDriver / IPAM:**
 
@@ -323,16 +323,16 @@ flowchart LR
 
 | 产品 | 内核策略 | 优先级 | 说明 |
 |---|---|---|---|
-| 弹性容器实例(SCECI) | 基于 K8s 高级调度与弹性伸缩封装 | P0 | 一期后置;按量计费最佳搭档,补齐"弹性计算"心智 |
-| 负载均衡(SCLB,四七层) | APISIX(七层)+ LVS/IPVS(四层)产品化 | P0 | 与 SCVPC 联动 |
-| 缓存(SCRedis 托管版) | Redis 集群托管化 | P1 | 复用平台自身 Redis 运维经验 |
-| 消息队列(SCKafka 托管版) | Kafka 集群托管化 | P1 | 复用平台自身 Kafka 运维经验 |
+| 弹性容器实例(EUECI) | 基于 K8s 高级调度与弹性伸缩封装 | P0 | 一期后置;按量计费最佳搭档,补齐"弹性计算"心智 |
+| 负载均衡(EULB,四七层) | APISIX(七层)+ LVS/IPVS(四层)产品化 | P0 | 与 EUVPC 联动 |
+| 缓存(EURedis 托管版) | Redis 集群托管化 | P1 | 复用平台自身 Redis 运维经验 |
+| 消息队列(EUKafka 托管版) | Kafka 集群托管化 | P1 | 复用平台自身 Kafka 运维经验 |
 | 日志服务 | Vector + ClickHouse 产品化(多租户 topic/表) | P1 | 与《05-data-observability.md》同构,吃自己的狗粮 |
-| 云监控完整版 | 多租户指标与对客高级告警规则产品化(alert-center;alert-engine 一期已上线) | P1 | 一期 SCMON 已售卖基础监控与告警,二期产品化高级告警并对客 |
+| 云监控完整版 | 多租户指标与对客高级告警规则产品化(alert-center;alert-engine 一期已上线) | P1 | 一期 EUMON 已售卖基础监控与告警,二期产品化高级告警并对客 |
 | 弹性伸缩 | 基于云服务器/容器实例的策略引擎 | P2 | 按量计费最佳搭档 |
 | 云备份/快照策略 | 定时快照+跨可用区备份 | P2 | 数据可靠性卖点 |
 
-> **决策 D-03:弹性容器实例(SCECI)与二期云服务器增强统一复用一期已建成的 K8s 运维体系,VM 形态(SCECS)在一期已以 KubeVirt on K8s 路线交付。**
+> **决策 D-03:弹性容器实例(EUECI)与二期云服务器增强统一复用一期已建成的 K8s 运维体系,VM 形态(EUECS)在一期已以 KubeVirt on K8s 路线交付。**
 >
 > **理由**:① 复用一期已建成的 K8s 运维体系(调度/监控/发布/多集群),不新建一套虚拟化管理栈;② KubeVirt 将 VM 抽象为 K8s CRD,与容器实例共享控制面框架,计量/生命周期状态机直接复用;③ 团队技能收敛在 K8s 一条线上,降低多栈运维风险(见第 8 节风险 R03)。
 > **备选**:自研 IaaS 控制面(libvirt+KVM+自研调度)或 OpenStack 封装。
@@ -375,7 +375,7 @@ flowchart LR
 |---|---|---|---|
 | M-8 第二地域点亮 | T0+22 月 | ✅ 已交付 | `pkg-go/multiregion`(Region 主备/`Classify` 全局vs地域/`ClassifyState` 共享·复制·重建/`MeetsRPO`·`MeetsRTO`≤30min,region 命名委托 identifier 不 fork)+ `pkg-go/event.SysReplicationStatus` + `deploy/gitops-manifests/envs/` 重构为 `envs/<region>/<env>/`(applicationset 加 region 维度)+ `platform/middleware/minio-replication.yaml`(异地对象存储异步复制)+ `svc-orchestrator/sql/V3__resource_db_region_topology.sql`(`region_replication_status` 复制水位 + `v_resource_by_region`/`v_resource_region_failover_impact`) |
 | M-9 稳定性平台 | T0+24 月 | ✅ 已交付 | `pkg-go/slo`(错误预算=1−SLO、多窗口多燃烧率 1h·14.4× page / 3d·1× ticket、预算政策 <50% 降频/耗尽冻结、`CanCommitSLA` 两季门禁)+ `pkg-go/chaos`(6 必练科目、prod 演练 10min 终止 + 限定爆炸半径、偏差>50% 立项)+ `tools/chaos-drill-runbook.md`(季度演练载体:6 科目/staging 先行/prod 终止手段/归档判定)+ `pkg-go/release`(金丝雀 5→20→50→100、门禁 success≥0.995/p99≤1.5s、expand-contract 观察 ≥7 天、git revert 优先) |
-| M-10 生态门户 | T0+27 月 | ✅ 已交付 | `pkg-go/settlement`(分账 partner+platform≡gross 精确)+ `services/svc-marketplace`(上架审核 PENDING→APPROVED/REJECTED + 分账幂等,proto `marketplace/v1` + DDL + Helm + :9212)+ `sdk/terraform`(Provider 骨架,复用 scsdk/cps1 单源签名,SCECS/SCOSS/SCVPC/SCRDS 四资源,source-only)+ 开发者社区(`devops-explorer` Community 视图:文档/示例/社区入口,M-10.3) |
+| M-10 生态门户 | T0+27 月 | ✅ 已交付 | `pkg-go/settlement`(分账 partner+platform≡gross 精确)+ `services/svc-marketplace`(上架审核 PENDING→APPROVED/REJECTED + 分账幂等,proto `marketplace/v1` + DDL + Helm + :9212)+ `sdk/terraform`(Provider 骨架,复用 eusdk/cps1 单源签名,EUECS/EUOSS/EUVPC/EURDS 四资源,source-only)+ 开发者社区(`devops-explorer` Community 视图:文档/示例/社区入口,M-10.3) |
 | M-11 三期 GA | T0+30 月 | ✅ 模型层通过 | `tools/cross-region-failover-drill.md`(异地冷转热+DNS 切换,RPO≤5min/RTO≤30min,分层于 az-failover-drill)+ `tools/dengbao-level3-checklist.md`(等保三级要点自查 + 审计留存三档口径) |
 
 **三期验收门禁(§5.3)实装核对:**
@@ -443,11 +443,11 @@ timeline
     title 实施关键里程碑时间线(里程碑编号见 §4.3/§5.2,时间点以 T0=2026-09-01 换算)
     section 2026
         2026 Q3 : 立项与技术决策冻结 : 基础设施进场施工 : IAM/计费领域模型评审
-        2026 Q4 : 中间件全家桶就绪 : 官网与控制台基座内测 : 首批产品 Alpha(SCVPC/SCECS/SCOSS/SCRDS)
+        2026 Q4 : 中间件全家桶就绪 : 官网与控制台基座内测 : 首批产品 Alpha(EUVPC/EUECS/EUOSS/EURDS)
     section 2027
         2027 Q1 : 内测发布-种子客户 : 计量对账影子运行 : 免费试用(代金券)体系内测上线
-        2027 Q2 : 一期公测 GA : 7 个基础产品可售(SCVPC/SCECS/SCBS/SCOSS/SCRDS/SCMON/SCEIP) : 一期复盘与二期启动
-        2027 Q3 : 弹性容器实例(SCECI)Beta : 计费四形态上线(M-4,资源包/抢占式)
+        2027 Q2 : 一期公测 GA : 7 个基础产品可售(EUVPC/EUECS/EUBS/EUOSS/EURDS/EUMON/EUEIP) : 一期复盘与二期启动
+        2027 Q3 : 弹性容器实例(EUECI)Beta : 计费四形态上线(M-4,资源包/抢占式)
         2027 Q4 : OpenAPI Explorer 发布(M-5) : 同城双 AZ(P2)演进完成(M-6) : 产品矩阵冻结评审
     section 2028
         2028 Q1 : 二期 GA(M-7) : SLO 体系全量覆盖 : 第二地域选址开工
@@ -757,7 +757,7 @@ quadrantChart
 | 官网/控制台/文档站 | **坚持自建** | 品牌与转化主阵地 | 不回迁 |
 | 对象存储内核 | 封装 **MinIO**(自建控制面) | S3 兼容+运维轻(P4 原则) | 存量超 PB 级或 AGPL 风险升级时评估 Ceph/自研(接口 S3 化保证可切换) |
 | 容器底座 | 自建 K8s 集群(开源自管) | 产品化核心依赖 | 不回迁 |
-| 虚拟化 | 一期 **KubeVirt**(决策 D-03,SCECS 数据面) | 复用 K8s 运维体系 | VM 规模 >5000 台或特性瓶颈时评估自研 IaaS 面 |
+| 虚拟化 | 一期 **KubeVirt**(决策 D-03,EUECS 数据面) | 复用 K8s 运维体系 | VM 规模 >5000 台或特性瓶颈时评估自研 IaaS 面 |
 | 短信网关 | **外采**(双供应商热备) | 通道资源无差异化,自建需运营商对接成本 | 短信成本占营收 >2% 时评估直连运营商 |
 | 支付通道 | **外采**(支付宝/微信/银联) | 牌照与金融基础设施不可自建 | 不回迁,仅做聚合层自建 |
 | 实名认证 | **外采**持牌服务商 | 合规要求必须持牌 | 不回迁 |
@@ -846,7 +846,7 @@ flowchart TB
 **给管理层的十个关键事实**
 
 1. 商业闭环(账号→订单→计量→账单→欠费治理)是一期最高优先级,先于任何产品广度;
-2. 一期 9 个月交付 7 个可售产品(SCVPC/SCECS/SCBS/SCOSS/SCRDS/SCMON/SCEIP),二期扩至 10+,三期双地域+生态;
+2. 一期 9 个月交付 7 个可售产品(EUVPC/EUECS/EUBS/EUOSS/EURDS/EUMON/EUEIP),二期扩至 10+,三期双地域+生态;
 3. 产品策略 = 成熟开源内核 + 自研控制面/计量面,不做"从零发明存储或数据库";
 4. 技术栈锁定候选池:APISIX / Nacos / Kafka / MySQL(Vitess 分库分表)/ Redis / ClickHouse / K8s / MinIO / VictoriaMetrics+OTel+SkyWalking OAP / GitLab CI+ArgoCD,统一 Go/Kratos 后端;
 5. 组织从约 40 人起步,三期约 110 人;计费团队独立建制,K8s 与计费专家为不可替代关键岗;
@@ -866,7 +866,7 @@ flowchart TB
 | 《03-backend-services.md》 | 后端微服务划分与领域架构 | 商业化域/平台域模块与 API 规范依据 |
 | 《04-middleware-infrastructure.md》 | 中间件与基础设施架构 | 3.4 节部署规模与各阶段扩容路径依据 |
 | 《05-data-observability.md》 | 数据架构与可观测性体系 | 可观测基线里程碑与日志/监控产品化依据 |
-| 《06-kubernetes-productization.md》 | Kubernetes 容器平台与云服务产品化 | 一期云服务器(SCECS,KubeVirt 路线)与二期弹性容器实例(SCECI)的技术依据 |
+| 《06-kubernetes-productization.md》 | Kubernetes 容器平台与云服务产品化 | 一期云服务器(EUECS,KubeVirt 路线)与二期弹性容器实例(EUECI)的技术依据 |
 | 《07-security.md》 | 安全与权限体系 | IAM 里程碑、安全门禁与合规风险(R07)依据 |
 | 《08-devops-delivery.md》 | DevOps 与交付体系 | 发布列车(D-05)、GitOps 验收项与多地域 IaC 复制依据 |
 | 《10-research-and-selection-decisions.md》 | 技术选型研究与决策 | §7/§10 选型与对标启示引用来源;统一 Go 栈(决策 D-04)与 KubeVirt 路线(决策 D-03)依据 |

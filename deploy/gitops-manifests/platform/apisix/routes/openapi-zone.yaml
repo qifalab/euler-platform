@@ -1,30 +1,30 @@
-# APISIX route definitions — OpenAPI zone ({productCode}.api.starcloud.cn)
+# APISIX route definitions — OpenAPI zone ({productCode}.api.euler.emoera.com)
 #
 # Source of truth: 04-middleware-infrastructure.md §3.2/§3.3 (domain form and
 # route table), §3.5 (rate limiting), §3.7 (Nacos discovery); 07-security.md §5
 # (plugin chain order).
 #
 # Domain form is locked (04§3.2, adjudication S6):
-#   one product = one subdomain {productCode}.api.starcloud.cn
+#   one product = one subdomain {productCode}.api.euler.emoera.com
 #   RPC-style Action + date-type Version parameter
 #   the URI does NOT carry a version (no /v1/ prefix)
 #
 # Plugin chain order (07§5) — the order is load-bearing, each stage is cheaper
 # than the next so failing fast also sheds load under attack:
-#   ip-restriction → limit-req → sc-auth → sc-authorize → sc-audit → upstream
+#   ip-restriction → limit-req → eu-auth → eu-authorize → eu-audit → upstream
 #
 # Managed via ADC CLI + GitOps; there is no APISIX Dashboard in any environment
 # (04§3.9). Changes go through MR review like any other manifest.
 
 routes:
   # ---------------------------------------------------------------------------
-  # SCECS — 辰云服务器 (云服务器 VM)
+  # EUECS — 辰云服务器 (云服务器 VM)
   # ---------------------------------------------------------------------------
-  - id: openapi-scecs
-    name: openapi-compute-scecs          # {zone}-{domain}-{name} (04§3.3)
-    desc: SCECS OpenAPI entry; RPC Action + date Version
+  - id: openapi-euecs
+    name: openapi-compute-euecs          # {zone}-{domain}-{name} (04§3.3)
+    desc: EUECS OpenAPI entry; RPC Action + date Version
     hosts:
-      - scecs.api.starcloud.cn
+      - euecs.api.euler.emoera.com
     uris:
       - /*
     methods: [GET, POST]
@@ -34,7 +34,7 @@ routes:
     upstream:
       # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
       # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-scecs@@svc-scecs
+      service_name: svc-euecs@@svc-euecs
       discovery_type: nacos
       type: roundrobin
       timeout:
@@ -56,43 +56,43 @@ routes:
         rejected_code: 429
         rejected_msg: '{"Code":"Common.Throttling","Message":"request throttled"}'
 
-      sc-auth:
+      eu-auth:
         mode: signature
-        verify_endpoint: http://svc-iam.starcloud-svc-iam.svc:9101/internal/openapi/verify
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/openapi/verify
         # region/service are bound to the ROUTE. They participate in the
-        # derived signing key, so a signature scoped to scecs cannot be
-        # replayed against scoss (07§4.1).
+        # derived signing key, so a signature scoped to euecs cannot be
+        # replayed against euoss (07§4.1).
         region: cn-north-1
         service: ecs
         timeout_ms: 500
 
-      sc-authorize:
-        check_access_endpoint: http://svc-iam.starcloud-svc-iam.svc:9101/internal/authz/check
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
         # Action is multiplexed via the RPC-style Action parameter. The prefix
         # is pinned to this product so a caller cannot name another product's
         # action (04§3.2).
         action_from_query: Action
-        action_prefix: scecs
+        action_prefix: euecs
         region: cn-north-1
         timeout_ms: 500
 
       # Per-AK quota. The threshold rides in from the verify endpoint as
-      # X-Sc-Quota-Qps; the default here is the package floor (04§3.5).
+      # X-Euler-Quota-Qps; the default here is the package floor (04§3.5).
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes:
           - redis-shard-0-headless.mw-cache.svc:6379
           - redis-shard-1-headless.mw-cache.svc:6379
           - redis-shard-2-headless.mw-cache.svc:6379
-        redis_cluster_name: sc-redis-cluster
+        redis_cluster_name: eu-redis-cluster
         rejected_code: 429
         rejected_msg: '{"Code":"Common.Throttling","Message":"AK quota exceeded"}'
 
-      sc-audit:
+      eu-audit:
         topic: cloud.sys.audit.action
         brokers:
           - host: kafka-0.kafka-headless.mw-mq.svc
@@ -103,18 +103,18 @@ routes:
             port: 9092
 
   # ---------------------------------------------------------------------------
-  # SCOSS — 辰云对象存储
+  # EUOSS — 辰云对象存储
   #
   # Special case: the S3-compatible data plane is exempt from the RPC Action +
   # Version form (04§3.2) and passes through to the MinIO sell cluster with the
   # Host header preserved (virtual-host style addressing). Only the management
   # operations go through the standard control-plane chain.
   # ---------------------------------------------------------------------------
-  - id: openapi-scoss-control
-    name: openapi-storage-scoss-control
-    desc: SCOSS management operations (bucket CRUD, lifecycle rules, quota)
+  - id: openapi-euoss-control
+    name: openapi-storage-euoss-control
+    desc: EUOSS management operations (bucket CRUD, lifecycle rules, quota)
     hosts:
-      - scoss.api.starcloud.cn
+      - euoss.api.euler.emoera.com
     uris:
       - /
     methods: [GET, POST]
@@ -125,7 +125,7 @@ routes:
     upstream:
       # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
       # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-scoss@@svc-scoss
+      service_name: svc-euoss@@svc-euoss
       discovery_type: nacos
       type: roundrobin
       timeout: { connect: 2, send: 5, read: 5 }
@@ -136,36 +136,36 @@ routes:
         key_type: var
         key: remote_addr
         rejected_code: 429
-      sc-auth:
+      eu-auth:
         mode: signature
         region: cn-north-1
         service: oss
-      sc-authorize:
+      eu-authorize:
         action_from_query: Action
-        action_prefix: scoss
+        action_prefix: euoss
         region: cn-north-1
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
-      sc-audit:
+        redis_cluster_name: eu-redis-cluster
+      eu-audit:
         brokers:
           - { host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }
 
-  - id: openapi-scoss-data
-    name: openapi-storage-scoss-data
+  - id: openapi-euoss-data
+    name: openapi-storage-euoss-data
     desc: >
-      SCOSS S3-compatible data plane. Passes through to the MinIO sell cluster
+      EUOSS S3-compatible data plane. Passes through to the MinIO sell cluster
       with the Host header preserved. Signature verification is MinIO's own
-      SigV4 (S3 ecosystem compatibility, 04§9.4) — NOT CPS1 — so sc-auth does
+      SigV4 (S3 ecosystem compatibility, 04§9.4) — NOT CPS1 — so eu-auth does
       not run here. This is the one documented exemption from the platform
       signature contract (04§3.2).
     hosts:
-      - scoss.api.starcloud.cn
+      - euoss.api.euler.emoera.com
     uris:
       - /*
     upstream:
@@ -183,135 +183,135 @@ routes:
         rejected_code: 429
 
   # ---------------------------------------------------------------------------
-  # SCRDS / SCVPC / SCBS / SCEIP / SCMON
+  # EURDS / EUVPC / EUBS / EUEIP / EUMON
   #
-  # Same shape as SCECS; each product gets its own subdomain, its own Nacos
+  # Same shape as EUECS; each product gets its own subdomain, its own Nacos
   # service, and an action_prefix pinned to its product code. Adding a product
   # is filling this template (01§7.3 "填槽" onboarding checklist step 5).
   # ---------------------------------------------------------------------------
-  - id: openapi-scrds
-    name: openapi-database-scrds
-    hosts: [scrds.api.starcloud.cn]
+  - id: openapi-eurds
+    name: openapi-database-eurds
+    hosts: [eurds.api.euler.emoera.com]
     uris: [/*]
     upstream:
       # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
       # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-scrds@@svc-scrds
+      service_name: svc-eurds@@svc-eurds
       discovery_type: nacos
       type: roundrobin
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      sc-auth: { mode: signature, region: cn-north-1, service: rds }
-      sc-authorize: { action_from_query: Action, action_prefix: scrds, region: cn-north-1 }
+      eu-auth: { mode: signature, region: cn-north-1, service: rds }
+      eu-authorize: { action_from_query: Action, action_prefix: eurds, region: cn-north-1 }
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
-      sc-audit:
+        redis_cluster_name: eu-redis-cluster
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
-  - id: openapi-scvpc
-    name: openapi-network-scvpc
-    hosts: [scvpc.api.starcloud.cn]
+  - id: openapi-euvpc
+    name: openapi-network-euvpc
+    hosts: [euvpc.api.euler.emoera.com]
     uris: [/*]
     upstream:
       # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
       # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-scvpc@@svc-scvpc
+      service_name: svc-euvpc@@svc-euvpc
       discovery_type: nacos
       type: roundrobin
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      sc-auth: { mode: signature, region: cn-north-1, service: vpc }
-      sc-authorize: { action_from_query: Action, action_prefix: scvpc, region: cn-north-1 }
+      eu-auth: { mode: signature, region: cn-north-1, service: vpc }
+      eu-authorize: { action_from_query: Action, action_prefix: euvpc, region: cn-north-1 }
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
-      sc-audit:
+        redis_cluster_name: eu-redis-cluster
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
-  - id: openapi-scbs
-    name: openapi-storage-scbs
-    hosts: [scbs.api.starcloud.cn]
+  - id: openapi-eubs
+    name: openapi-storage-eubs
+    hosts: [eubs.api.euler.emoera.com]
     uris: [/*]
     upstream:
       # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
       # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-scbs@@svc-scbs
+      service_name: svc-eubs@@svc-eubs
       discovery_type: nacos
       type: roundrobin
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      sc-auth: { mode: signature, region: cn-north-1, service: bs }
-      sc-authorize: { action_from_query: Action, action_prefix: scbs, region: cn-north-1 }
+      eu-auth: { mode: signature, region: cn-north-1, service: bs }
+      eu-authorize: { action_from_query: Action, action_prefix: eubs, region: cn-north-1 }
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
-      sc-audit:
+        redis_cluster_name: eu-redis-cluster
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
-  - id: openapi-sceip
-    name: openapi-network-sceip
-    hosts: [sceip.api.starcloud.cn]
+  - id: openapi-eueip
+    name: openapi-network-eueip
+    hosts: [eueip.api.euler.emoera.com]
     uris: [/*]
     upstream:
       # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
       # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-sceip@@svc-sceip
+      service_name: svc-eueip@@svc-eueip
       discovery_type: nacos
       type: roundrobin
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      sc-auth: { mode: signature, region: cn-north-1, service: eip }
-      sc-authorize: { action_from_query: Action, action_prefix: sceip, region: cn-north-1 }
+      eu-auth: { mode: signature, region: cn-north-1, service: eip }
+      eu-authorize: { action_from_query: Action, action_prefix: eueip, region: cn-north-1 }
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
-      sc-audit:
+        redis_cluster_name: eu-redis-cluster
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
-  - id: openapi-scmon
-    name: openapi-monitor-scmon
-    hosts: [scmon.api.starcloud.cn]
+  - id: openapi-eumon
+    name: openapi-monitor-eumon
+    hosts: [eumon.api.euler.emoera.com]
     uris: [/*]
     upstream:
       # Real cluster Service (svc-monitor listens :9202; namespace from the
-      # ApplicationSet: starcloud-svc-monitor).
+      # ApplicationSet: euler-svc-monitor).
       nodes:
-        "svc-monitor.starcloud-svc-monitor.svc:9202": 1
+        "svc-monitor.euler-svc-monitor.svc:9202": 1
       type: roundrobin
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      sc-auth: { mode: signature, region: cn-north-1, service: monitor }
-      sc-authorize: { action_from_query: Action, action_prefix: scmon, region: cn-north-1 }
+      eu-auth: { mode: signature, region: cn-north-1, service: monitor }
+      eu-authorize: { action_from_query: Action, action_prefix: eumon, region: cn-north-1 }
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
-        redis_cluster_name: sc-redis-cluster
-      sc-audit:
+        redis_cluster_name: eu-redis-cluster
+      eu-audit:
         brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
 
 # Global rules applied to every route in this zone (04§3.1).

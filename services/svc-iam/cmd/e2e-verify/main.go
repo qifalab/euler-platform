@@ -17,14 +17,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/starcloud/sc-platform/cps1"
+	"github.com/qifalab/euler-platform/cps1"
 )
 
 const (
 	endpoint = "http://127.0.0.1:9101/internal/openapi/verify"
 	region   = "cn-north-1"
 	service  = "ecs"
-	host     = "scecs.api.starcloud.cn"
+	host     = "euecs.api.euler.emoera.com"
 )
 
 type verifyRequest struct {
@@ -39,10 +39,10 @@ type verifyRequest struct {
 }
 
 func main() {
-	ak := os.Getenv("SC_AK")
-	sk := os.Getenv("SC_SK")
+	ak := os.Getenv("EULER_AK")
+	sk := os.Getenv("EULER_SK")
 	if ak == "" || sk == "" {
-		fmt.Println("SC_AK and SC_SK must be set (printed by the server on boot)")
+		fmt.Println("EULER_AK and EULER_SK must be set (printed by the server on boot)")
 		os.Exit(1)
 	}
 

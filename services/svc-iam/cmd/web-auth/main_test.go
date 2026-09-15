@@ -20,7 +20,7 @@ import (
 // matching main()'s seed. Tests share this process-global state (the handlers
 // are in-memory and stdlib-HTTP, same as the rest of web-auth's tests).
 func TestMain(m *testing.M) {
-	seedAccount(100123, "admin@starcloud.cn", "种子管理员", "starcloud123")
+	seedAccount(100123, "admin@euler.emoera.com", "种子管理员", "euler123")
 	seedRAMRolesPolicies(100123)
 	os.Exit(m.Run())
 }
@@ -58,7 +58,7 @@ func doAuth(t *testing.T, method, path string, body any) (int, map[string]any) {
 	}
 	req := httptest.NewRequest(method, path, rdr)
 	req.Header.Set("Authorization", "Bearer "+authToken(t))
-	req.Header.Set("X-Sc-TraceId", "t")
+	req.Header.Set("X-Euler-TraceId", "t")
 	rr := httptest.NewRecorder()
 	newTestAuthMux(t).ServeHTTP(rr, req)
 	var out map[string]any
@@ -111,22 +111,22 @@ func TestRAMPoliciesListSeeded(t *testing.T) {
 			names[pm["name"].(string)] = true
 		}
 	}
-	if !names["ScEcsFullAccess"] {
-		t.Error("ScEcsFullAccess system policy missing")
+	if !names["EuEcsFullAccess"] {
+		t.Error("EuEcsFullAccess system policy missing")
 	}
-	if !names["ScReadOnlyAccess"] {
-		t.Error("ScReadOnlyAccess system policy missing")
+	if !names["EuReadOnlyAccess"] {
+		t.Error("EuReadOnlyAccess system policy missing")
 	}
 }
 
 func TestSimulateAllow(t *testing.T) {
-	// ScEcsFullAccess allows scecs:* on *. The verdict must name the allow
+	// EuEcsFullAccess allows euecs:* on *. The verdict must name the allow
 	// statement and the policy.
 	code, out := doAuth(t, "POST", "/api/ram/simulate", map[string]any{
 		"principal": "ops-admin",
-		"policies":  []string{"ScEcsFullAccess"},
-		"action":    "scecs:StartInstance",
-		"resource":  "sc:ecs:cn-north-1:100123:instance/i-1",
+		"policies":  []string{"EuEcsFullAccess"},
+		"action":    "euecs:StartInstance",
+		"resource":  "eu:ecs:cn-north-1:100123:instance/i-1",
 	})
 	if code != 200 {
 		t.Fatalf("simulate: code %d body %v", code, out)
@@ -138,16 +138,16 @@ func TestSimulateAllow(t *testing.T) {
 	if d["reason"] != "allow" {
 		t.Errorf("reason = %v, want allow", d["reason"])
 	}
-	if d["decidingPolicy"] != "ScEcsFullAccess" {
-		t.Errorf("decidingPolicy = %v, want ScEcsFullAccess", d["decidingPolicy"])
+	if d["decidingPolicy"] != "EuEcsFullAccess" {
+		t.Errorf("decidingPolicy = %v, want EuEcsFullAccess", d["decidingPolicy"])
 	}
 }
 
 func TestSimulateExplicitDenyWins(t *testing.T) {
-	// Create a custom policy that DENIES scecs:DeleteInstance, then simulate
-	// with both it and ScEcsFullAccess: the explicit Deny must win, and the
+	// Create a custom policy that DENIES euecs:DeleteInstance, then simulate
+	// with both it and EuEcsFullAccess: the explicit Deny must win, and the
 	// verdict must name the DENY policy as the deciding one.
-	denyDoc := `{"Version":"1","Statement":[{"Effect":"Deny","Action":"scecs:DeleteInstance","Resource":"*"}]}`
+	denyDoc := `{"Version":"1","Statement":[{"Effect":"Deny","Action":"euecs:DeleteInstance","Resource":"*"}]}`
 	if code, _ := doAuth(t, "POST", "/api/ram/policies", map[string]any{
 		"name": "DenyDelete", "document": denyDoc,
 	}); code != 201 {
@@ -155,9 +155,9 @@ func TestSimulateExplicitDenyWins(t *testing.T) {
 	}
 	code, out := doAuth(t, "POST", "/api/ram/simulate", map[string]any{
 		"principal": "ops-admin",
-		"policies":  []string{"ScEcsFullAccess", "DenyDelete"},
-		"action":    "scecs:DeleteInstance",
-		"resource":  "sc:ecs:cn-north-1:100123:instance/i-1",
+		"policies":  []string{"EuEcsFullAccess", "DenyDelete"},
+		"action":    "euecs:DeleteInstance",
+		"resource":  "eu:ecs:cn-north-1:100123:instance/i-1",
 	})
 	if code != 200 {
 		t.Fatalf("simulate: code %d body %v", code, out)
@@ -175,13 +175,13 @@ func TestSimulateExplicitDenyWins(t *testing.T) {
 }
 
 func TestSimulateDefaultDeny(t *testing.T) {
-	// ScReadOnlyAccess only allows Describe*/List*. StartInstance matches
+	// EuReadOnlyAccess only allows Describe*/List*. StartInstance matches
 	// nothing → default_deny, with no deciding statement/policy.
 	code, out := doAuth(t, "POST", "/api/ram/simulate", map[string]any{
 		"principal": "dev-ro",
-		"policies":  []string{"ScReadOnlyAccess"},
-		"action":    "scecs:StartInstance",
-		"resource":  "sc:ecs:cn-north-1:100123:instance/i-1",
+		"policies":  []string{"EuReadOnlyAccess"},
+		"action":    "euecs:StartInstance",
+		"resource":  "eu:ecs:cn-north-1:100123:instance/i-1",
 	})
 	if code != 200 {
 		t.Fatalf("simulate: code %d body %v", code, out)
@@ -206,8 +206,8 @@ func TestSimulateRejectsUnknownPolicy(t *testing.T) {
 	code, out := doAuth(t, "POST", "/api/ram/simulate", map[string]any{
 		"principal": "x",
 		"policies":  []string{"DoesNotExist"},
-		"action":    "scecs:StartInstance",
-		"resource":  "sc:ecs:cn-north-1:100123:i/1",
+		"action":    "euecs:StartInstance",
+		"resource":  "eu:ecs:cn-north-1:100123:i/1",
 	})
 	if code != 404 {
 		t.Fatalf("unknown policy: code %d, want 404 (body %v)", code, out)
@@ -232,7 +232,7 @@ func TestCreatePolicyRejectsMalformedDocument(t *testing.T) {
 // TestChangePasswordInvalidatesOldTokensAndSessions covers the tokenVersion
 // bump + session revocation on password change, and the atomic read-modify-write.
 func TestChangePasswordInvalidatesOldTokensAndSessions(t *testing.T) {
-	seedAccount(200001, "pwtest@starcloud.cn", "改密用户", "oldpass12345")
+	seedAccount(200001, "pwtest@euler.emoera.com", "改密用户", "oldpass12345")
 	mu.RLock()
 	a := byID[200001]
 	mu.RUnlock()
@@ -290,7 +290,7 @@ func TestChangePasswordInvalidatesOldTokensAndSessions(t *testing.T) {
 
 // TestRefreshRejectsDisabledAccount covers the live-status recheck on refresh.
 func TestRefreshRejectsDisabledAccount(t *testing.T) {
-	seedAccount(200002, "frozen@starcloud.cn", "冻结用户", "somepass1234")
+	seedAccount(200002, "frozen@euler.emoera.com", "冻结用户", "somepass1234")
 	mu.Lock()
 	a := byID[200002]
 	sessions["frozen-refresh"] = &session{account: a, refreshToken: "frozen-refresh", refreshExp: time.Now().Add(time.Hour)}
@@ -300,7 +300,7 @@ func TestRefreshRejectsDisabledAccount(t *testing.T) {
 	mu.Unlock()
 
 	req := httptest.NewRequest("POST", "/api/auth/refresh", nil)
-	req.AddCookie(&http.Cookie{Name: "sc_refresh", Value: "frozen-refresh"})
+	req.AddCookie(&http.Cookie{Name: "eu_refresh", Value: "frozen-refresh"})
 	rr := httptest.NewRecorder()
 	requestIDMiddleware(http.HandlerFunc(handleRefresh)).ServeHTTP(rr, req)
 	if rr.Code != 401 {
@@ -317,7 +317,7 @@ func TestRefreshRejectsDisabledAccount(t *testing.T) {
 // TestRotateUsesEnabledCount covers the rotate limit switching to countEnabled:
 // 2 AKs with one disabled must still allow rotation of the enabled one.
 func TestRotateUsesEnabledCount(t *testing.T) {
-	seedAccount(200003, "rotate@starcloud.cn", "轮换用户", "somepass1234")
+	seedAccount(200003, "rotate@euler.emoera.com", "轮换用户", "somepass1234")
 	mu.Lock()
 	a := byID[200003]
 	_, _, k1 := issueAccessKey()

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // clock is a mutable test clock: the Manager reads it through a closure, so a
@@ -69,17 +69,17 @@ func TestSQLStoreDefinitionRoundTrip(t *testing.T) {
 		t.Fatalf("unknown code = %v, want ErrUnknownQuota", err)
 	}
 
-	seedDefinition(t, db, "quota_scecs_instance", "scecs", 20, "REGION", 1)
-	def, err := store.GetDefinition("quota_scecs_instance")
+	seedDefinition(t, db, "quota_euecs_instance", "euecs", 20, "REGION", 1)
+	def, err := store.GetDefinition("quota_euecs_instance")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.ProductCode != "scecs" || def.DefaultValue != 20 || def.Scope != ScopeRegion || !def.Adjustable {
+	if def.ProductCode != "euecs" || def.DefaultValue != 20 || def.Scope != ScopeRegion || !def.Adjustable {
 		t.Fatalf("definition round trip = %+v", def)
 	}
 
-	seedDefinition(t, db, "quota_scoss_bucket", "scoss", 100, "GLOBAL", 0)
-	def, err = store.GetDefinition("quota_scoss_bucket")
+	seedDefinition(t, db, "quota_euoss_bucket", "euoss", 100, "GLOBAL", 0)
+	def, err = store.GetDefinition("quota_euoss_bucket")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestSQLStoreDefinitionRoundTrip(t *testing.T) {
 
 	// A scope the domain does not know is schema drift; guessing at it would
 	// silently change whether the counter is per-region.
-	seedDefinition(t, db, "quota_weird", "scoss", 5, "CONTINENT", 1)
+	seedDefinition(t, db, "quota_weird", "euoss", 5, "CONTINENT", 1)
 	if _, err := store.GetDefinition("quota_weird"); err == nil {
 		t.Fatal("an unknown scope must be rejected, not guessed")
 	}
@@ -100,7 +100,7 @@ func TestSQLStoreUsageCreateAndRead(t *testing.T) {
 
 	// No row yet: version 0 and zeros, so the Manager can lazily build it from
 	// the definition.
-	u, err := store.GetUsage(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err := store.GetUsage(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestSQLStoreUsageCreateAndRead(t *testing.T) {
 	if err := store.UpdateUsage(u, 0); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.GetUsage(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	got, err := store.GetUsage(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,18 +132,18 @@ func TestSQLStoreUpdatesSeededVersionZeroRow(t *testing.T) {
 	if _, err := db.Exec(
 		`INSERT INTO quota_usage (account_id, quota_code, region, used, occupying, hard_limit, version)
 		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
-		sqlAcct, "quota_scecs_instance", "cn-north-1", 5, 0, 20); err != nil {
+		sqlAcct, "quota_euecs_instance", "cn-north-1", 5, 0, 20); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := store.UpdateUsage(Usage{
-		AccountID: sqlAcct, QuotaCode: "quota_scecs_instance", Region: "cn-north-1",
+		AccountID: sqlAcct, QuotaCode: "quota_euecs_instance", Region: "cn-north-1",
 		Used: 5, Occupying: 2, HardLimit: 20,
 	}, 0); err != nil {
 		t.Fatalf("first reserve against a seeded row failed: %v", err)
 	}
 
-	got, err := store.GetUsage(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	got, err := store.GetUsage(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestSQLStoreUpdatesSeededVersionZeroRow(t *testing.T) {
 	var rows int
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM quota_usage WHERE account_id = ? AND quota_code = ? AND region = ?`,
-		sqlAcct, "quota_scecs_instance", "cn-north-1").Scan(&rows); err != nil {
+		sqlAcct, "quota_euecs_instance", "cn-north-1").Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 1 {
@@ -164,7 +164,7 @@ func TestSQLStoreUpdatesSeededVersionZeroRow(t *testing.T) {
 func TestSQLStoreVersionConflictDetected(t *testing.T) {
 	store, _, _, _ := newSQLQuota(t)
 
-	u := Usage{AccountID: sqlAcct, QuotaCode: "quota_scecs_instance", Region: "cn-north-1", HardLimit: 20, Occupying: 1}
+	u := Usage{AccountID: sqlAcct, QuotaCode: "quota_euecs_instance", Region: "cn-north-1", HardLimit: 20, Occupying: 1}
 	if err := store.UpdateUsage(u, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestSQLStoreVersionConflictDetected(t *testing.T) {
 		t.Fatalf("conflict invisible to storage.WithVersionRetry: %v", err)
 	}
 
-	got, err := store.GetUsage(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	got, err := store.GetUsage(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestSQLStoreTokenLifecycle(t *testing.T) {
 	}
 
 	tok := Token{
-		TokenID: "qt-1", AccountID: sqlAcct, QuotaCode: "quota_scecs_instance",
+		TokenID: "qt-1", AccountID: sqlAcct, QuotaCode: "quota_euecs_instance",
 		Region: "cn-north-1", Amount: 3, BizKey: "ord-1",
 		ExpiresAt: base.Add(DefaultTokenTTL), CreatedAt: base,
 	}
@@ -244,7 +244,7 @@ func TestSQLStoreListExpiredTokens(t *testing.T) {
 	put := func(id string, created time.Time, expires time.Time) {
 		t.Helper()
 		if err := store.PutToken(Token{
-			TokenID: id, AccountID: sqlAcct, QuotaCode: "quota_scecs_instance",
+			TokenID: id, AccountID: sqlAcct, QuotaCode: "quota_euecs_instance",
 			Region: "cn-north-1", Amount: 1, BizKey: "ord", ExpiresAt: expires, CreatedAt: created,
 		}); err != nil {
 			t.Fatal(err)
@@ -270,13 +270,13 @@ func TestSQLStoreListExpiredTokens(t *testing.T) {
 // against the real schema, including the counter arithmetic the UI reads.
 func TestSQLStoreOccupyCommitDescribe(t *testing.T) {
 	store, db, m, _ := newSQLQuota(t)
-	seedDefinition(t, db, "quota_scecs_instance", "scecs", 20, "REGION", 1)
+	seedDefinition(t, db, "quota_euecs_instance", "euecs", 20, "REGION", 1)
 
-	tok, err := m.CheckAndOccupy(sqlAcct, "quota_scecs_instance", "cn-north-1", 3, "ord-1")
+	tok, err := m.CheckAndOccupy(sqlAcct, "quota_euecs_instance", "cn-north-1", 3, "ord-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := m.Describe(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err := m.Describe(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestSQLStoreOccupyCommitDescribe(t *testing.T) {
 	if err := m.CommitOccupy(tok.TokenID); err != nil {
 		t.Fatal(err)
 	}
-	u, err = m.Describe(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err = m.Describe(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestSQLStoreOccupyCommitDescribe(t *testing.T) {
 // test on real MySQL: the last slot is guarded by a row lock, not a mutex.
 func TestSQLStoreConcurrentOccupyCannotOversell(t *testing.T) {
 	_, db, m, _ := newSQLQuota(t)
-	seedDefinition(t, db, "quota_scecs_instance", "scecs", 1, "REGION", 1)
+	seedDefinition(t, db, "quota_euecs_instance", "euecs", 1, "REGION", 1)
 
 	const goroutines = 8
 	var (
@@ -318,7 +318,7 @@ func TestSQLStoreConcurrentOccupyCannotOversell(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			tok, err := m.CheckAndOccupy(sqlAcct, "quota_scecs_instance", "cn-north-1", 1, fmt.Sprintf("ord-%d", i))
+			tok, err := m.CheckAndOccupy(sqlAcct, "quota_euecs_instance", "cn-north-1", 1, fmt.Sprintf("ord-%d", i))
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -334,7 +334,7 @@ func TestSQLStoreConcurrentOccupyCannotOversell(t *testing.T) {
 	if len(created) != 1 {
 		t.Fatalf("%d of %d occupies succeeded against a limit of 1 (errors: %v)", len(created), goroutines, errs)
 	}
-	u, err := m.Describe(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err := m.Describe(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,9 +353,9 @@ func TestSQLStoreConcurrentOccupyCannotOversell(t *testing.T) {
 // back on its own, or customers are refused while the capacity sits idle.
 func TestSQLStoreSweepReturnsCapacity(t *testing.T) {
 	store, db, m, c := newSQLQuota(t)
-	seedDefinition(t, db, "quota_scecs_instance", "scecs", 2, "REGION", 1)
+	seedDefinition(t, db, "quota_euecs_instance", "euecs", 2, "REGION", 1)
 
-	tok, err := m.CheckAndOccupy(sqlAcct, "quota_scecs_instance", "cn-north-1", 2, "ord-1")
+	tok, err := m.CheckAndOccupy(sqlAcct, "quota_euecs_instance", "cn-north-1", 2, "ord-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestSQLStoreSweepReturnsCapacity(t *testing.T) {
 	if swept != 1 {
 		t.Fatalf("swept %d tokens, want 1", swept)
 	}
-	u, err := m.Describe(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err := m.Describe(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestSQLStoreSweepReturnsCapacity(t *testing.T) {
 	if err := m.CommitOccupy(tok.TokenID); !errors.Is(err, ErrTokenNotFound) {
 		t.Fatalf("commit after sweep = %v, want ErrTokenNotFound", err)
 	}
-	u, err = m.Describe(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err = m.Describe(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,9 +399,9 @@ func TestSQLStoreSweepReturnsCapacity(t *testing.T) {
 // sweep claims the token between the read and the delete.
 func TestSQLStoreReleaseIsIdempotent(t *testing.T) {
 	_, db, m, _ := newSQLQuota(t)
-	seedDefinition(t, db, "quota_scecs_instance", "scecs", 5, "REGION", 1)
+	seedDefinition(t, db, "quota_euecs_instance", "euecs", 5, "REGION", 1)
 
-	tok, err := m.CheckAndOccupy(sqlAcct, "quota_scecs_instance", "cn-north-1", 2, "ord-1")
+	tok, err := m.CheckAndOccupy(sqlAcct, "quota_euecs_instance", "cn-north-1", 2, "ord-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestSQLStoreReleaseIsIdempotent(t *testing.T) {
 	if err := m.ReleaseOccupy(tok.TokenID); err != nil {
 		t.Fatalf("second release = %v, want nil", err)
 	}
-	u, err := m.Describe(sqlAcct, "quota_scecs_instance", "cn-north-1")
+	u, err := m.Describe(sqlAcct, "quota_euecs_instance", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,9 +425,9 @@ func TestSQLStoreReleaseIsIdempotent(t *testing.T) {
 // or the two rows drift apart and the released capacity is never usable.
 func TestSQLStoreGlobalScopeUsesStarRegion(t *testing.T) {
 	store, db, m, _ := newSQLQuota(t)
-	seedDefinition(t, db, "quota_scoss_bucket", "scoss", 3, "GLOBAL", 0)
+	seedDefinition(t, db, "quota_euoss_bucket", "euoss", 3, "GLOBAL", 0)
 
-	tok, err := m.CheckAndOccupy(sqlAcct, "quota_scoss_bucket", "cn-north-1", 3, "ord-1")
+	tok, err := m.CheckAndOccupy(sqlAcct, "quota_euoss_bucket", "cn-north-1", 3, "ord-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,14 +438,14 @@ func TestSQLStoreGlobalScopeUsesStarRegion(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The counter must live on the "*" row, not on a cn-north-1 row.
-	u, err := store.GetUsage(sqlAcct, "quota_scoss_bucket", "*")
+	u, err := store.GetUsage(sqlAcct, "quota_euoss_bucket", "*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.Used != 3 {
 		t.Fatalf("global usage = %+v, want used 3 under *", u)
 	}
-	regional, err := store.GetUsage(sqlAcct, "quota_scoss_bucket", "cn-north-1")
+	regional, err := store.GetUsage(sqlAcct, "quota_euoss_bucket", "cn-north-1")
 	if err != nil {
 		t.Fatal(err)
 	}

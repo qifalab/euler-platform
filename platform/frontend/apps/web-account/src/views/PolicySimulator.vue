@@ -31,8 +31,8 @@ const policies = reactive<PolicyOption[]>([]);
 const form = reactive({
   principal: "ops-admin",
   selected: [] as string[],
-  action: "scecs:StartInstance",
-  resource: "sc:ecs:cn-north-1:100123:instance/i-1",
+  action: "euecs:StartInstance",
+  resource: "eu:ecs:cn-north-1:100123:instance/i-1",
 });
 
 interface Verdict {
@@ -133,10 +133,10 @@ const reasonLabel: Record<string, string> = {
             <ElInput v-model="form.principal" placeholder="如 ops-admin（仅用于展示/审计）" />
           </ElFormItem>
           <ElFormItem label="操作（Action）">
-            <ElInput v-model="form.action" placeholder="如 scecs:StartInstance" />
+            <ElInput v-model="form.action" placeholder="如 euecs:StartInstance" />
           </ElFormItem>
           <ElFormItem label="资源（Resource）">
-            <ElInput v-model="form.resource" placeholder="如 sc:ecs:cn-north-1:100123:instance/i-1" />
+            <ElInput v-model="form.resource" placeholder="如 eu:ecs:cn-north-1:100123:instance/i-1" />
           </ElFormItem>
           <ElFormItem label="评估策略">
             <ElCheckboxGroup v-model="form.selected">
@@ -145,7 +145,7 @@ const reasonLabel: Record<string, string> = {
                 <ElTag size="small" effect="plain" style="margin-left: 6px">{{ p.type }}</ElTag>
               </ElCheckbox>
             </ElCheckboxGroup>
-            <span v-if="policies.length === 0" style="color: var(--sc-text-disabled)">暂无策略</span>
+            <span v-if="policies.length === 0" style="color: var(--eu-text-disabled)">暂无策略</span>
           </ElFormItem>
           <ElButton type="primary" :loading="loading" @click="run">模拟求值</ElButton>
         </section>
@@ -181,28 +181,28 @@ const reasonLabel: Record<string, string> = {
 
 <style scoped>
 .simulator-page {
-  padding: var(--sc-spacing-6);
-  min-height: calc(100vh - var(--sc-topbar-height));
+  padding: var(--eu-spacing-6);
+  min-height: calc(100vh - var(--eu-topbar-height));
 }
-.page-header { margin-bottom: var(--sc-spacing-6); }
+.page-header { margin-bottom: var(--eu-spacing-6); }
 .heading { display: flex; flex-direction: column; gap: 6px; }
-.page-title { margin: 0; font-size: 22px; font-weight: 600; color: var(--sc-text-primary); }
-.page-desc { margin: 0; font-size: 13px; color: var(--sc-text-secondary); line-height: 1.5; }
-.sim-layout { display: grid; grid-template-columns: 1fr 320px; gap: var(--sc-spacing-5); }
+.page-title { margin: 0; font-size: 22px; font-weight: 600; color: var(--eu-text-primary); }
+.page-desc { margin: 0; font-size: 13px; color: var(--eu-text-secondary); line-height: 1.5; }
+.sim-layout { display: grid; grid-template-columns: 1fr 320px; gap: var(--eu-spacing-5); }
 .sim-form, .sim-result {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-5);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-5);
 }
 .sim-result h2 { font-size: 15px; margin: 0 0 16px; }
 .verdict-row {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 0; border-bottom: 1px solid var(--sc-border); font-size: 13px;
+  padding: 10px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px;
 }
-.verdict-row .label { color: var(--sc-text-secondary); }
-.empty-hint { color: var(--sc-text-disabled); font-size: 13px; margin: 0; }
+.verdict-row .label { color: var(--eu-text-secondary); }
+.empty-hint { color: var(--eu-text-disabled); font-size: 13px; margin: 0; }
 </style>

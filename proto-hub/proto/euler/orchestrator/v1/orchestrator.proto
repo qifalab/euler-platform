@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package euler.orchestrator.v1;
+
+option go_package = "github.com/qifalab/euler-platform/proto/euler/orchestrator/v1;orchestratorv1";
+
+// OrchestratorService is the resource orchestration & lifecycle service
+// (03§4.3.1). It is the SOLE owner of the resource ledger resource_instance
+// (03§6.2) and the single write-entry of the resource state machine — every
+// state transition happens here and nowhere else (K8s phase is observability
+// only).
+//
+// Responsibilities: ① decompose a paid order into a resource operation
+// sequence and drive its execution (履约); ② consume cloud.trade.order.event
+// as input; ③ receive async callbacks from rc-* controllers (idempotent);
+// ④ 启停/重启 instruction passthrough; ⑤ IaC template orchestration (对标 ROS,
+// phase 2); ⑥ failure compensation & timeout reclaim (03§4.3.1).
+service OrchestratorService {
+  // FulfillOrder decomposes a paid order (PAID) into a resource operation
+  // sequence and starts a workflow to drive it. Idempotent — a repeated
+  // fulfill for the same order returns the already-started flow id.
+  // Source: 03§4.3.1 / 03§5.3 step 12.
+  rpc FulfillOrder(FulfillOrderRequest) returns (FulfillOrderResponse);
+
+  // OnResourceCallback is the async callback entry from rc-* controllers
+  // (e.g. "resource_id, RUNNING"). Idempotent: the state machine transition
+  // SQL carries a precondition status + version, so duplicate callbacks are
+  // naturally no-ops (affected_rows=0). Callback vs 30s polling race — first
+  // arrival wins (03§4.3.1 / 03§5.3 step 13-16).
+  rpc OnResourceCallback(OnResourceCallbackRequest) returns (Ack);
+
+  // OperateResource is a 启停/重启 instruction passthrough to the resource
+  // controller. Maps to OpenAPI Action e.g. euecs:StartInstance/StopInstance/
+  // RestartInstance (03§4.3.1).
+  rpc OperateResource(OperateResourceRequest) returns (Ack);
+
+  // DescribeResourceStatus returns the authoritative resource instance state
+  // from the ledger. Maps to Quota-style Describe... console query; the
+  // console/BFF reads from here, never from the controller directly.
+  rpc DescribeResourceStatus(DescribeResourceStatusRequest) returns (ResourceInstance);
+}
+
+// Ack is a generic success acknowledgment; carries no data beyond success.
+// All business effects are idempotent per 03§8.3.
+message Ack {}
+
+// ResourceInstance mirrors resource_db.resource_instance (03§6.2). The
+// resource ledger row; status is the single source of truth for resource
+// lifecycle (03§5.2). The state machine transitions map 1:1 to the enum below.
+message ResourceInstance {
+  string resource_id = 1;          // euecs-cn-north-1-01-a1b2c3d4, globally unique, embeds 2-bit shard factor
+  int64 account_id = 2;            // ≡ tenant_id (全局标识规范)
+  int64 project_id = 3;            // 项目归属; 0 = default project (03§4.1.2)
+  string product_code = 4;         // eu-prefixed, e.g. euecs
+  string resource_type = 5;        // e.g. ecs / disk / vpc / rds
+  string region = 6;               // e.g. cn-north-1
+  string charge_type = 7;          // prepaid | postpaid (包年包月/按量)
+  ResourceStatus status = 8;
+  string spec_code = 9;            // 规格快照 (03§6.2)
+  int64 order_id = 10;             // originating order, empty for续费/变配
+  int64 billing_start = 11;        // RUNNING moment — 计费起点, 按量从此刻开始 (03§5.3)
+  int64 expired_at = 12;           // prepaid 到期时间
+  int64 locked_at = 13;            // 欠费停服锁定时间
+  int64 released_at = 14;
+  int32 version = 15;              // state machine optimistic-lock version
+}
+
+// ResourceStatus mirrors the state machine in 03§5.2. Order is significant;
+// intermediate states (CREATING/UPGRADING/RELEASING) are guarded by timeouts
+// (15min/30min/30min) driven by svc-workflow timers (03§5.2 rule 2).
+enum ResourceStatus {
+  RESOURCE_STATUS_UNSPECIFIED = 0;
+  RESOURCE_STATUS_INIT = 1;
+  RESOURCE_STATUS_CREATING = 2;
+  RESOURCE_STATUS_RUNNING = 3;
+  RESOURCE_STATUS_STOPPED = 4;
+  RESOURCE_STATUS_UPGRADING = 5;
+  RESOURCE_STATUS_LOCKED = 6;       // 欠费停服锁定, data retained
+  RESOURCE_STATUS_EXPIRED = 7;      // prepaid 到期
+  RESOURCE_STATUS_RELEASING = 8;
+  RESOURCE_STATUS_RELEASED = 9;     // 终态不可逆, audit-retained
+  RESOURCE_STATUS_CREATE_FAILED = 10; // 终态(已回滚), audit-retained
+}
+
+message FulfillOrderRequest {
+  int64 order_id = 1;               // the PAID order to fulfill
+  int64 account_id = 2;             // redundant shard key
+  string product_code = 3;
+  string charge_type = 4;           // prepaid | postpaid
+  // client_token is the idempotency key propagated from the order (03§6.3);
+  // a repeated FulfillOrder with the same token returns the existing flow id.
+  string client_token = 5;
+}
+
+message FulfillOrderResponse {
+  int64 flow_instance_id = 1;       // the svc-workflow flow driving this fulfillment
+  // True when the flow was already started by a previous (duplicate) request.
+  bool already_started = 2;
+}
+
+message OnResourceCallbackRequest {
+  string resource_id = 1;
+  int64 account_id = 2;
+  string task_id = 3;               // the rc-* task/trace id echoed back; idempotency key
+  ResourceStatus status = 4;        // reported target status (e.g. RUNNING / RELEASED)
+  string callback_json = 5;         // product-specific controller payload (私有状态)
+}
+
+message OperateResourceRequest {
+  string resource_id = 1;
+  int64 account_id = 2;
+  ResourceOperation op = 3;
+}
+
+enum ResourceOperation {
+  RESOURCE_OPERATION_UNSPECIFIED = 0;
+  RESOURCE_OPERATION_START = 1;     // 启动 (OpenAPI Action: StartInstance)
+  RESOURCE_OPERATION_STOP = 2;      // 停止
+  RESOURCE_OPERATION_RESTART = 3;   // 重启
+}
+
+message DescribeResourceStatusRequest {
+  string resource_id = 1;
+  int64 account_id = 2;
+}

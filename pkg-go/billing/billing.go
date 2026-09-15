@@ -39,8 +39,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/starcloud/sc-platform/metering"
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/metering"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // DeductionSource identifies which pool paid for a charge.

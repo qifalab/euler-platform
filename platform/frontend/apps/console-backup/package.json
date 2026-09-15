@@ -2,7 +2,7 @@
   "name": "console-backup",
   "version": "0.1.0",
   "private": true,
-  "description": "StarCloud backup policy sub-app (SCBACKUP, M-7.4) — Wujie child.",
+  "description": "Euler backup policy sub-app (EUBACKUP, M-7.4) — Wujie child.",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5186",
@@ -11,11 +11,11 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@sc/tokens": "workspace:*",
-    "@sc/ui": "workspace:*",
-    "@sc/console-kit": "workspace:*",
-    "@sc/sdk": "workspace:*",
-    "@sc/wujie-bridge": "workspace:*",
+    "@eu/tokens": "workspace:*",
+    "@eu/ui": "workspace:*",
+    "@eu/console-kit": "workspace:*",
+    "@eu/sdk": "workspace:*",
+    "@eu/wujie-bridge": "workspace:*",
     "vue-router": "^4.3.0"
   },
   "peerDependencies": {

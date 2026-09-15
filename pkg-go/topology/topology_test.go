@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 func TestRegionScopeValid(t *testing.T) {

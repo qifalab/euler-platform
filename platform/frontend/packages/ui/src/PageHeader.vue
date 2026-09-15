@@ -14,47 +14,47 @@ defineProps<{
 </script>
 
 <template>
-  <header class="sc-page-header">
-    <div class="sc-page-header-heading">
-      <h1 class="sc-page-header-title">{{ title }}</h1>
-      <p v-if="subtitle" class="sc-page-header-subtitle">{{ subtitle }}</p>
+  <header class="eu-page-header">
+    <div class="eu-page-header-heading">
+      <h1 class="eu-page-header-title">{{ title }}</h1>
+      <p v-if="subtitle" class="eu-page-header-subtitle">{{ subtitle }}</p>
     </div>
-    <div v-if="$slots.actions" class="sc-page-header-actions">
+    <div v-if="$slots.actions" class="eu-page-header-actions">
       <slot name="actions" />
     </div>
   </header>
 </template>
 
 <style>
-.sc-page-header {
+.eu-page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--sc-spacing-4);
-  margin-bottom: var(--sc-spacing-5);
+  gap: var(--eu-spacing-4);
+  margin-bottom: var(--eu-spacing-5);
 }
-.sc-page-header-heading {
+.eu-page-header-heading {
   display: flex;
   flex-direction: column;
-  gap: var(--sc-spacing-1);
+  gap: var(--eu-spacing-1);
   min-width: 0;
 }
-.sc-page-header-title {
+.eu-page-header-title {
   margin: 0;
   font-size: 20px;
   font-weight: 500;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
-.sc-page-header-subtitle {
+.eu-page-header-subtitle {
   margin: 0;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
 }
-.sc-page-header-actions {
+.eu-page-header-actions {
   display: flex;
   align-items: center;
-  gap: var(--sc-spacing-3);
+  gap: var(--eu-spacing-3);
   flex-shrink: 0;
 }
 </style>

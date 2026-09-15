@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 func newSQLTestActionRepo(t *testing.T) *sqlActionRepo {
@@ -27,7 +27,7 @@ func testAction(product, name string) *Action {
 func TestSQLActionRepoRoundTrip(t *testing.T) {
 	repo := newSQLTestActionRepo(t)
 
-	in := testAction("scecs", "DescribeInstances")
+	in := testAction("euecs", "DescribeInstances")
 	if err := repo.Upsert(in); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestSQLActionRepoRoundTrip(t *testing.T) {
 	if _, ok, err := repo.Get("no-dot-here"); err != nil || ok {
 		t.Fatalf("malformed id = ok=%v err=%v, want miss", ok, err)
 	}
-	if _, ok, err := repo.Get("scoss.DescribeInstances"); err != nil || ok {
+	if _, ok, err := repo.Get("euoss.DescribeInstances"); err != nil || ok {
 		t.Fatalf("unknown action = ok=%v err=%v, want miss", ok, err)
 	}
 }
@@ -69,19 +69,19 @@ func TestSQLActionRepoReregisterUpdatesInPlace(t *testing.T) {
 	ctx := context.Background()
 	repo := newSQLActionRepo(ctx, db)
 
-	first := testAction("scoss", "CreateBucket")
+	first := testAction("euoss", "CreateBucket")
 	if err := repo.Upsert(first); err != nil {
 		t.Fatal(err)
 	}
 
-	again := testAction("scoss", "CreateBucket")
-	again.ErrorCodes = []string{"scoss.BucketAlreadyExists", "scoss.InvalidBucketName", "scoss.AccessDenied"}
+	again := testAction("euoss", "CreateBucket")
+	again.ErrorCodes = []string{"euoss.BucketAlreadyExists", "euoss.InvalidBucketName", "euoss.AccessDenied"}
 	if err := repo.Upsert(again); err != nil {
 		t.Fatal(err)
 	}
 
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM api_action WHERE product_code = 'scoss'`).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM api_action WHERE product_code = 'euoss'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 {
@@ -100,9 +100,9 @@ func TestSQLActionRepoListFiltersByProduct(t *testing.T) {
 	repo := newSQLTestActionRepo(t)
 
 	for _, a := range []*Action{
-		testAction("scecs", "RunInstances"),
-		testAction("scecs", "StartInstance"),
-		testAction("scvpc", "CreateVpc"),
+		testAction("euecs", "RunInstances"),
+		testAction("euecs", "StartInstance"),
+		testAction("euvpc", "CreateVpc"),
 	} {
 		if err := repo.Upsert(a); err != nil {
 			t.Fatal(err)
@@ -116,12 +116,12 @@ func TestSQLActionRepoListFiltersByProduct(t *testing.T) {
 	if len(all) != 3 || all[0].ID > all[1].ID {
 		t.Fatalf("list all = %d entries, unordered", len(all))
 	}
-	ecs, err := repo.List("scecs")
+	ecs, err := repo.List("euecs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ecs) != 2 || ecs[0].ProductCode != "scecs" {
-		t.Fatalf("list scecs = %+v", ecs)
+	if len(ecs) != 2 || ecs[0].ProductCode != "euecs" {
+		t.Fatalf("list euecs = %+v", ecs)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestSQLActionRepoSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 
 	first := newSQLActionRepo(ctx, db)
-	in := testAction("scvpc", "CreateVpc")
+	in := testAction("euvpc", "CreateVpc")
 	if err := first.Upsert(in); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestSQLActionRepoSurvivesRestart(t *testing.T) {
 func TestSQLActionRepoMatchesMemoryStore(t *testing.T) {
 	run := func(repo actionRepo) *Action {
 		t.Helper()
-		in := testAction("scecs", "StartInstance")
+		in := testAction("euecs", "StartInstance")
 		if err := repo.Upsert(in); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}

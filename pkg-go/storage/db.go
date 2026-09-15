@@ -5,7 +5,7 @@
 //
 // # Persistence is opt-in per process
 //
-// An empty SC_DB_DSN keeps a service on its in-memory store, which is what
+// An empty EULER_DB_DSN keeps a service on its in-memory store, which is what
 // keeps `go test` hermetic and the local dev servers dependency-free. A set
 // DSN switches the same binary to MySQL/Vitess: services resolve their store
 // through OpenFor and never branch on anything else.
@@ -14,7 +14,7 @@
 //
 // The platform is split into logical databases (account_db, trade_db,
 // resource_db, support_db, metering_db, openapi_meta — 04§6.3). A single
-// SC_DB_DSN points at one of them; DSNFor rewrites the schema so a service
+// EULER_DB_DSN points at one of them; DSNFor rewrites the schema so a service
 // that owns two (or a test that needs a second) does not need a second
 // environment variable.
 package storage
@@ -34,7 +34,7 @@ import (
 )
 
 // DSNEnv is the environment variable that enables persistence.
-const DSNEnv = "SC_DB_DSN"
+const DSNEnv = "EULER_DB_DSN"
 
 // pool defaults: a service is a long-lived process with a handful of
 // concurrent requests, so a small pool beats the driver default (unlimited
@@ -94,7 +94,7 @@ func NormalizeDSN(dsn string) (string, error) {
 }
 
 // DSNFor returns the configured DSN with its schema replaced. Persistence
-// disabled (no SC_DB_DSN) reports ok=false rather than an error, because that
+// disabled (no EULER_DB_DSN) reports ok=false rather than an error, because that
 // is the normal dev/test state, not a failure.
 func DSNFor(schema string) (dsn string, ok bool, err error) {
 	raw := strings.TrimSpace(os.Getenv(DSNEnv))

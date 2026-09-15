@@ -3,7 +3,7 @@
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
-import { PageHeader } from "@sc/ui";
+import { PageHeader } from "@eu/ui";
 import { sdk, fetchListings, yuan, bpsPercent, type ListingDTO, type SettlementDTO } from "@/marketplace";
 
 const route = useRoute();
@@ -102,52 +102,52 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.settle { padding: var(--sc-spacing-6); max-width: 720px; }
-.st-hint { color: var(--sc-text-secondary); font-size: 13px; margin: 0 0 var(--sc-spacing-4); }
+.settle { padding: var(--eu-spacing-6); max-width: 720px; }
+.st-hint { color: var(--eu-text-secondary); font-size: 13px; margin: 0 0 var(--eu-spacing-4); }
 .st-form {
-  display: flex; flex-direction: column; gap: var(--sc-spacing-4);
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-6);
+  display: flex; flex-direction: column; gap: var(--eu-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-6);
 }
-.st-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--sc-text-secondary); }
+.st-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--eu-text-secondary); }
 .st-field input, .st-field select {
-  padding: 10px 12px; background: var(--sc-bg-container); border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-md); font-size: 14px; color: var(--sc-text-primary);
+  padding: 10px 12px; background: var(--eu-bg-container); border: 1px solid var(--eu-border);
+  border-radius: var(--eu-radius-md); font-size: 14px; color: var(--eu-text-primary);
   outline: none; font-family: inherit;
-  transition: border-color var(--sc-transition), box-shadow var(--sc-transition);
+  transition: border-color var(--eu-transition), box-shadow var(--eu-transition);
 }
 .st-field input:focus, .st-field select:focus {
-  border-color: var(--sc-color-brand); box-shadow: 0 0 0 3px var(--sc-color-brand-soft);
+  border-color: var(--eu-color-brand); box-shadow: 0 0 0 3px var(--eu-color-brand-soft);
 }
 .st-submit {
-  align-self: flex-start; padding: 11px 24px; border: none; border-radius: var(--sc-radius-md);
-  background: var(--sc-color-brand); color: var(--sc-color-on-brand); font-size: 14px; cursor: pointer;
-  transition: background var(--sc-transition);
+  align-self: flex-start; padding: 11px 24px; border: none; border-radius: var(--eu-radius-md);
+  background: var(--eu-color-brand); color: var(--eu-color-on-brand); font-size: 14px; cursor: pointer;
+  transition: background var(--eu-transition);
 }
-.st-submit:hover { background: var(--sc-color-brand-hover); }
+.st-submit:hover { background: var(--eu-color-brand-hover); }
 .st-submit:disabled { opacity: 0.6; cursor: not-allowed; }
-.st-result { margin-top: var(--sc-spacing-5); }
-.st-result h3 { font-size: 15px; font-weight: 500; color: var(--sc-text-primary); margin: 0 0 var(--sc-spacing-3); }
-.st-split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sc-spacing-4); }
+.st-result { margin-top: var(--eu-spacing-5); }
+.st-result h3 { font-size: 15px; font-weight: 500; color: var(--eu-text-primary); margin: 0 0 var(--eu-spacing-3); }
+.st-split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--eu-spacing-4); }
 .st-side {
-  display: flex; flex-direction: column; gap: var(--sc-spacing-1);
-  border-radius: var(--sc-radius-lg); padding: var(--sc-spacing-5);
-  border: 1px solid var(--sc-glass-border);
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
+  display: flex; flex-direction: column; gap: var(--eu-spacing-1);
+  border-radius: var(--eu-radius-lg); padding: var(--eu-spacing-5);
+  border: 1px solid var(--eu-glass-border);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
 }
-.st-side.partner { border-color: var(--sc-color-brand); }
-.st-side-label { font-size: 12px; color: var(--sc-text-secondary); }
-.st-side-amount { font-size: 24px; font-weight: 600; color: var(--sc-color-brand); }
-.st-side.platform .st-side-amount { color: var(--sc-text-primary); }
-.st-side-rate { font-size: 12px; color: var(--sc-text-secondary); }
-.st-gross { margin: var(--sc-spacing-3) 0 0; font-size: 12px; color: var(--sc-text-secondary); }
-.st-error, .st-loading, .st-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.st-error { color: var(--sc-color-danger); }
+.st-side.partner { border-color: var(--eu-color-brand); }
+.st-side-label { font-size: 12px; color: var(--eu-text-secondary); }
+.st-side-amount { font-size: 24px; font-weight: 600; color: var(--eu-color-brand); }
+.st-side.platform .st-side-amount { color: var(--eu-text-primary); }
+.st-side-rate { font-size: 12px; color: var(--eu-text-secondary); }
+.st-gross { margin: var(--eu-spacing-3) 0 0; font-size: 12px; color: var(--eu-text-secondary); }
+.st-error, .st-loading, .st-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.st-error { color: var(--eu-color-danger); }
 </style>

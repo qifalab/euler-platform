@@ -1,9 +1,9 @@
 // Product resources for the core products (三期验收 C3: Terraform Provider
-// 覆盖核心产品 — SCECS/SCOSS/SCVPC/SCRDS).
+// 覆盖核心产品 — EUECS/EUOSS/EUVPC/EURDS).
 //
 // Each resource is deliberately thin: Create/Read/Update/Delete are "sign the
-// product OpenAPI action with the shared scsdk client and reconcile state".
-// There is no per-product secret or retry logic here — scsdk owns signing and
+// product OpenAPI action with the shared eusdk client and reconcile state".
+// There is no per-product secret or retry logic here — eusdk owns signing and
 // error mapping (one implementation, 03§9.4 rule ⑤). The four resources share
 // one CRUD helper so a fifth product is a schema + four action names, not a new
 // code path.
@@ -18,16 +18,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/starcloud/sc-platform/scsdk"
+	"github.com/qifalab/euler-platform/eusdk"
 )
 
 // crudCall signs and sends one product action, returning the decoded Data body.
-func crudCall(client *scsdk.Client, productCode, action string, params map[string]any) (map[string]any, error) {
+func crudCall(client *eusdk.Client, productCode, action string, params map[string]any) (map[string]any, error) {
 	body, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Call(scsdk.ApiRequest{
+	resp, err := client.Call(eusdk.ApiRequest{
 		ProductCode: productCode,
 		Method:      "POST",
 		Path:        "/",
@@ -58,24 +58,24 @@ func idFromData(data map[string]any, key string) string {
 	return ""
 }
 
-// --- SCECS (云服务器 VM) -----------------------------------------------------
+// --- EUECS (云服务器 VM) -----------------------------------------------------
 
-type scecsResource struct{}
+type euecsResource struct{}
 
-func NewScecsResource() resource.Resource { return &scecsResource{} }
+func NewScecsResource() resource.Resource { return &euecsResource{} }
 
-type scecsModel struct {
+type euecsModel struct {
 	ID           types.String `tfsdk:"id"`
 	ImageID      types.String `tfsdk:"image_id"`
 	InstanceType types.String `tfsdk:"instance_type"`
 	ZoneID       types.String `tfsdk:"zone_id"`
 }
 
-func (r *scecsResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "starcloud_scecs_instance"
+func (r *euecsResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "euler_euecs_instance"
 }
 
-func (r *scecsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *euecsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id":            schema.StringAttribute{Computed: true},
@@ -87,11 +87,11 @@ func (r *scecsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	}
 }
 
-func (r *scecsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan scecsModel
+func (r *euecsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan euecsModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	client := req.ProviderData.(*scsdk.Client)
-	data, err := crudCall(client, "scecs", "RunInstances", map[string]any{
+	client := req.ProviderData.(*eusdk.Client)
+	data, err := crudCall(client, "euecs", "RunInstances", map[string]any{
 		"ImageId": plan.ImageID.ValueString(), "InstanceType": plan.InstanceType.ValueString(),
 		"ZoneId": plan.ZoneID.ValueString(),
 	})
@@ -103,11 +103,11 @@ func (r *scecsResource) Create(ctx context.Context, req resource.CreateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *scecsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state scecsModel
+func (r *euecsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state euecsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	client := req.ProviderData.(*scsdk.Client)
-	data, err := crudCall(client, "scecs", "DescribeInstances", map[string]any{"InstanceId": state.ID.ValueString()})
+	client := req.ProviderData.(*eusdk.Client)
+	data, err := crudCall(client, "euecs", "DescribeInstances", map[string]any{"InstanceId": state.ID.ValueString()})
 	if err != nil {
 		resp.Diagnostics.AddError("DescribeInstances", err.Error())
 		return
@@ -119,40 +119,40 @@ func (r *scecsResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *scecsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *euecsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// VM type change is a stop/modify/start cycle in the product; the skeleton
 	// treats the attribute as re-readable via Read rather than faking an in-place
 	// change. A real provider would call the product's ModifyInstanceType.
 	resp.Diagnostics.Append(req.State.Set(ctx, &req.Plan)...)
 }
 
-func (r *scecsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state scecsModel
+func (r *euecsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state euecsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	client := req.ProviderData.(*scsdk.Client)
-	if _, err := crudCall(client, "scecs", "TerminateInstances", map[string]any{"InstanceId": state.ID.ValueString()}); err != nil {
+	client := req.ProviderData.(*eusdk.Client)
+	if _, err := crudCall(client, "euecs", "TerminateInstances", map[string]any{"InstanceId": state.ID.ValueString()}); err != nil {
 		resp.Diagnostics.AddError("TerminateInstances", err.Error())
 		return
 	}
 	resp.State.RemoveResource(ctx)
 }
 
-// --- SCOSS (对象存储桶) ------------------------------------------------------
+// --- EUOSS (对象存储桶) ------------------------------------------------------
 
-type scossResource struct{}
+type euossResource struct{}
 
-func NewScossResource() resource.Resource { return &scossResource{} }
+func NewScossResource() resource.Resource { return &euossResource{} }
 
-type scossModel struct {
+type euossModel struct {
 	ID     types.String `tfsdk:"id"`
 	Bucket types.String `tfsdk:"bucket"`
 }
 
-func (r *scossResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "starcloud_scoss_bucket"
+func (r *euossResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "euler_euoss_bucket"
 }
 
-func (r *scossResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *euossResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id":     schema.StringAttribute{Computed: true},
@@ -161,11 +161,11 @@ func (r *scossResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	}
 }
 
-func (r *scossResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan scossModel
+func (r *euossResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan euossModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	client := req.ProviderData.(*scsdk.Client)
-	data, err := crudCall(client, "scoss", "CreateBucket", map[string]any{"Bucket": plan.Bucket.ValueString()})
+	client := req.ProviderData.(*eusdk.Client)
+	data, err := crudCall(client, "euoss", "CreateBucket", map[string]any{"Bucket": plan.Bucket.ValueString()})
 	if err != nil {
 		resp.Diagnostics.AddError("CreateBucket", err.Error())
 		return
@@ -174,44 +174,44 @@ func (r *scossResource) Create(ctx context.Context, req resource.CreateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *scossResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state scossModel
+func (r *euossResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state euossModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	resp.State.Set(ctx, &state) // DescribeBucket re-reads metadata; skeleton no-ops
 }
 
-func (r *scossResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *euossResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	resp.Diagnostics.Append(req.State.Set(ctx, &req.Plan)...)
 }
 
-func (r *scossResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state scossModel
+func (r *euossResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state euossModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	client := req.ProviderData.(*scsdk.Client)
-	if _, err := crudCall(client, "scoss", "DeleteBucket", map[string]any{"Bucket": state.Bucket.ValueString()}); err != nil {
+	client := req.ProviderData.(*eusdk.Client)
+	if _, err := crudCall(client, "euoss", "DeleteBucket", map[string]any{"Bucket": state.Bucket.ValueString()}); err != nil {
 		resp.Diagnostics.AddError("DeleteBucket", err.Error())
 		return
 	}
 	resp.State.RemoveResource(ctx)
 }
 
-// --- SCVPC (专有网络) --------------------------------------------------------
+// --- EUVPC (专有网络) --------------------------------------------------------
 
-type scvpcResource struct{}
+type euvpcResource struct{}
 
-func NewScvpcResource() resource.Resource { return &scvpcResource{} }
+func NewScvpcResource() resource.Resource { return &euvpcResource{} }
 
-type scvpcModel struct {
+type euvpcModel struct {
 	ID    types.String `tfsdk:"id"`
 	VpcID types.String `tfsdk:"vpc_id"`
 	Cidr  types.String `tfsdk:"cidr_block"`
 }
 
-func (r *scvpcResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "starcloud_scvpc_vpc"
+func (r *euvpcResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "euler_euvpc_vpc"
 }
 
-func (r *scvpcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *euvpcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id":         schema.StringAttribute{Computed: true},
@@ -221,11 +221,11 @@ func (r *scvpcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	}
 }
 
-func (r *scvpcResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan scvpcModel
+func (r *euvpcResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan euvpcModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	client := req.ProviderData.(*scsdk.Client)
-	data, err := crudCall(client, "scvpc", "CreateVpc", map[string]any{"CidrBlock": plan.Cidr.ValueString()})
+	client := req.ProviderData.(*eusdk.Client)
+	data, err := crudCall(client, "euvpc", "CreateVpc", map[string]any{"CidrBlock": plan.Cidr.ValueString()})
 	if err != nil {
 		resp.Diagnostics.AddError("CreateVpc", err.Error())
 		return
@@ -235,44 +235,44 @@ func (r *scvpcResource) Create(ctx context.Context, req resource.CreateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *scvpcResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state scvpcModel
+func (r *euvpcResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state euvpcModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	resp.State.Set(ctx, &state)
 }
 
-func (r *scvpcResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *euvpcResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	resp.Diagnostics.Append(req.State.Set(ctx, &req.Plan)...)
 }
 
-func (r *scvpcResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state scvpcModel
+func (r *euvpcResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state euvpcModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	client := req.ProviderData.(*scsdk.Client)
-	if _, err := crudCall(client, "scvpc", "DeleteVpc", map[string]any{"VpcId": state.VpcID.ValueString()}); err != nil {
+	client := req.ProviderData.(*eusdk.Client)
+	if _, err := crudCall(client, "euvpc", "DeleteVpc", map[string]any{"VpcId": state.VpcID.ValueString()}); err != nil {
 		resp.Diagnostics.AddError("DeleteVpc", err.Error())
 		return
 	}
 	resp.State.RemoveResource(ctx)
 }
 
-// --- SCRDS (托管 MySQL) ------------------------------------------------------
+// --- EURDS (托管 MySQL) ------------------------------------------------------
 
-type scrdsResource struct{}
+type eurdsResource struct{}
 
-func NewScrdsResource() resource.Resource { return &scrdsResource{} }
+func NewScrdsResource() resource.Resource { return &eurdsResource{} }
 
-type scrdsModel struct {
+type eurdsModel struct {
 	ID         types.String `tfsdk:"id"`
 	InstanceID types.String `tfsdk:"instance_id"`
 	Engine     types.String `tfsdk:"engine_version"`
 }
 
-func (r *scrdsResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = "starcloud_scrds_instance"
+func (r *eurdsResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "euler_eurds_instance"
 }
 
-func (r *scrdsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *eurdsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id":             schema.StringAttribute{Computed: true},
@@ -282,11 +282,11 @@ func (r *scrdsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	}
 }
 
-func (r *scrdsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan scrdsModel
+func (r *eurdsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan eurdsModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	client := req.ProviderData.(*scsdk.Client)
-	data, err := crudCall(client, "scrds", "CreateInstance", map[string]any{"EngineVersion": plan.Engine.ValueString()})
+	client := req.ProviderData.(*eusdk.Client)
+	data, err := crudCall(client, "eurds", "CreateInstance", map[string]any{"EngineVersion": plan.Engine.ValueString()})
 	if err != nil {
 		resp.Diagnostics.AddError("CreateInstance", err.Error())
 		return
@@ -296,21 +296,21 @@ func (r *scrdsResource) Create(ctx context.Context, req resource.CreateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *scrdsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state scrdsModel
+func (r *eurdsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state eurdsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	resp.State.Set(ctx, &state)
 }
 
-func (r *scrdsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *eurdsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	resp.Diagnostics.Append(req.State.Set(ctx, &req.Plan)...)
 }
 
-func (r *scrdsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state scrdsModel
+func (r *eurdsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state eurdsModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	client := req.ProviderData.(*scsdk.Client)
-	if _, err := crudCall(client, "scrds", "DeleteInstance", map[string]any{"InstanceId": state.InstanceID.ValueString()}); err != nil {
+	client := req.ProviderData.(*eusdk.Client)
+	if _, err := crudCall(client, "eurds", "DeleteInstance", map[string]any{"InstanceId": state.InstanceID.ValueString()}); err != nil {
 		resp.Diagnostics.AddError("DeleteInstance", err.Error())
 		return
 	}

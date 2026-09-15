@@ -14,10 +14,10 @@ func newDriver() *MockDriver {
 
 func validSpec() Spec {
 	return Spec{
-		ResourceID:     "scecs-cn-north-1-01-a1b2c3d4",
+		ResourceID:     "euecs-cn-north-1-01-a1b2c3d4",
 		AccountID:      100123,
 		ProjectID:      1,
-		ProductCode:    "scecs",
+		ProductCode:    "euecs",
 		ResourceType:   "instance",
 		Region:         "cn-north-1",
 		Zone:           "cn-north-1-a",
@@ -69,7 +69,7 @@ func TestMandatoryLabels(t *testing.T) {
 	if labels[LabelTenant] != "100123" {
 		t.Errorf("tenant label = %s, want 100123", labels[LabelTenant])
 	}
-	if labels[LabelInstance] != "scecs-cn-north-1-01-a1b2c3d4" {
+	if labels[LabelInstance] != "euecs-cn-north-1-01-a1b2c3d4" {
 		t.Errorf("instance label = %s", labels[LabelInstance])
 	}
 }
@@ -116,7 +116,7 @@ func TestDeleteAlreadyDeletedSucceeds(t *testing.T) {
 		}
 	}
 	// Deleting something that never existed also succeeds.
-	if err := d.Delete("scecs-cn-north-1-01-ffffffff"); err != nil {
+	if err := d.Delete("euecs-cn-north-1-01-ffffffff"); err != nil {
 		t.Fatalf("deleting a nonexistent resource must succeed, got %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestProvisioningReachesReady(t *testing.T) {
 
 func TestQueryUnknownResource(t *testing.T) {
 	d := newDriver()
-	if _, err := d.Query("scecs-cn-north-1-01-ffffffff"); !errors.Is(err, ErrNotFound) {
+	if _, err := d.Query("euecs-cn-north-1-01-ffffffff"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -301,18 +301,18 @@ func TestRegistryResolvesPerProduct(t *testing.T) {
 	r.Register(mock)
 	r.Register(VMDriver{})
 
-	r.BindProduct("scecs", DriverMock)
-	r.BindProduct("scrds", DriverVM)
+	r.BindProduct("euecs", DriverMock)
+	r.BindProduct("eurds", DriverVM)
 
-	d, err := r.DriverFor("scecs")
+	d, err := r.DriverFor("euecs")
 	if err != nil || d.Type() != DriverMock {
-		t.Fatalf("scecs → %v, %v", d, err)
+		t.Fatalf("euecs → %v, %v", d, err)
 	}
-	d, err = r.DriverFor("scrds")
+	d, err = r.DriverFor("eurds")
 	if err != nil || d.Type() != DriverVM {
-		t.Fatalf("scrds → %v, %v", d, err)
+		t.Fatalf("eurds → %v, %v", d, err)
 	}
-	if _, err := r.DriverFor("scoss"); !errors.Is(err, ErrUnknownDriver) {
+	if _, err := r.DriverFor("euoss"); !errors.Is(err, ErrUnknownDriver) {
 		t.Fatalf("unbound product should error, got %v", err)
 	}
 }
@@ -355,18 +355,18 @@ func TestChaosHooksInjectFailures(t *testing.T) {
 // --- CR naming conventions ---
 
 func TestCRNamingConventions(t *testing.T) {
-	if got := CRKind("scecs"); got != "ScecsInstance" {
-		t.Errorf("CRKind = %s, want ScecsInstance", got)
+	if got := CRKind("euecs"); got != "EuecsInstance" {
+		t.Errorf("CRKind = %s, want EuecsInstance", got)
 	}
-	if got := CRNamespace("scecs"); got != "plat-scecs" {
-		t.Errorf("CRNamespace = %s, want plat-scecs", got)
+	if got := CRNamespace("euecs"); got != "plat-euecs" {
+		t.Errorf("CRNamespace = %s, want plat-euecs", got)
 	}
 	if got := TenantNamespace(100123, 1); got != "t-100123-p-1" {
 		t.Errorf("TenantNamespace = %s, want t-100123-p-1", got)
 	}
 	// The CR name is the platform resource id verbatim, so a cluster operator
 	// and a support engineer are talking about the same string.
-	rid := "scecs-cn-north-1-01-a1b2c3d4"
+	rid := "euecs-cn-north-1-01-a1b2c3d4"
 	if got := CRName(rid); got != rid {
 		t.Errorf("CRName = %s, want the resource id unchanged", got)
 	}
@@ -497,10 +497,10 @@ func TestReclaimableAtFalseBeforeNotice(t *testing.T) {
 // sentinel region "global", no Zone.
 func globalSpec() Spec {
 	return Spec{
-		ResourceID:     "scdns-global-01-a1b2c3d4",
+		ResourceID:     "eudns-global-01-a1b2c3d4",
 		AccountID:      100123,
 		ProjectID:      1,
-		ProductCode:    "scdns",
+		ProductCode:    "eudns",
 		ResourceType:   "zone",
 		Region:         GlobalRegion,
 		RegionScope:    ScopeGlobal,

@@ -9,13 +9,13 @@ func TestUnknownConditionOperatorFailsSafePerEffect(t *testing.T) {
 	deny, err := ParsePolicy([]byte(`{
 	  "Version":"1","Statement":[
 	    {"Effect":"Allow","Action":"*","Resource":"*"},
-	    {"Effect":"Deny","Action":"scecs:DeleteInstance","Resource":"*",
-	     "Condition":{"NumericLessThan":{"sc:RiskScore":["10"]}}}
+	    {"Effect":"Deny","Action":"euecs:DeleteInstance","Resource":"*",
+	     "Condition":{"NumericLessThan":{"eu:RiskScore":["10"]}}}
 	  ]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := Request{Action: "scecs:DeleteInstance", Resource: "sc:ecs:cn-north-1:100:instance/i-1"}
+	req := Request{Action: "euecs:DeleteInstance", Resource: "eu:ecs:cn-north-1:100:instance/i-1"}
 	d := Evaluate([]Policy{deny}, req)
 	if d.Allow {
 		t.Fatal("Deny with an unknown condition operator must still deny")
@@ -24,7 +24,7 @@ func TestUnknownConditionOperatorFailsSafePerEffect(t *testing.T) {
 	allow, err := ParsePolicy([]byte(`{
 	  "Version":"1","Statement":[
 	    {"Effect":"Allow","Action":"*","Resource":"*",
-	     "Condition":{"NumericLessThan":{"sc:RiskScore":["10"]}}}
+	     "Condition":{"NumericLessThan":{"eu:RiskScore":["10"]}}}
 	  ]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -36,25 +36,25 @@ func TestUnknownConditionOperatorFailsSafePerEffect(t *testing.T) {
 }
 
 // A pattern with fewer than 5 ARN segments must not fall back to a raw
-// wildcard compare: "sc:iam:*" would otherwise glob across the account id.
+// wildcard compare: "eu:iam:*" would otherwise glob across the account id.
 func TestShortARNPatternNeverMatches(t *testing.T) {
 	p, err := ParsePolicy([]byte(`{
 	  "Version":"1","Statement":[
-	    {"Effect":"Allow","Action":"*","Resource":"sc:iam:*"}
+	    {"Effect":"Allow","Action":"*","Resource":"eu:iam:*"}
 	  ]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := Evaluate([]Policy{p}, Request{
 		Action:   "iam:GetUser",
-		Resource: "sc:iam:cn-north-1:9999999999:user/victim",
+		Resource: "eu:iam:cn-north-1:9999999999:user/victim",
 	})
 	if d.Allow {
 		t.Fatal("truncated ARN pattern must not match a cross-account resource")
 	}
 	// "*" alone still matches everything (explicit universal grant).
 	star, _ := ParsePolicy([]byte(`{"Version":"1","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`))
-	if !Evaluate([]Policy{star}, Request{Action: "iam:GetUser", Resource: "sc:iam:r:1:user/x"}).Allow {
+	if !Evaluate([]Policy{star}, Request{Action: "iam:GetUser", Resource: "eu:iam:r:1:user/x"}).Allow {
 		t.Fatal("bare * resource must still match")
 	}
 }
@@ -62,12 +62,12 @@ func TestShortARNPatternNeverMatches(t *testing.T) {
 // The decision number must name the REAL policy and statement that decided,
 // not a hard-coded policy index 0.
 func TestDecisionNumberCarriesRealIndices(t *testing.T) {
-	noMatch, _ := ParsePolicy([]byte(`{"Version":"1","Statement":[{"Effect":"Allow","Action":"scoss:*","Resource":"*"}]}`))
+	noMatch, _ := ParsePolicy([]byte(`{"Version":"1","Statement":[{"Effect":"Allow","Action":"euoss:*","Resource":"*"}]}`))
 	match, _ := ParsePolicy([]byte(`{"Version":"1","Statement":[
-	  {"Effect":"Allow","Action":"scoss:*","Resource":"*"},
-	  {"Effect":"Allow","Action":"scecs:*","Resource":"*"}
+	  {"Effect":"Allow","Action":"euoss:*","Resource":"*"},
+	  {"Effect":"Allow","Action":"euecs:*","Resource":"*"}
 	]}`))
-	d := Evaluate([]Policy{noMatch, match}, Request{Action: "scecs:StartInstance", Resource: "sc:ecs:r:1:instance/i-1"})
+	d := Evaluate([]Policy{noMatch, match}, Request{Action: "euecs:StartInstance", Resource: "eu:ecs:r:1:instance/i-1"})
 	if !d.Allow {
 		t.Fatal("expected allow")
 	}

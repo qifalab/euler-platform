@@ -1,11 +1,11 @@
-# StarCloud Frontend
+# Euler Frontend
 
-The StarCloud (辰云) frontend — a real, runnable pnpm monorepo built
+The Euler (辰云) frontend — a real, runnable pnpm monorepo built
 against [`docs/architecture/02-frontend-architecture.md`](../../docs/architecture/02-frontend-architecture.md).
 
 **Status: production-grade usable.** Six sites + 13 product-category console
 sub-apps (one common shell + category children) + the developer explorer +
-shared `@sc/*` packages, all typechecking and building. The console shell loads
+shared `@eu/*` packages, all typechecking and building. The console shell loads
 sub-apps via Wujie and renders real data from the console-bff in dev. Phase-3
 surfaces (marketplace / 稳定性 / 告警中心 / 异常检测 / 地域容灾 / STS) are wired to
 their real backend services — see [Phase-3 frontend sync](#phase-3-frontend-sync-三期工程同步).
@@ -21,23 +21,23 @@ platform/frontend/
 ├── package.json             # workspace root
 ├── pnpm-workspace.yaml      # packages/* + apps/*, allowBuilds (esbuild/vue-demi)
 ├── packages/                # shared layer (02§1.3, §6.5)
-│   ├── tokens/              # @sc/tokens — design tokens, CSS vars (02§10.1)
-│   ├── ui/                  # @sc/ui — Element Plus thin-wrap + business components (02§10.2)
-│   ├── sdk/                 # @sc/sdk — unified request client, 401 refresh, error model (02§9.1)
-│   ├── wujie-bridge/        # @sc/wujie-bridge — props injection + bus events (02§5.4/6.4)
-│   └── console-kit/        # @sc/console-kit — ResourceTable, RegionSelector, ErrorBoundary (02§7)
+│   ├── tokens/              # @eu/tokens — design tokens, CSS vars (02§10.1)
+│   ├── ui/                  # @eu/ui — Element Plus thin-wrap + business components (02§10.2)
+│   ├── sdk/                 # @eu/sdk — unified request client, 401 refresh, error model (02§9.1)
+│   ├── wujie-bridge/        # @eu/wujie-bridge — props injection + bus events (02§5.4/6.4)
+│   └── console-kit/        # @eu/console-kit — ResourceTable, RegionSelector, ErrorBoundary (02§7)
 └── apps/                    # 20 apps
     ├── console-base/        # console shell: Vue3+Vite+Pinia+Router+Wujie (02§4) — :5173
-    ├── console-ecs/         # compute (SCECS): list/detail/buy-wizard (02§7.2-7.4) — :5174
-    ├── console-storage/      # storage (SCOSS/SCBS): bucket list/detail — :5176
-    ├── console-network/      # network (SCVPC/SCEIP): vpc list/detail — :5177
-    ├── console-database/     # database (SCRDS): instance list/detail — :5178
-    ├── console-monitor/      # monitor (SCMON): rules/dashboard + 告警中心/异常检测/稳定性/地域容灾 — :5179
-    ├── console-eci/          # serverless container (SCECI) — :5183
-    ├── console-lb/           # load balancer (SCLB) — :5184
-    ├── console-autoscaling/  # autoscaling (SCAS) — :5185
-    ├── console-backup/       # backup (SCBS) — :5186
-    ├── console-redis/        # redis (SCRDS) — :5187
+    ├── console-ecs/         # compute (EUECS): list/detail/buy-wizard (02§7.2-7.4) — :5174
+    ├── console-storage/      # storage (EUOSS/EUBS): bucket list/detail — :5176
+    ├── console-network/      # network (EUVPC/EUEIP): vpc list/detail — :5177
+    ├── console-database/     # database (EURDS): instance list/detail — :5178
+    ├── console-monitor/      # monitor (EUMON): rules/dashboard + 告警中心/异常检测/稳定性/地域容灾 — :5179
+    ├── console-eci/          # serverless container (EUECI) — :5183
+    ├── console-lb/           # load balancer (EULB) — :5184
+    ├── console-autoscaling/  # autoscaling (EUAS) — :5185
+    ├── console-backup/       # backup (EUBS) — :5186
+    ├── console-redis/        # redis (EURDS) — :5187
     ├── console-kafka/        # kafka (SCKAFAKA) — :5188
     ├── console-logservice/   # log service (SCSLS) — :5189
     ├── devops-explorer/      # OpenAPI explorer + developer community — :5182
@@ -72,11 +72,11 @@ sub-app via Wujie.
 ## Dev account
 
 The console-bff is seeded with account **100123** (¥500 balance, 2 resources,
-1 pending order). The vite proxy injects `X-Sc-Account-Id: 100123` so the shell
+1 pending order). The vite proxy injects `X-Euler-Account-Id: 100123` so the shell
 renders real data without the APISIX gateway.
 
 SSO login (web-account :5175) uses dev seed credentials:
-**admin@starcloud.cn / starcloud123** against the real svc-iam
+**admin@euler.emoera.com / euler123** against the real svc-iam
 `/api/auth/login` (Bearer access token + HttpOnly refresh cookie).
 
 ## How it maps to the architecture doc
@@ -96,8 +96,8 @@ SSO login (web-account :5175) uses dev seed credentials:
 The phase-3 backend milestones (M-8 多地域, M-9 稳定性平台, M-10 marketplace,
 D-1 高级告警, D-2 异常用量检测, D-3 STS) are surfaced in the frontend with
 **real backend connections** — every view below fetches live data over HTTP via
-`@sc/sdk` / `fetch` + vite dev proxy, no mocks. Each sub-app's vite proxy injects
-`X-Sc-Account-Id: 100123` (the dev stand-in for the gateway-authorized header).
+`@eu/sdk` / `fetch` + vite dev proxy, no mocks. Each sub-app's vite proxy injects
+`X-Euler-Account-Id: 100123` (the dev stand-in for the gateway-authorized header).
 
 ### web-marketplace (:5190, new app — M-10)
 
@@ -141,7 +141,7 @@ Go vet/test × 7 services, `pnpm typecheck`/`build` × 4 apps, vitest 34/34 gree
 
 | Component | Verified |
 |---|---|
-| `@sc/*` (5 packages) | `pnpm -r --filter "@sc/*" build` — ES+CJS+.d.ts+style.css each |
+| `@eu/*` (5 packages) | `pnpm -r --filter "@eu/*" build` — ES+CJS+.d.ts+style.css each |
 | 11 apps | all `vite build` / `nuxt build` / `vitepress build` pass; all typecheck clean |
 | Dev boot | all 9 JS dev servers (5173-5181) respond 200; BFF :9200 healthy |
 | BFF integration | base `/console/overview` returns real seeded data via dev proxy |
@@ -150,7 +150,7 @@ Go vet/test × 7 services, `pnpm typecheck`/`build` × 4 apps, vitest 34/34 gree
 
 ## What's still mocked (toward full production)
 
-- `@sc/sdk` is hand-written; real version is OpenAPI-generated from proto-hub (02§9.1). (The runtime client is real — token injection, 401 single-flight refresh, envelope unwrapping, structured errors all work against live services, verified by 34 unit tests.)
+- `@eu/sdk` is hand-written; real version is OpenAPI-generated from proto-hub (02§9.1). (The runtime client is real — token injection, 401 single-flight refresh, envelope unwrapping, structured errors all work against live services, verified by 34 unit tests.)
 - Cross-service gRPC: services are independent stdlib HTTP, no proto-generated stubs interconnect them yet (proto-hub IDL is source-only).
 - Real database: all services use in-memory stores (MySQL/Vitess DDL written but not executed).
 - Kafka/outbox relay: topic constants + DDL exist, no producer/consumer/relay wired.

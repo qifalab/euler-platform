@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/totp"
+	"github.com/qifalab/euler-platform/totp"
 )
 
 // The MFA tests drive the full two-phase bind and the two-step login over
@@ -61,7 +61,7 @@ func mfaDo(t *testing.T, method, path, bearer string, body any) (int, map[string
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	req.Header.Set("X-Sc-TraceId", "mfa-t")
+	req.Header.Set("X-Euler-TraceId", "mfa-t")
 	rr := httptest.NewRecorder()
 	mfaMux().ServeHTTP(rr, req)
 	var out map[string]any
@@ -127,7 +127,7 @@ func accountIDOfBearer(bearer string) int64 {
 }
 
 func TestMFABindReturnsSecretAndPendingState(t *testing.T) {
-	bearer := seedMFAAccount(t, 300001, "bind@starcloud.cn")
+	bearer := seedMFAAccount(t, 300001, "bind@euler.emoera.com")
 	code, out, _ := mfaDo(t, "POST", "/api/mfa/bind", bearer, nil)
 	if code != 200 {
 		t.Fatalf("bind failed: %d %v", code, out)
@@ -137,7 +137,7 @@ func TestMFABindReturnsSecretAndPendingState(t *testing.T) {
 	if len(s32) != 32 { // 20 bytes → 32 base32 chars
 		t.Errorf("secret length = %d, want 32", len(s32))
 	}
-	if uri, _ := d["provisioningUri"].(string); !strings.HasPrefix(uri, "otpauth://totp/StarCloud:bind@starcloud.cn?") {
+	if uri, _ := d["provisioningUri"].(string); !strings.HasPrefix(uri, "otpauth://totp/Euler:bind@euler.emoera.com?") {
 		t.Errorf("provisioning URI malformed: %s", uri)
 	}
 	// Pending: bound but not activated — profile must still say false.
@@ -152,7 +152,7 @@ func TestMFABindReturnsSecretAndPendingState(t *testing.T) {
 }
 
 func TestMFAVerifyActivatesFactor(t *testing.T) {
-	bearer := seedMFAAccount(t, 300002, "activate@starcloud.cn")
+	bearer := seedMFAAccount(t, 300002, "activate@euler.emoera.com")
 	seed := bindMFA(t, bearer)
 
 	// Wrong code first: rejected, and it must not consume anything.
@@ -172,7 +172,7 @@ func TestMFAVerifyActivatesFactor(t *testing.T) {
 }
 
 func TestMFABindRejectedWhileActive(t *testing.T) {
-	bearer := seedMFAAccount(t, 300003, "rebind@starcloud.cn")
+	bearer := seedMFAAccount(t, 300003, "rebind@euler.emoera.com")
 	activateMFA(t, bearer)
 	code, out, _ := mfaDo(t, "POST", "/api/mfa/bind", bearer, nil)
 	if code != 409 || out["Code"] != "Auth.MFAAlreadyBound" {
@@ -181,11 +181,11 @@ func TestMFABindRejectedWhileActive(t *testing.T) {
 }
 
 func TestMFALoginBecomesTwoStep(t *testing.T) {
-	bearer := seedMFAAccount(t, 300004, "login2step@starcloud.cn")
+	bearer := seedMFAAccount(t, 300004, "login2step@euler.emoera.com")
 	seed := activateMFA(t, bearer)
 
 	// Step 1: correct password alone no longer mints a session.
-	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "login2step@starcloud.cn", "password": mfaPass})
+	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "login2step@euler.emoera.com", "password": mfaPass})
 	if code != 200 {
 		t.Fatalf("login failed: %d %v", code, out)
 	}
@@ -210,25 +210,25 @@ func TestMFALoginBecomesTwoStep(t *testing.T) {
 	if _, has := d["accessToken"]; !has {
 		t.Fatal("mfa login verify returned no accessToken")
 	}
-	if !strings.Contains(rr.Header().Get("Set-Cookie"), "sc_refresh=") {
+	if !strings.Contains(rr.Header().Get("Set-Cookie"), "eu_refresh=") {
 		t.Error("mfa login verify must set the refresh cookie, same as password login")
 	}
 }
 
 func TestMFALoginWrongPasswordStillRejected(t *testing.T) {
-	bearer := seedMFAAccount(t, 300005, "wrongpw@starcloud.cn")
+	bearer := seedMFAAccount(t, 300005, "wrongpw@euler.emoera.com")
 	activateMFA(t, bearer)
 	// MFA never weakens step 1: wrong password → same 401 as before.
-	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "wrongpw@starcloud.cn", "password": "not-the-password"})
+	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "wrongpw@euler.emoera.com", "password": "not-the-password"})
 	if code != 401 || out["Code"] != "Auth.InvalidCredentials" {
 		t.Fatalf("want 401 Auth.InvalidCredentials, got %d %v", code, out)
 	}
 }
 
 func TestMFALoginRejectsWrongThenAcceptsRight(t *testing.T) {
-	bearer := seedMFAAccount(t, 300006, "wrongcode@starcloud.cn")
+	bearer := seedMFAAccount(t, 300006, "wrongcode@euler.emoera.com")
 	seed := activateMFA(t, bearer)
-	_, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "wrongcode@starcloud.cn", "password": mfaPass})
+	_, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "wrongcode@euler.emoera.com", "password": mfaPass})
 	d, _ := out["Data"].(map[string]any)
 	mfaToken, _ := d["mfaToken"].(string)
 
@@ -243,9 +243,9 @@ func TestMFALoginRejectsWrongThenAcceptsRight(t *testing.T) {
 }
 
 func TestMFALoginCodeReplayRejected(t *testing.T) {
-	bearer := seedMFAAccount(t, 300007, "replay@starcloud.cn")
+	bearer := seedMFAAccount(t, 300007, "replay@euler.emoera.com")
 	seed := activateMFA(t, bearer)
-	_, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "replay@starcloud.cn", "password": mfaPass})
+	_, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "replay@euler.emoera.com", "password": mfaPass})
 	d, _ := out["Data"].(map[string]any)
 	tok1, _ := d["mfaToken"].(string)
 
@@ -255,7 +255,7 @@ func TestMFALoginCodeReplayRejected(t *testing.T) {
 	}
 
 	// Shoulder-surfing attack: replay the same code with a fresh challenge.
-	_, out, _ = mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "replay@starcloud.cn", "password": mfaPass})
+	_, out, _ = mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "replay@euler.emoera.com", "password": mfaPass})
 	d, _ = out["Data"].(map[string]any)
 	tok2, _ := d["mfaToken"].(string)
 	if c, out, _ := mfaDo(t, "POST", "/api/auth/mfa/verify", "", map[string]any{"mfaToken": tok2, "code": code}); c != 401 || out["Code"] != "Auth.MFACodeReused" {
@@ -264,9 +264,9 @@ func TestMFALoginCodeReplayRejected(t *testing.T) {
 }
 
 func TestMFAChallengeTokenIsNotAnAccessToken(t *testing.T) {
-	bearer := seedMFAAccount(t, 300008, "tokenscope@starcloud.cn")
+	bearer := seedMFAAccount(t, 300008, "tokenscope@euler.emoera.com")
 	activateMFA(t, bearer)
-	_, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "tokenscope@starcloud.cn", "password": mfaPass})
+	_, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "tokenscope@euler.emoera.com", "password": mfaPass})
 	d, _ := out["Data"].(map[string]any)
 	mfaToken, _ := d["mfaToken"].(string)
 
@@ -282,7 +282,7 @@ func TestMFAChallengeTokenIsNotAnAccessToken(t *testing.T) {
 }
 
 func TestMFAUnbindRequiresLiveCode(t *testing.T) {
-	bearer := seedMFAAccount(t, 300009, "unbind@starcloud.cn")
+	bearer := seedMFAAccount(t, 300009, "unbind@euler.emoera.com")
 	seed := activateMFA(t, bearer)
 
 	// No code → no unbind: a stolen access token must not strip the factor.
@@ -299,7 +299,7 @@ func TestMFAUnbindRequiresLiveCode(t *testing.T) {
 	if d["mfaEnabled"] != false {
 		t.Fatalf("mfaEnabled after unbind = %v, want false", d["mfaEnabled"])
 	}
-	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "unbind@starcloud.cn", "password": mfaPass})
+	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "unbind@euler.emoera.com", "password": mfaPass})
 	if code != 200 {
 		t.Fatalf("login after unbind failed: %d %v", code, out)
 	}
@@ -311,9 +311,9 @@ func TestMFAUnbindRequiresLiveCode(t *testing.T) {
 
 func TestPasswordOnlyLoginUnchanged(t *testing.T) {
 	// Regression: accounts without MFA keep the exact phase-1 login contract.
-	bearer := seedMFAAccount(t, 300010, "plain@starcloud.cn")
+	bearer := seedMFAAccount(t, 300010, "plain@euler.emoera.com")
 	_ = bearer
-	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "plain@starcloud.cn", "password": mfaPass})
+	code, out, _ := mfaDo(t, "POST", "/api/auth/login", "", map[string]any{"email": "plain@euler.emoera.com", "password": mfaPass})
 	if code != 200 {
 		t.Fatalf("plain login failed: %d %v", code, out)
 	}

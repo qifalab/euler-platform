@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/billing"
-	"github.com/starcloud/sc-platform/metering"
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/metering"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 var testNow = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
@@ -32,7 +32,7 @@ func yuan(s string) pricing.Amount { return pricing.MustParseAmount(s) }
 func TestPurchaseCreditsQuota(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	pack, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1")
+	pack, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1")
 	if err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
@@ -53,11 +53,11 @@ func TestPurchaseCreditsQuota(t *testing.T) {
 func TestPurchaseIsIdempotent(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase 1: %v", err)
 	}
 	// Replay with same idempotency key: no-op, not a double-credit.
-	pack, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1")
+	pack, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1")
 	if err != nil {
 		t.Fatalf("purchase 2: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestPurchaseIsIdempotent(t *testing.T) {
 func TestConsumeDrawsQuotaAndReturnsShortfall(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("300"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("300"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
 	// Request 500; pack only has 300 → takes 300, shortfall 200.
-	pack, _, shortfall, err := l.Consume("pk-1", "scecs", yuan("500"), "chg-1", "consume-1")
+	pack, _, shortfall, err := l.Consume("pk-1", "euecs", yuan("500"), "chg-1", "consume-1")
 	if err != nil {
 		t.Fatalf("consume: %v", err)
 	}
@@ -91,14 +91,14 @@ func TestConsumeDrawsQuotaAndReturnsShortfall(t *testing.T) {
 func TestConsumeIsIdempotent(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
-	if _, _, _, err := l.Consume("pk-1", "scecs", yuan("400"), "chg-1", "consume-1"); err != nil {
+	if _, _, _, err := l.Consume("pk-1", "euecs", yuan("400"), "chg-1", "consume-1"); err != nil {
 		t.Fatalf("consume 1: %v", err)
 	}
 	// Replay: must not double-spend.
-	pack, _, shortfall, err := l.Consume("pk-1", "scecs", yuan("400"), "chg-1", "consume-1")
+	pack, _, shortfall, err := l.Consume("pk-1", "euecs", yuan("400"), "chg-1", "consume-1")
 	if err != nil {
 		t.Fatalf("consume 2: %v", err)
 	}
@@ -113,11 +113,11 @@ func TestConsumeIsIdempotent(t *testing.T) {
 func TestConsumeRejectsWrongProduct(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
-	// Pack scoped to scecs; a scoss charge may not draw on it.
-	_, _, shortfall, err := l.Consume("pk-1", "scoss", yuan("100"), "chg-1", "consume-1")
+	// Pack scoped to euecs; a euoss charge may not draw on it.
+	_, _, shortfall, err := l.Consume("pk-1", "euoss", yuan("100"), "chg-1", "consume-1")
 	if err != ErrInsufficientQuota {
 		t.Fatalf("err = %v, want ErrInsufficientQuota (product scope)", err)
 	}
@@ -129,10 +129,10 @@ func TestConsumeRejectsWrongProduct(t *testing.T) {
 func TestRefundRevivesExhaustedPack(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("300"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("300"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
-	if _, _, _, err := l.Consume("pk-1", "scecs", yuan("300"), "chg-1", "consume-1"); err != nil {
+	if _, _, _, err := l.Consume("pk-1", "euecs", yuan("300"), "chg-1", "consume-1"); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	// Refund reverses 100; pack revives to ACTIVE with 100.
@@ -151,7 +151,7 @@ func TestRefundRevivesExhaustedPack(t *testing.T) {
 func TestRefundCannotExceedFaceValue(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("300"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("300"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
 	// Refunding 200 on a full 300 pack would give 500 > 300 face.
@@ -164,7 +164,7 @@ func TestRefundCannotExceedFaceValue(t *testing.T) {
 func TestExpireForfeitsResidual(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(-1 * time.Hour) // already past deadline
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
 	pack, _, err := l.Expire("pk-1", "expire-1")
@@ -182,7 +182,7 @@ func TestExpireForfeitsResidual(t *testing.T) {
 func TestExpireRefusesFutureDeadline(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour) // not yet reached
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
 	if _, _, err := l.Expire("pk-1", "expire-1"); err == nil {
@@ -193,10 +193,10 @@ func TestExpireRefusesFutureDeadline(t *testing.T) {
 func TestExpiredPackCannotBeConsumed(t *testing.T) {
 	l, _ := newTestLedger()
 	expire := testNow.Add(-1 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
-	_, _, shortfall, err := l.Consume("pk-1", "scecs", yuan("100"), "chg-1", "consume-1")
+	_, _, shortfall, err := l.Consume("pk-1", "euecs", yuan("100"), "chg-1", "consume-1")
 	if err == nil {
 		t.Fatal("consume of expired pack should fail")
 	}
@@ -209,10 +209,10 @@ func TestSweepExpiredExpiresPastDeadlinePacks(t *testing.T) {
 	l, _ := newTestLedger()
 	past := testNow.Add(-1 * time.Hour)
 	future := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-past", 100123, "scecs", "scecs.pack", yuan("1000"), past, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-past", 100123, "euecs", "euecs.pack", yuan("1000"), past, "ord-1"); err != nil {
 		t.Fatalf("purchase past: %v", err)
 	}
-	if _, _, err := l.Purchase("pk-future", 100123, "scecs", "scecs.pack", yuan("1000"), future, "ord-2"); err != nil {
+	if _, _, err := l.Purchase("pk-future", 100123, "euecs", "euecs.pack", yuan("1000"), future, "ord-2"); err != nil {
 		t.Fatalf("purchase future: %v", err)
 	}
 	expired, err := l.SweepExpired(100123)
@@ -234,7 +234,7 @@ func TestConcurrentConsumeCannotOverspend(t *testing.T) {
 	expire := testNow.Add(30 * 24 * time.Hour)
 	// A pack with 1000 yuan; 50 concurrent consumes of 100 each.
 	// Capacity admits 10 consumers (10×100=1000); the other 40 must take 0.
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
 
@@ -243,7 +243,7 @@ func TestConcurrentConsumeCannotOverspend(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, _, _, err := l.Consume("pk-1", "scecs", yuan("100"), "chg-1", fmt.Sprintf("consume-%d", i))
+			_, _, _, err := l.Consume("pk-1", "euecs", yuan("100"), "chg-1", fmt.Sprintf("consume-%d", i))
 			// A consumer that lost the race gets a terminal/insufficient error;
 			// that is expected, not a test failure.
 			if err != nil && err != ErrInsufficientQuota && err != ErrPackExhausted && err != ErrPackTerminal {
@@ -284,7 +284,7 @@ func TestConcurrentConsumeCannotOverspend(t *testing.T) {
 func TestWaterfallIntegration(t *testing.T) {
 	l, store := newTestLedger()
 	expire := testNow.Add(30 * 24 * time.Hour)
-	if _, _, err := l.Purchase("pk-1", 100123, "scecs", "scecs.pack", yuan("700"), expire, "ord-1"); err != nil {
+	if _, _, err := l.Purchase("pk-1", 100123, "euecs", "euecs.pack", yuan("700"), expire, "ord-1"); err != nil {
 		t.Fatalf("purchase: %v", err)
 	}
 	// Build the waterfall pools: resource pack + a cash pool.
@@ -304,13 +304,13 @@ func TestWaterfallIntegration(t *testing.T) {
 	usage := metering.HourlyUsage{
 		AggID:         "agg-1",
 		AccountID:     100123,
-		ResourceID:    "scecs-x",
+		ResourceID:    "euecs-x",
 		MeteringItem:  "cpu_core_hour",
 		HourStart:     testNow,
 		TotalQuantity: metering.Quantity(1000) * metering.Quantity(1_000_000),
 		CoveredRatio:  100,
 	}
-	settle, err := eng.Settle(usage, yuan("1"), "scecs", "snap-1", pools)
+	settle, err := eng.Settle(usage, yuan("1"), "euecs", "snap-1", pools)
 	if err != nil {
 		t.Fatalf("settle: %v", err)
 	}

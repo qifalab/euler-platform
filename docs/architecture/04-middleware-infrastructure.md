@@ -159,12 +159,12 @@ flowchart TB
 
 | 分区 | 域名 | 面向流量 | 认证方式 | 限流基线 | 附加插件 |
 |---|---|---|---|---|---|
-| 官网开放区 | `www.starcloud.cn`、`www.starcloud.cn/api/portal/**` | 匿名访客 + 营销 API | 匿名(可选登录态透传) | IP 维度 60 req/s | ip-restriction、UA 过滤、静态缓存 |
-| 控制台区 | `console.starcloud.cn/api/**` | 登录用户 | JWT(Session 换发) | 用户维度 30 req/s,登录接口 IP 维度 5 req/min | jwt-auth、csrf(应用层配合)、request-id |
-| OpenAPI 区 | `{productCode}.api.starcloud.cn`(如 `scecs.api.starcloud.cn`) | AK/SK 签名调用 | AK/SK CPS1-HMAC-SHA256 签名(契约见《07-security.md》§4.1) | AK 维度按套餐(QPS 配额),默认 20 req/s/AK | forward-auth(签名校验)、request-validation、api-version |
+| 官网开放区 | `www.euler.emoera.com`、`www.euler.emoera.com/api/portal/**` | 匿名访客 + 营销 API | 匿名(可选登录态透传) | IP 维度 60 req/s | ip-restriction、UA 过滤、静态缓存 |
+| 控制台区 | `console.euler.emoera.com/api/**` | 登录用户 | JWT(Session 换发) | 用户维度 30 req/s,登录接口 IP 维度 5 req/min | jwt-auth、csrf(应用层配合)、request-id |
+| OpenAPI 区 | `{productCode}.api.euler.emoera.com`(如 `euecs.api.euler.emoera.com`) | AK/SK 签名调用 | AK/SK CPS1-HMAC-SHA256 签名(契约见《07-security.md》§4.1) | AK 维度按套餐(QPS 配额),默认 20 req/s/AK | forward-auth(签名校验)、request-validation、api-version |
 
 > **OpenAPI 形态全局锁定(全书唯一口径,各章以此为准)**:
-> ① **域名形态锁定"一产品一子域名"`{productCode}.api.starcloud.cn`**,productCode 命名与示例对齐《01-product-catalog.md》§1.1 决策 D0(`sc` 前缀,如 `scecs`/`scoss`);不采用单一主域名 `api.{domain}/?Action=...` 形态(《03-backend-services.md》§9.1 的入口域名表述需回写对齐本节);
+> ① **域名形态锁定"一产品一子域名"`{productCode}.api.euler.emoera.com`**,productCode 命名与示例对齐《01-product-catalog.md》§1.1 决策 D0(`sc` 前缀,如 `euecs`/`euoss`);不采用单一主域名 `api.{domain}/?Action=...` 形态(《03-backend-services.md》§9.1 的入口域名表述需回写对齐本节);
 > ② **版本载体锁定 RPC 风格 `Action` + 日期型 `Version` 参数**(与《03-backend-services.md》§9.1 一致,如 `?Action=RunInstances&Version=2026-08-01`),**URI 不承载版本号**(不使用 `/v1/` 前缀式版本;《07-security.md》§4.3 中 `api.<domain>.com/v1/{service}/*` 的路由形态需回写对齐本节);
 > ③ 签名算法唯一契约 CPS1-HMAC-SHA256,见《07-security.md》§4.1;对象存储产品保持 S3 兼容 REST(见 9.3),不受①②约束。
 
@@ -176,15 +176,15 @@ flowchart TB
 
 | 分区 | 路由(uri/host) | 上游(Nacos service) | 说明 |
 |---|---|---|---|
-| 官网 | `www.starcloud.cn/` | 静态 CDN/Nginx,回源 site-bff | SSR 首屏 |
+| 官网 | `www.euler.emoera.com/` | 静态 CDN/Nginx,回源 site-bff | SSR 首屏 |
 | 官网 | `/api/portal/**` | `site-bff@@site-bff` | 营销、产品目录查询(site-bff 待补录《03》§4.0,见 4.3) |
 | 官网 | `/api/doc/**` | `svc-doc@@svc-doc` | 文档中心内容 API(svc-doc 待补录《03》§4.0,见 4.3) |
 | 控制台 | `/api/account/**` | `svc-iam@@svc-iam` | 账号、RAM、AK 管理 |
 | 控制台 | `/api/trade/**` | `console-bff@@console-bff` | 订单/费用中心聚合层(《03》§4.0 console-bff) |
 | 控制台 | `/api/resource/**` | `console-bff@@console-bff` | 资源列表/生命周期聚合层(同上) |
 | 控制台 | `/api/{productCode}/**` | `svc-{productCode}@@svc-{productCode}` | 各产品控制台后端,新增产品=新增一条路由模板,服务同步补录《03》§4.0(见 4.3) |
-| OpenAPI | `scecs.api.starcloud.cn/**` | `svc-scecs@@svc-scecs` | RPC 风格:`Action`+日期型 `Version` 参数,URI 不带版本(《03》§9.1) |
-| OpenAPI | `scoss.api.starcloud.cn/**` | MinIO 售卖集群(特殊路由,见 9.3/9.4) | S3 兼容协议透传 |
+| OpenAPI | `euecs.api.euler.emoera.com/**` | `svc-euecs@@svc-euecs` | RPC 风格:`Action`+日期型 `Version` 参数,URI 不带版本(《03》§9.1) |
+| OpenAPI | `euoss.api.euler.emoera.com/**` | MinIO 售卖集群(特殊路由,见 9.3/9.4) | S3 兼容协议透传 |
 
 路由命名规范:`{zone}-{domain}-{name}`,如 `console-trade-list-orders`。所有路由强制挂 `prometheus` 与 `request-id` 插件(通过 global_rule 统一下发,避免遗漏)。
 
@@ -196,14 +196,14 @@ flowchart TB
 
 - 登录后由账号域 **svc-iam** 签发 JWT(签发与会话管理归登录/会话 BFF auth-console-bff——该名见《07-security.md》§1.3,尚未列入《03-backend-services.md》§4.0 服务总表,补录登记见本章 4.3;身份核验由 svc-iam 完成,见《07-security.md》§2.4;RS256,**access 15min + refresh 7 天**,SameSite=Lax,refresh 旋转签发——该组参数由《07-security.md》§2.4 统一锁定,本章只做校验实现),网关启用 `jwt-auth` 插件验签;
 - 公钥通过 Nacos 配置下发并支持 kid 轮转;登出/踢人通过 Redis 中的 token 黑名单(short TTL,与剩余有效期对齐)在自定义 `auth-check` 阶段校验;
-- 验签通过后网关统一注入 `X-Sc-Uid`、`X-Sc-Identity`、`X-Sc-TraceId` 身份头(头清单以《07-security.md》§3.3 为唯一权威),上游服务**只信任网关注入头**(入口层 mTLS/内网隔离保证,见《07-security.md》§4.3)。
+- 验签通过后网关统一注入 `X-Euler-Uid`、`X-Euler-Identity`、`X-Euler-TraceId` 身份头(头清单以《07-security.md》§3.3 为唯一权威),上游服务**只信任网关注入头**(入口层 mTLS/内网隔离保证,见《07-security.md》§4.3)。
 
 **(2)OpenAPI 区:AK/SK CPS1-HMAC-SHA256 签名**
 
 APISIX 无内置"云厂商风格签名"插件,采用 `forward-auth` 旁路到 svc-iam 内置的 OpenAPI 验签端点(归属身份域,与《07-security.md》§3.3 验签链路、§8 容量基线一致):
 
 - 验签端点按《07-security.md》§4.1 的唯一算法契约校验 `Authorization` 中的 CPS1-HMAC-SHA256 签名:CanonicalRequest 重算、分域派生密钥、恒定时间比对;同时校验时间窗(`x-cps-date` ±15min)、nonce 重放(`x-cps-nonce`,Redis TTL 16min)与 body 哈希绑定(`x-cps-content-sha256`);(`x-cps-*` 头前缀为签名协议专用头名,与品牌前缀 `sc` 解耦,保留不改,见裁决书 §3)
-- 校验通过后注入 `X-Sc-Uid`、`X-Sc-Identity`、`X-Sc-TraceId` 身份头(《07-security.md》§3.3),并额外回传 `X-Sc-Ak-Id`、`X-Sc-Quota-Qps`(本章补充的限流辅助头,品牌前缀统一 `X-Sc-*`),网关继续做 AK 维度限流;
+- 校验通过后注入 `X-Euler-Uid`、`X-Euler-Identity`、`X-Euler-TraceId` 身份头(《07-security.md》§3.3),并额外回传 `X-Euler-Ak-Id`、`X-Euler-Quota-Qps`(本章补充的限流辅助头,品牌前缀统一 `X-Euler-*`),网关继续做 AK 维度限流;
 - 该端点 P99 < 10ms(签名本地计算 + AK 元数据本地缓存),对网关增加一跳延迟可接受。
 
 **(3)官网区:匿名 + 风控**
@@ -216,8 +216,8 @@ APISIX 无内置"云厂商风格签名"插件,采用 `forward-auth` 旁路到 sv
 |---|---|---|---|
 | 全局保护 | limit-req | 按分区设默认值 | 漏桶,防雪崩兜底 |
 | IP | limit-count | `remote_addr` | 官网区主力,计数器存 Redis Cluster |
-| 登录用户 | limit-count | `http_x_sc_uid` | 控制台区主力(网关注入头,见 3.4) |
-| AK 配额 | limit-count | `http_x_sc_ak_id` | OpenAPI 区,阈值从 forward-auth 回传头动态读取(自定义插件,可选增强) |
+| 登录用户 | limit-count | `http_x_eu_uid` | 控制台区主力(网关注入头,见 3.4) |
+| AK 配额 | limit-count | `http_x_eu_ak_id` | OpenAPI 区,阈值从 forward-auth 回传头动态读取(自定义插件,可选增强) |
 | 单接口热点 | limit-count | route + key 组合 | 下单、发短信等敏感接口单独收紧 |
 
 熔断策略:上游健康检查使用 APISIX 内置 `healthcheck`(被动检查:5xx/超时计数摘除,主动检查可选);**不引入独立熔断中间件**,服务级熔断统一由 APISIX 插件与 gRPC 拦截器分担,避免双标准。
@@ -271,7 +271,7 @@ routes:
         count: 1800
         time_window: 60
         key_type: var
-        key: http_x_sc_uid
+        key: http_x_eu_uid
         rejected_code: 429
         policy: redis-cluster
         redis_cluster_nodes:
@@ -288,26 +288,26 @@ routes:
 
   # OpenAPI 区示例:AK/SK 签名 + AK 维度限流
   # RPC 风格:Action/Version 为请求参数,URI 不承载版本(见 3.2 锁定声明)
-  - id: openapi-scecs
-    host: scecs.api.starcloud.cn
+  - id: openapi-euecs
+    host: euecs.api.euler.emoera.com
     uri: /*
     methods: [POST]
     upstream:
       discovery_type: nacos
-      service_name: svc-scecs@@svc-scecs
+      service_name: svc-euecs@@svc-euecs
       type: roundrobin
     plugins:
       forward-auth:
         uri: http://svc-iam.business.svc/internal/openapi/verify
         request_headers: [Authorization, x-cps-date, x-cps-content-sha256, x-cps-nonce, x-cps-security-token]   # 头名与《07-security.md》§4.1 签名契约对齐
-        upstream_headers: [X-Sc-Uid, X-Sc-Identity, X-Sc-TraceId, X-Sc-Ak-Id, X-Sc-Quota-Qps]
+        upstream_headers: [X-Euler-Uid, X-Euler-Identity, X-Euler-TraceId, X-Euler-Ak-Id, X-Euler-Quota-Qps]
         timeout: { connect: 500, send: 500, read: 500 }
         keepalive: true
       limit-count:
         count: 1200          # 默认 20 QPS x 60s,大客户经配额服务覆盖
         time_window: 60
         key_type: var
-        key: http_x_sc_ak_id
+        key: http_x_eu_ak_id
         rejected_code: 429
         policy: redis-cluster
       request-validation:
@@ -383,7 +383,7 @@ routes:
 
 > 本节与《03-backend-services.md》§2.3.1/§4.0 共同构成全平台命名契约,分工为:**服务清单、职责与语言栈以《03-backend-services.md》§4.0 服务总表为唯一事实源;命名模式、Group 维度、Data ID 与 APISIX 订阅串格式以本节为唯一事实源**。任何章节出现的服务名必须先通过《03》§4.0 总表登记或本节补录清单,方可在路由、Group、消费组中引用。
 
-- **服务名**:管控域服务统一 `svc-{domain}`,短横线小写,Go 服务注册名统一,如 `svc-iam`、`svc-order`;例外项以《03》§4.0 总表固化为名:接入层 BFF 采用 `{场景}-bff`(如 `console-bff`、`site-bff`)、`alert-engine`/`alert-center`、数据面资源控制器 `rc-*`;**产品控制面服务命名 `svc-{productCode}`**(productCode 见《01-product-catalog.md》D0,如 `scecs` 产品对应 `svc-scecs`)。注册元数据强制带 `lang=go`、`plane=mgmt|data` 标签,供网关与监控过滤;
+- **服务名**:管控域服务统一 `svc-{domain}`,短横线小写,Go 服务注册名统一,如 `svc-iam`、`svc-order`;例外项以《03》§4.0 总表固化为名:接入层 BFF 采用 `{场景}-bff`(如 `console-bff`、`site-bff`)、`alert-engine`/`alert-center`、数据面资源控制器 `rc-*`;**产品控制面服务命名 `svc-{productCode}`**(productCode 见《01-product-catalog.md》D0,如 `euecs` 产品对应 `svc-euecs`)。注册元数据强制带 `lang=go`、`plane=mgmt|data` 标签,供网关与监控过滤;
 - **Group**:**一律用应用名,即 Group 与服务名完全一致**(如 Group=`svc-order`),禁止按团队或业务域分组(`XXX_GROUP` 形式一律废止);APISIX discovery 订阅串 `{GROUP}@@{serviceName}` 因此固定形如 `svc-order@@svc-order`;
 - **Data ID(配置)**:`{serviceName}.yaml`(主配置)+ `{serviceName}-{feature}.yaml`(拆分配置);共享配置 `shared-{scope}.yaml`,如 `shared-datasource.yaml`、`shared-kafka.yaml`,以 `shared-` 前缀识别;
 - **配置键命名**:`{app}.{module}.{键}`(与《03-backend-services.md》§2.3.1 一致),如 `svc-order.purchase.timeout-minutes`。
@@ -398,7 +398,7 @@ namespace: prod(Group = 应用名,逐服务一组,示意)
 │   svc-notify / svc-audit / svc-ticket / svc-doc            支撑域
 ├── svc-api-meta / svc-kms                                   开放与安全域
 ├── console-bff / site-bff / auth-console-bff                接入层
-└── svc-scecs / svc-scoss / ...                              各产品控制面(立项时补录)
+└── svc-euecs / svc-euoss / ...                              各产品控制面(立项时补录)
 ```
 
 **补录清单(本章及关联章节出现、尚未列入《03-backend-services.md》§4.0 总表的服务,须以 MR 补录后方可上线)**:
@@ -410,7 +410,7 @@ namespace: prod(Group = 应用名,逐服务一组,示意)
 | 文档中心内容服务 | `svc-doc` | Go | 支撑 | 本章 3.3(API 参考类文档仍归 `svc-api-meta`) |
 | 号段发号服务 | `svc-idgen` | Go | 商业化 | 本章 6.6 |
 | KMS 密钥服务 | `svc-kms` | Go | 安全 | 《07-security.md》§1.3(该章现名 `kms-service`,按本节规范改名) |
-| 产品控制面(模板) | `svc-{productCode}`(如 `svc-scecs`) | 以产品立项为准 | 产品 | 本章 3.3,新品上架时逐个补录 |
+| 产品控制面(模板) | `svc-{productCode}`(如 `svc-euecs`) | 以产品立项为准 | 产品 | 本章 3.3,新品上架时逐个补录 |
 
 > 映射说明:《07-security.md》中的 `iam-service`/`audit-service` 即《03》§4.0 总表中的 `svc-iam`/`svc-audit`,不再另设同名服务;《06-kubernetes-productization.md》初稿的 `resource-center` 即 `svc-orchestrator`、`provision-bridge` 收敛为 `rc-*` 控制器履约执行层(《06》§8 口径表),本章 5.4/5.5 已按此对齐。
 
@@ -643,7 +643,7 @@ flowchart TB
 |---|---|---|---|---|---|
 | account_db | 账号 | user、user_auth(登录凭证)、ram_user、ram_role、ram_policy、access_key(仅身份属性;balance/余额流水归 trade_db ledger,见 S29) | 是 | account_id | 4×16 |
 | trade_db | 交易 | order、order_item、payment、refund、bill_month、bill_detail、ledger(资金流水)、coupon、resource_pack | 是 | account_id | 8×16 |
-| resource_db | 资源 | resource_instance(全产品资源主档)、resource_{scecs/scoss/scrds...}_ext、resource_tag、resource_bindingip | 是 | account_id | 8×16 |
+| resource_db | 资源 | resource_instance(全产品资源主档)、resource_{euecs/euoss/eurds...}_ext、resource_tag、resource_bindingip | 是 | account_id | 8×16 |
 | metering_db | 计量 | metering_detail(热 90 天)、metering_hourly_agg | 是 | account_id | 8×16 |
 | content_db | 官网 | page、product_doc、doc_version、banner | 否 | — | 单库 |
 | workflow_db | 工单/审批 | ticket、ticket_message、approval | 否(量大后按 account_id 分) | — | 单库起步 |
@@ -712,10 +712,10 @@ vtctld Reshard --keyspace=trade                    # 触发倍增拆分
 
 ```
 order_id:  yyyyMMddHH + 机器/分片位(2) + 段内序列(8) + vindex 路由位(2)  → 22 位
-resource_id: {productCode}-{regionId}-{分片因子2位}-{随机8位}  → 如 scecs-cn-north-1-01-a1b2c3d4
+resource_id: {productCode}-{regionId}-{分片因子2位}-{随机8位}  → 如 euecs-cn-north-1-01-a1b2c3d4
 ```
 
-> 说明:资源 ID 格式遵循《00-overview.md》附录 A 全局标识规范(`{productCode}-{regionId}-{分片因子2位}-{随机8位}`,productCode 为 `sc` 前缀如 `scecs`,region 为短横线风格如 `cn-north-1`,2 位分片因子 = `(account_id % 库数)(account_id % 表数)`)。
+> 说明:资源 ID 格式遵循《00-overview.md》附录 A 全局标识规范(`{productCode}-{regionId}-{分片因子2位}-{随机8位}`,productCode 为 `sc` 前缀如 `euecs`,region 为短横线风格如 `cn-north-1`,2 位分片因子 = `(account_id % 库数)(account_id % 表数)`)。
 
 - 备选:纯雪花算法 / Redis `INCRBY` 直发(内部纯技术 ID 场景)。
 - 改选条件:号段服务成为瓶颈(QPS > 5 万)时改 Redis `INCRBY` + Lua 直发。
@@ -906,7 +906,7 @@ flowchart TB
 2. **凭证**:租户不持有集群级 AK;自建 STS 服务以平台管理员身份调用 MinIO STS,签发限定本租户前缀的临时凭证(有效期 ≤ 1h),凭证签发事件写 `cloud.sys.audit.action`;
 3. **配额**:bucket 级 quota(MinIO admin API)+ 租户级总配额(STS Policy `s3:quota` 无法表达总量,由配额服务周期校验 + 超限置为只读并通知);
 4. **计量埋点**:① 存储用量——MinIO Prometheus 指标(`minio_bucket_usage_total_bytes`)按 bucket 采集,5min 粒度;② 请求次数——MinIO audit webhook → 日志 → 计量服务聚合;③ 外网流量——网关侧流量统计。三路汇总写入 `cloud.metering.usage.raw`(计量项:`oss_storage_gb_hour`、`oss_api_10k_req`、`oss_egress_gb`),进入统一出账链路(见 5.6 时序与《03-backend-services.md》计费设计);
-5. **路由**:OpenAPI 区 `scoss.api.starcloud.cn` 透传 S3 协议到售卖集群(API path style 关闭、virtual-host 子域名模式,APISIX 四层/七层透传,Host 头保留);
+5. **路由**:OpenAPI 区 `euoss.api.euler.emoera.com` 透传 S3 协议到售卖集群(API path style 关闭、virtual-host 子域名模式,APISIX 四层/七层透传,Host 头保留);
 6. **数据安全**:售卖集群开启 SSE-S3 默认加密;版本控制默认关闭(租户可开启,开启后容量计量按版本累计);跨集群复制作为企业级增值能力预留(可选)。
 
 ---

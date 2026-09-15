@@ -10,14 +10,14 @@ export default defineConfig({
     port: 5180,
     cors: true,
     proxy: { "/console": { target: "http://localhost:9200", changeOrigin: true,
-      configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")) },
+      configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")) },
       "/api/v1/orders": { target: "http://localhost:9204", changeOrigin: true,
-        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")) },
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")) },
       "/api/v1/catalog": { target: "http://localhost:9207", changeOrigin: true,
-        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")) } },
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")) } },
   },
   build: {
     rollupOptions: { input: { main: resolve(__dirname, "index.html") },
-      external: ["vue","vue-router","element-plus","@sc/tokens","@sc/ui","@sc/console-kit","@sc/sdk","@sc/wujie-bridge"] },
+      external: ["vue","vue-router","element-plus","@eu/tokens","@eu/ui","@eu/console-kit","@eu/sdk","@eu/wujie-bridge"] },
   },
 });

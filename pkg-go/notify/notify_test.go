@@ -120,9 +120,9 @@ func releaseWarning() Notification {
 		AccountID:  acct,
 		Class:      ClassReleaseWarning,
 		TemplateID: "tpl-release-final",
-		BizKey:     "scecs-cn-north-1-01-a1b2c3d4",
+		BizKey:     "euecs-cn-north-1-01-a1b2c3d4",
 		Channels:   ChannelsFor(ClassReleaseWarning),
-		Params:     map[string]string{"ResourceId": "scecs-cn-north-1-01-a1b2c3d4"},
+		Params:     map[string]string{"ResourceId": "euecs-cn-north-1-01-a1b2c3d4"},
 	}
 }
 
@@ -179,7 +179,7 @@ func TestDeliveryIsRecordedAsEvidence(t *testing.T) {
 // deleting data: it answers from persisted evidence, not optimism.
 func TestVerifyDeliveredGatesRelease(t *testing.T) {
 	d, _, _ := newDispatcher(base)
-	const resourceID = "scecs-cn-north-1-01-a1b2c3d4"
+	const resourceID = "euecs-cn-north-1-01-a1b2c3d4"
 
 	// Before any warning is sent, release must not be permitted.
 	ok, err := d.VerifyDelivered(acct, ClassReleaseWarning, resourceID)
@@ -203,7 +203,7 @@ func TestVerifyDeliveredGatesRelease(t *testing.T) {
 	}
 
 	// A different resource is not covered by this warning.
-	ok, _ = d.VerifyDelivered(acct, ClassReleaseWarning, "scecs-cn-north-1-01-ffffffff")
+	ok, _ = d.VerifyDelivered(acct, ClassReleaseWarning, "euecs-cn-north-1-01-ffffffff")
 	if ok {
 		t.Fatal("a warning about one resource must not authorise releasing another")
 	}
@@ -428,7 +428,7 @@ func TestAnyDeliveredWarningAuthorisesRelease(t *testing.T) {
 	// The platform may warn several times (7/3/1 days out). One delivered
 	// warning is enough evidence, even if a later attempt failed.
 	d, _, senders := newDispatcher(base)
-	const resourceID = "scecs-cn-north-1-01-a1b2c3d4"
+	const resourceID = "euecs-cn-north-1-01-a1b2c3d4"
 
 	// First warning succeeds.
 	if _, err := d.Send(releaseWarning()); err != nil {

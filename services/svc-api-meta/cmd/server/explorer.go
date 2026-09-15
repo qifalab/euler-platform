@@ -15,9 +15,9 @@
 //
 // The handler:
 //  1. resolves the Action's service namespace from the product code (routing
-//     subdomain {product}.api.starcloud.cn → service, 04-middleware §3.2);
+//     subdomain {product}.api.euler.emoera.com → service, 04-middleware §3.2);
 //  2. builds a cps1.Request and signs it;
-//  3. if a target base URL is configured (SC_EXPLORER_TARGET or a per-product
+//  3. if a target base URL is configured (EULER_EXPLORER_TARGET or a per-product
 //     override), executes the signed request over the wire and returns the
 //     upstream response alongside the signature material;
 //  4. otherwise returns only the signature material (the "what would be sent"
@@ -41,25 +41,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/starcloud/sc-platform/cps1"
-	"github.com/starcloud/sc-platform/errors"
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/cps1"
+	"github.com/qifalab/euler-platform/errors"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // productAPIHost is the routing subdomain convention (04-middleware §3.2):
-// {product}.api.starcloud.cn. The service namespace is the product code with
-// the leading "sc" stripped (scecs → ecs), matching the gateway verifier's
+// {product}.api.euler.emoera.com. The service namespace is the product code with
+// the leading "eu" stripped (euecs → ecs), matching the gateway verifier's
 // derivation and the golden-vector fixture (service "ecs").
 func productAPIHost(productCode string) string {
-	return productCode + ".api.starcloud.cn"
+	return productCode + ".api.euler.emoera.com"
 }
 
-// serviceNamespace derives the signing service from a product code: scecs→ecs,
-// scoss→oss, scvpc→vpc. Unknown products keep the full code as the service so a
+// serviceNamespace derives the signing service from a product code: euecs→ecs,
+// euoss→oss, euvpc→vpc. Unknown products keep the full code as the service so a
 // new product is signable before its mapping is taught here (the gateway would
 // reject a service it does not recognise, which is the correct gate).
 func serviceNamespace(productCode string) string {
-	if strings.HasPrefix(productCode, "sc") && len(productCode) > 2 {
+	if strings.HasPrefix(productCode, "eu") && len(productCode) > 2 {
 		return productCode[2:]
 	}
 	return productCode
@@ -116,12 +116,12 @@ type explorerResponse struct {
 // handleExplorer signs (and optionally proxies) a product API call.
 //
 // It is wired onto the mux in main.go. Like the other public-meta endpoints it
-// is account-gated (X-Sc-Account-Id required) so the Explorer is reachable
+// is account-gated (X-Euler-Account-Id required) so the Explorer is reachable
 // only from the authenticated console, not the open internet.
 func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	if accountIDFromRequest(r) == "" {
 		writeError(w, errorsx.New("Common.MissingAccountId", errorsx.StatusForbidden,
-			"X-Sc-Account-Id header is required (injected by gateway)"))
+			"X-Euler-Account-Id header is required (injected by gateway)"))
 		return
 	}
 
@@ -213,7 +213,7 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Optional live execution. SC_EXPLORER_TARGET points at a reachable product
+	// Optional live execution. EULER_EXPLORER_TARGET points at a reachable product
 	// API base (e.g. http://localhost:9102 for a locally-run product); without it
 	// the Explorer returns only the signature material (source-only dev).
 	target := explorerTarget(req.ProductCode)
@@ -237,14 +237,14 @@ func explorerNonce(r *http.Request) string {
 }
 
 // explorerTarget resolves a per-product upstream base URL. Env override
-// SC_EXPLORER_TARGET_<PRODUCT> (uppercased, product chars kept) takes priority,
-// then a blanket SC_EXPLORER_TARGET. Empty = no live call.
+// EULER_EXPLORER_TARGET_<PRODUCT> (uppercased, product chars kept) takes priority,
+// then a blanket EULER_EXPLORER_TARGET. Empty = no live call.
 func explorerTarget(productCode string) string {
-	key := "SC_EXPLORER_TARGET_" + strings.ToUpper(productCode)
+	key := "EULER_EXPLORER_TARGET_" + strings.ToUpper(productCode)
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
 	}
-	return strings.TrimSpace(os.Getenv("SC_EXPLORER_TARGET"))
+	return strings.TrimSpace(os.Getenv("EULER_EXPLORER_TARGET"))
 }
 
 // explorerHTTPClient is the upstream client for live Explorer calls: a bounded

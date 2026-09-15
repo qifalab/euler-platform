@@ -111,8 +111,8 @@ cloud.platform/iso-level: shared    # shared | dedicated
 # 对象级标签(所有平台创建的 K8s 对象必须携带)
 cloud.platform/tenant: t-8f2a       # 云平台主账号 ID(account_id)
 cloud.platform/project: p-0193      # 项目 ID(见 §3.1)
-cloud.platform/product: scoss-bucket  # 产品代码(与产品目录一致,sc 前缀)
-cloud.platform/instance: scoss-cn-north-1-01-a1b2c3d4  # 实例 ID(全局唯一,费用中心对账键,见 00 附录A 资源 ID 格式)
+cloud.platform/product: euoss-bucket  # 产品代码(与产品目录一致,sc 前缀)
+cloud.platform/instance: euoss-cn-north-1-01-a1b2c3d4  # 实例 ID(全局唯一,费用中心对账键,见 00 附录A 资源 ID 格式)
 ```
 
 > 标签是配额、计量、审计、强制清理的唯一依据。`instance` 标签缺失的对象会被巡检任务判定为"孤儿资源"并进入人工回收队列——这条纪律写进 Operator 开发规约。
@@ -417,13 +417,13 @@ flowchart LR
 apiVersion: products.cloud.platform/v1
 kind: {Product}Instance            # 命名规范:{Product}Instance,复数小写
 metadata:
-  name: scoss-cn-north-1-01-a1b2c3d4  # = 平台实例 ID,全局唯一(资源 ID 格式见 00 附录A)
-  namespace: plat-scoss              # 共享型产品数据面统一放 plat-{product}
+  name: euoss-cn-north-1-01-a1b2c3d4  # = 平台实例 ID,全局唯一(资源 ID 格式见 00 附录A)
+  namespace: plat-euoss              # 共享型产品数据面统一放 plat-{product}
   labels:                          # 四元标签强制(§2.1.2)
     cloud.platform/tenant: t-8f2a
     cloud.platform/project: p-0193
-    cloud.platform/product: scoss-bucket
-    cloud.platform/instance: scoss-cn-north-1-01-a1b2c3d4
+    cloud.platform/product: euoss-bucket
+    cloud.platform/instance: euoss-cn-north-1-01-a1b2c3d4
 spec:
   edition: standard                # 规格族,只能取产品目录注册过的枚举
   params: { ... }                  # 购买参数(与 OpenAPI 创建入参一一对应)
@@ -497,7 +497,7 @@ sequenceDiagram
     autonumber
     actor U as 租户(控制台/OpenAPI)
     participant GW as APISIX 网关
-    participant API as SCOSS OpenAPI 服务(Go)
+    participant API as EUOSS OpenAPI 服务(Go)
     participant CAT as svc-catalog(询价)
     participant Q as svc-quota
     participant ORD as svc-order(Go)
@@ -530,7 +530,7 @@ sequenceDiagram
     ORC->>RC: gRPC ApplyResource(ResourceSpec,幂等键=orderId)
     RC-->>ORC: task_id(提交成功语义,真实进度异步收敛)
     ORC->>ORC: resource_instance: INIT→CREATING(乐观锁)
-    RC->>K8S: 创建 OSSBucket CR(plat-scoss namespace,四元标签)
+    RC->>K8S: 创建 OSSBucket CR(plat-euoss namespace,四元标签)
     K8S-->>OP: watch 到 CR(phase: Pending)
     OP->>OP: reconcile:选池 → 建桶 → 设配额 → 生成租户 AK
     OP->>MIN: S3 Admin API 执行

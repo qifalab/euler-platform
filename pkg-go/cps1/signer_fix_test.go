@@ -10,9 +10,9 @@ import (
 // verify endpoint already reads headers case-insensitively.
 func TestVerifyAcceptsLowercaseAuthorizationHeader(t *testing.T) {
 	nonce := "case-nonce"
-	hdrs := baseHeaders("scecs.api.starcloud.cn", nonce)
+	hdrs := baseHeaders("euecs.api.euler.emoera.com", nonce)
 	req := Request{
-		Method: "GET", Host: "scecs.api.starcloud.cn", Path: "/",
+		Method: "GET", Host: "euecs.api.euler.emoera.com", Path: "/",
 		Query: url.Values{}, Headers: hdrs, Date: fixedTime,
 	}
 	signed, err := Sign(req, Credentials{AK: testAK, SK: testSK}, testRegion, testService, fixedTime)

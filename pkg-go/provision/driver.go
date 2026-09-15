@@ -41,7 +41,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // DriverType selects the fulfilment backend for a product.
@@ -646,7 +646,7 @@ func CRKind(productCode string) string {
 	if productCode == "" {
 		return ""
 	}
-	// scecs → ScecsInstance
+	// euecs → EuecsInstance
 	return strings.ToUpper(productCode[:1]) + productCode[1:] + "Instance"
 }
 

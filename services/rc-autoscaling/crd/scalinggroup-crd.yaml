@@ -6,7 +6,7 @@
 #   3. Operator         (rc-autoscaling — provision/operate engine, Go)
 #   4. metering point   (status.usage → cloud.metering.usage.raw)
 #
-# 弹性伸缩 SCAS (M-7.3, 09-roadmap §4.3 M-7, 06 §2.6): a scaling group is the
+# 弹性伸缩 EUAS (M-7.3, 09-roadmap §4.3 M-7, 06 §2.6): a scaling group is the
 # POLICY layer over the execution surface (HPA / VPA / Cluster-Autoscaler). The
 # group holds the replica bounds, the trigger rules and the cooldown; the
 # executor (rc-autoscaling controller → HPA/VPA/CA) turns a Decision from
@@ -18,7 +18,7 @@
 # AZ), so there is no zone field — the policy dispatches across whatever the
 # managed_type's driver provisions.
 #
-# The four iron rules this schema enforces (same as scecs/sceci-instance-crd):
+# The four iron rules this schema enforces (same as euecs/eueci-instance-crd):
 #   * the CR is the only fact interface — no SSH, no reaching into internals
 #   * status is machine-readable: structured phase + conditions, never a log
 #     line to be parsed
@@ -39,12 +39,12 @@ spec:
     listKind: ScalingGroupList
     plural: scalinggroups
     singular: scalinggroup
-    shortNames: [scas]
+    shortNames: [euas]
   versions:
     - name: v1
       served: true
       storage: true
-      # Printer columns so `kubectl get scas` answers the questions an
+      # Printer columns so `kubectl get euas` answers the questions an
       # operator actually asks, without a describe.
       additionalPrinterColumns:
         - name: Phase
@@ -111,13 +111,13 @@ spec:
                     managedType:
                       type: string
                       description: >
-                        Which compute product the group scales — ecs (SCECS VMs)
-                        or eci (SCECI containers). The managed instances bill
+                        Which compute product the group scales — ecs (EUECS VMs)
+                        or eci (EUECI containers). The managed instances bill
                         under their own products; this field routes the executor.
                       enum: [ecs, eci]
                     vpcId:
                       type: string
-                      description: SCVPC network boundary (decision R-02).
+                      description: EUVPC network boundary (decision R-02).
                     rules:
                       type: array
                       description: >
@@ -203,7 +203,7 @@ spec:
                   description: >
                     Metering readings, a FIRST-CLASS status field (06§4.1 rule
                     4). A product that cannot report usage cannot be launched.
-                    These are published to cloud.metering.usage.raw. SCAS bills
+                    These are published to cloud.metering.usage.raw. EUAS bills
                     the scaling-group-hour management fee at HOUR granularity;
                     the managed ECS/ECI instances carry their own (per-second /
                     per-hour) metering under their own resource ids.
@@ -241,15 +241,15 @@ spec:
 apiVersion: products.cloud.platform/v1
 kind: ScalingGroup
 metadata:
-  name: scas-cn-north-1-01-7b8c9d0e
-  namespace: plat-scas
+  name: euas-cn-north-1-01-7b8c9d0e
+  namespace: plat-euas
   labels:
     # All four are mandatory. Without them a cluster object cannot be
     # attributed to a tenant, which breaks isolation, billing and audit at once.
     cloud.platform/tenant: "100123"
     cloud.platform/project: "1"
-    cloud.platform/product: scas
-    cloud.platform/instance: scas-cn-north-1-01-7b8c9d0e
+    cloud.platform/product: euas
+    cloud.platform/instance: euas-cn-north-1-01-7b8c9d0e
   finalizers:
     # The Operator reclaims backing resources and pushes a FINAL metering
     # reading before removing this. "CR truly gone" is the release-complete
@@ -265,7 +265,7 @@ spec:
     maxReplicas: 10
     desiredReplicas: 3
     managedType: eci
-    vpcId: scvpc-cn-north-1-01-11223344
+    vpcId: euvpc-cn-north-1-01-11223344
     cooldownSeconds: 300
     rules:
       - metricName: cpu

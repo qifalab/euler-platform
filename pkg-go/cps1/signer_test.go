@@ -18,9 +18,9 @@ const (
 	testService = "ecs"
 )
 
-// testAK is a 32-char AK with the SC prefix (07§2.5). Not a const because it
+// testAK is a 32-char AK with the EU prefix (07§2.5). Not a const because it
 // is built from a function call.
-var testAK = "SC" + strings.Repeat("A", 30)
+var testAK = "EU" + strings.Repeat("A", 30)
 
 func baseHeaders(host, nonce string) map[string]string {
 	return map[string]string{
@@ -44,13 +44,13 @@ func withAuth(s SignedRequest) map[string]string {
 
 func TestSignThenVerifyRoundTrip(t *testing.T) {
 	nonce := "550e8400-e29b-41d4-a716-446655440000"
-	hdrs := baseHeaders("scecs.api.starcloud.cn", nonce)
+	hdrs := baseHeaders("euecs.api.euler.emoera.com", nonce)
 	body := []byte(`{"ImageId":"img-001","InstanceType":"s2.large"}`)
 	hdrs[HeaderContentSHA] = hexSHA256(body)
 
 	req := Request{
 		Method:  "POST",
-		Host:    "scecs.api.starcloud.cn",
+		Host:    "euecs.api.euler.emoera.com",
 		Path:    "/",
 		Query:   url.Values{"Action": {"RunInstances"}, "Version": {"2026-08-01"}},
 		Headers: hdrs,
@@ -97,14 +97,14 @@ func TestGoldenVector(t *testing.T) {
 	// duplicating the algorithm. If Sign() drifts from this, the test fails —
 	// protecting the "algorithm is contract" invariant (07§4.1 / D4).
 	nonce := "golden-nonce-123"
-	hdrs := baseHeaders("scecs.api.starcloud.cn", nonce)
+	hdrs := baseHeaders("euecs.api.euler.emoera.com", nonce)
 	body := []byte("hello-body")
 	hdrs[HeaderContentSHA] = hexSHA256(body)
 	query := url.Values{"Action": {"DescribeInstances"}, "Version": {"2026-08-01"}}
 
 	req := Request{
 		Method:  "GET",
-		Host:    "scecs.api.starcloud.cn",
+		Host:    "euecs.api.euler.emoera.com",
 		Path:    "/",
 		Query:   query,
 		Headers: hdrs,
@@ -148,11 +148,11 @@ func computeExpectedSignature(t *testing.T, req Request, signedHdrs map[string]s
 
 func TestVerifyRejectsTamperedBody(t *testing.T) {
 	nonce := "tamper-nonce"
-	hdrs := baseHeaders("scecs.api.starcloud.cn", nonce)
+	hdrs := baseHeaders("euecs.api.euler.emoera.com", nonce)
 	body := []byte(`{"x":1}`)
 	hdrs[HeaderContentSHA] = hexSHA256(body)
 	req := Request{
-		Method: "POST", Host: "scecs.api.starcloud.cn", Path: "/",
+		Method: "POST", Host: "euecs.api.euler.emoera.com", Path: "/",
 		Query: url.Values{}, Headers: hdrs, Body: body,
 	}
 	signed, err := Sign(req, Credentials{AK: testAK, SK: testSK}, testRegion, testService, fixedTime)
@@ -171,9 +171,9 @@ func TestVerifyRejectsTamperedBody(t *testing.T) {
 
 func TestVerifyRejectsClockSkew(t *testing.T) {
 	nonce := "skew-nonce"
-	hdrs := baseHeaders("scecs.api.starcloud.cn", nonce)
+	hdrs := baseHeaders("euecs.api.euler.emoera.com", nonce)
 	req := Request{
-		Method: "GET", Host: "scecs.api.starcloud.cn", Path: "/",
+		Method: "GET", Host: "euecs.api.euler.emoera.com", Path: "/",
 		Query: url.Values{}, Headers: hdrs, Body: nil, Date: fixedTime,
 	}
 	signed, err := Sign(req, Credentials{AK: testAK, SK: testSK}, testRegion, testService, fixedTime)
@@ -193,9 +193,9 @@ func TestVerifyRejectsClockSkew(t *testing.T) {
 
 func TestVerifyRejectsWrongAK(t *testing.T) {
 	nonce := "ak-nonce"
-	hdrs := baseHeaders("scecs.api.starcloud.cn", nonce)
+	hdrs := baseHeaders("euecs.api.euler.emoera.com", nonce)
 	req := Request{
-		Method: "GET", Host: "scecs.api.starcloud.cn", Path: "/",
+		Method: "GET", Host: "euecs.api.euler.emoera.com", Path: "/",
 		Query: url.Values{}, Headers: hdrs, Body: nil, Date: fixedTime,
 	}
 	signed, err := Sign(req, Credentials{AK: testAK, SK: testSK}, testRegion, testService, fixedTime)
@@ -207,7 +207,7 @@ func TestVerifyRejectsWrongAK(t *testing.T) {
 		Headers: withAuth(signed), Body: nil, Date: fixedTime,
 	}
 	// Different AK on the verify side.
-	if err := Verify(vr, Credentials{AK: "SC" + strings.Repeat("B", 30), SK: testSK}, testRegion, testService, fixedTime); err != ErrSignatureDoesNotMatch {
+	if err := Verify(vr, Credentials{AK: "EU" + strings.Repeat("B", 30), SK: testSK}, testRegion, testService, fixedTime); err != ErrSignatureDoesNotMatch {
 		t.Fatalf("expected ErrSignatureDoesNotMatch, got %v", err)
 	}
 }

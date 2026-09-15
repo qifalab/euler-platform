@@ -1,5 +1,5 @@
 {
-  "name": "@sc/console-kit",
+  "name": "@eu/console-kit",
   "version": "0.1.0",
   "description": "Console framework — ResourceTable, CreateWizard, AppErrorBoundary (02§7).",
   "type": "module",
@@ -14,20 +14,25 @@
     },
     "./style.css": "./dist/style.css"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "vite build && vue-tsc",
     "dev": "vite build --watch",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@sc/tokens": "workspace:*",
-    "@sc/sdk": "workspace:*",
-    "@sc/wujie-bridge": "workspace:*",
-    "@sc/ui": "workspace:*"
+    "@eu/sdk": "workspace:*",
+    "@eu/tokens": "workspace:*",
+    "@eu/ui": "workspace:*",
+    "@eu/wujie-bridge": "workspace:*"
   },
   "peerDependencies": {
-    "vue": "^3.4.0",
-    "element-plus": "^2.7.0"
+    "element-plus": "^2.7.0",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
   }
 }

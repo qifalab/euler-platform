@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "node:path";
 
-// console-base (the shell) is the host. It bundles Vue/Element Plus/@sc/*
+// console-base (the shell) is the host. It bundles Vue/Element Plus/@eu/*
 // as the single source of shared instances, injected into sub-apps via props
 // (02§6.5 externals sharing — no runtime Module Federation in phase 1).
 export default defineConfig({
@@ -19,7 +19,7 @@ export default defineConfig({
     cors: true,
     proxy: {
       // Console aggregation endpoints → console-bff (03§4). The BFF requires the
-      // gateway-injected X-Sc-Account-Id header; in dev we inject a fixed seed
+      // gateway-injected X-Euler-Account-Id header; in dev we inject a fixed seed
       // account (100123 matches the BFF's seeded data) so the console renders
       // real data without the APISIX gateway.
       "/console": {
@@ -27,8 +27,8 @@ export default defineConfig({
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on("proxyReq", (proxyReq) => {
-            proxyReq.setHeader("X-Sc-Account-Id", "100123");
-            proxyReq.setHeader("X-Sc-TraceId", `dev-${Date.now().toString(36)}`);
+            proxyReq.setHeader("X-Euler-Account-Id", "100123");
+            proxyReq.setHeader("X-Euler-TraceId", `dev-${Date.now().toString(36)}`);
           });
         },
       },

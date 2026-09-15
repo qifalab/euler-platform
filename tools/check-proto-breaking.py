@@ -37,7 +37,7 @@ import re
 import sys
 from collections import defaultdict
 
-PROTO_GLOB = "proto-hub/proto/starcloud/**/*.proto"
+PROTO_GLOB = "proto-hub/proto/euler/**/*.proto"
 BASELINE = "proto-hub/.breaking-baseline.json"
 
 # A version directory is the last path segment before the .proto file (v1,
@@ -131,7 +131,7 @@ def check_versioned_package(infos: list[dict]) -> list[str]:
     errs = []
     for info in infos:
         parts = info["path"].replace(os.sep, "/").split("/")
-        # .../starcloud/{domain}/{version}/{file}.proto
+        # .../euler/{domain}/{version}/{file}.proto
         if len(parts) < 2 or not VERSION_RE.match(parts[-2]):
             errs.append(
                 "%s: package not under a version directory (v1/v1beta1); "

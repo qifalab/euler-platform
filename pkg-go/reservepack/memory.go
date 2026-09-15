@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/billing"
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // MemoryStore is an in-memory Store for tests and the runnable demos. It is

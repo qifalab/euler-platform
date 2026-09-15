@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // newSQLTestStore wires the SQL store to a throwaway trade_db.

@@ -2,11 +2,11 @@
 //
 // svc-monitor manages tenant alert rules (CRUD) and acts as a metrics query
 // proxy (rule evaluation itself is alert-engine's job, 03§4.4.5). This is the
-// user-facing service backing the SCMON console and the console-monitor
+// user-facing service backing the EUMON console and the console-monitor
 // sub-app. Phase-1 keeps an in-memory store seeded with demo rules; the DDL in
 // sql/ is the production shape.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	GET    /api/v1/monitor/rules             — list the account's alert rules
 //	POST   /api/v1/monitor/rules             — create a rule (idempotent on account+product+metric)
@@ -35,17 +35,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/chaos"
-	"github.com/starcloud/sc-platform/slo"
+	"github.com/qifalab/euler-platform/chaos"
+	"github.com/qifalab/euler-platform/slo"
 )
 
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // maxBodyBytes caps JSON request bodies.
 const maxBodyBytes = 1 << 20 // 1 MiB
 
 // Comparison operator values follow proto-hub
-// proto/starcloud/monitor/v1/monitor.proto ComparisonOperator (lines 46-52):
+// proto/euler/monitor/v1/monitor.proto ComparisonOperator (lines 46-52):
 // 1 = GREATER_THAN (>), 2 = GREATER_THAN_OR_EQUAL (≥),
 // 3 = LESS_THAN (<),    4 = LESS_THAN_OR_EQUAL (≤).
 const (
@@ -107,9 +107,9 @@ type ruleStore struct {
 func newRuleStore() *ruleStore {
 	s := newRuleStoreWith(newMemRuleRepo())
 	// Seeds use proto operator semantics: "cpu ≥ 80" → 2 (GTE), "req > 1000" → 1 (GT).
-	s.seed(100123, "scecs", "instance", "cpu_utilization", "80.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP", "EMAIL"})
-	s.seed(100123, "scecs", "instance", "memory_utilization", "90.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP"})
-	s.seed(100123, "scoss", "bucket", "request_count", "1000.0000", cmpGreaterThan, 300, 2, []string{"SMS"})
+	s.seed(100123, "euecs", "instance", "cpu_utilization", "80.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP", "EMAIL"})
+	s.seed(100123, "euecs", "instance", "memory_utilization", "90.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP"})
+	s.seed(100123, "euoss", "bucket", "request_count", "1000.0000", cmpGreaterThan, 300, 2, []string{"SMS"})
 	return s
 }
 
@@ -134,30 +134,30 @@ func (s *ruleStore) seed(acct int64, product, rtype, metric, threshold string, c
 // --- HTTP helpers (envelope, 03§9.3) ---
 
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+	// TRUST NOTE: X-Euler-Account-Id is injected by the API gateway after
 	// authentication; this service relies on network isolation (and optionally
 	// internalTokenMiddleware) rather than re-authenticating.
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -437,9 +437,9 @@ func (s *ruleStore) handleQueryMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *ruleStore) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	// alert_rule_template — platform preset rules (03§4.4.1).
 	templates := []map[string]any{
-		{"templateId": 1, "productCode": "scecs", "metric": "cpu_utilization", "threshold": "80", "period": 60},
-		{"templateId": 2, "productCode": "scecs", "metric": "memory_utilization", "threshold": "90", "period": 60},
-		{"templateId": 3, "productCode": "scoss", "metric": "request_count", "threshold": "1000", "period": 300},
+		{"templateId": 1, "productCode": "euecs", "metric": "cpu_utilization", "threshold": "80", "period": 60},
+		{"templateId": 2, "productCode": "euecs", "metric": "memory_utilization", "threshold": "90", "period": 60},
+		{"templateId": 3, "productCode": "euoss", "metric": "request_count", "threshold": "1000", "period": 300},
 	}
 	writeJSON(w, "OK", templates)
 }
@@ -575,26 +575,26 @@ func (s *ruleStore) handleChaosDrills(w http.ResponseWriter, r *http.Request) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("mon-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }
 
 // internalTokenMiddleware optionally enforces an internal shared secret: when
-// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
-// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
-// X-Sc-Account-Id trust). Unset (dev default) = no check.
+// the EULER_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Euler-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Euler-Account-Id trust). Unset (dev default) = no check.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Sc-Internal-Token") != token {
+		if r.Header.Get("X-Euler-Internal-Token") != token {
 			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
 			return
 		}

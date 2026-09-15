@@ -59,7 +59,7 @@ type Identity struct {
 	AccountID int64
 	Principal string // e.g. "user/alice"
 	// AKID is masked: only the prefix and last two characters are retained
-	// (07§6.1 "SC****3F"). A full access key in a log is a credential leak
+	// (07§6.1 "EU****3F"). A full access key in a log is a credential leak
 	// waiting for the first person who exports the audit table.
 	AKID       string
 	MFAPresent bool
@@ -70,7 +70,7 @@ type Identity struct {
 type Event struct {
 	EventID     string
 	EventTime   time.Time
-	EventSource string // e.g. scecs.api.starcloud.cn
+	EventSource string // e.g. euecs.api.euler.emoera.com
 	EventName   string // e.g. StopInstance
 	SourceIP    string
 	UserAgent   string
@@ -112,9 +112,9 @@ func MaskAK(ak string) string {
 		return ""
 	}
 	if len(ak) < 4 {
-		return "SC****"
+		return "EU****"
 	}
-	return "SC****" + ak[len(ak)-2:]
+	return "EU****" + ak[len(ak)-2:]
 }
 
 // canonicalPayload renders the hashed content of an event deterministically.

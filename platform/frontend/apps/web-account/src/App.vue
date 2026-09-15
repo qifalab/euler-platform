@@ -5,8 +5,8 @@
  * (the console provides the top bar).
  */
 import { RouterView } from "vue-router";
-import { inWujieSandbox } from "@sc/wujie-bridge";
-import { SiteTopbar } from "@sc/ui";
+import { inWujieSandbox } from "@eu/wujie-bridge";
+import { SiteTopbar } from "@eu/ui";
 import { useAccountAuth } from "./stores/auth";
 
 const auth = useAccountAuth();
@@ -23,7 +23,7 @@ const sandboxed = inWujieSandbox();
         <router-link v-if="auth.isAuthenticated" to="/sts">STS 临时凭证</router-link>
       </template>
       <template #actions>
-        <a class="account-console" href="https://console.starcloud.cn">返回控制台</a>
+        <a class="account-console" href="https://console.euler.emoera.com">返回控制台</a>
       </template>
     </SiteTopbar>
     <main class="account-body">
@@ -34,8 +34,8 @@ const sandboxed = inWujieSandbox();
 
 <style>
 .account-shell { min-height: 100vh; }
-.account-console { color: var(--sc-color-brand); text-decoration: none; font-size: var(--sc-font-size-md); transition: color var(--sc-transition); }
-.account-console:hover { color: var(--sc-color-brand-hover); }
-.account-body { min-height: calc(100vh - var(--sc-topbar-height)); }
+.account-console { color: var(--eu-color-brand); text-decoration: none; font-size: var(--eu-font-size-md); transition: color var(--eu-transition); }
+.account-console:hover { color: var(--eu-color-brand-hover); }
+.account-body { min-height: calc(100vh - var(--eu-topbar-height)); }
 .account-subapp { min-height: 100vh; }
 </style>

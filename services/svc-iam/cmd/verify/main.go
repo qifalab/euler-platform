@@ -11,8 +11,8 @@
 // It must never touch the database synchronously on this path.
 //
 // On success it returns 200 with the identity headers the gateway injects
-// upstream (07§3.3): X-Sc-Account-Id, X-Sc-Identity, X-Sc-TraceId, plus
-// X-Sc-Ak-Id and X-Sc-Quota-Qps for per-AK rate limiting.
+// upstream (07§3.3): X-Euler-Account-Id, X-Euler-Identity, X-Euler-TraceId, plus
+// X-Euler-Ak-Id and X-Euler-Quota-Qps for per-AK rate limiting.
 // On failure it returns 403 with the error code from 03§9.3.
 package main
 
@@ -30,10 +30,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/accesskey"
-	"github.com/starcloud/sc-platform/kms"
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/verify"
+	"github.com/qifalab/euler-platform/accesskey"
+	"github.com/qifalab/euler-platform/kms"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/verify"
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 	// Dev-only: provision a demo AK/SK so the e2e client has credentials to
 	// sign with. A real svc-iam never mints keys at boot and never logs an SK —
 	// the SK is shown exactly once, to the user, at CreateAccessKey time.
-	if os.Getenv("SC_DEV_SEED_AK") == "1" {
+	if os.Getenv("EULER_DEV_SEED_AK") == "1" {
 		created, err := app.akMgr.Create(100123, accesskey.OwnerRAMUser, 555)
 		if err != nil {
 			slog.Error("seed AK failed", "err", err)
@@ -103,7 +103,7 @@ func newApp() (*app, error) {
 	}
 
 	// The AK store decides where credentials live. Persistence is opt-in
-	// (pkg-go/storage doc): with SC_DB_DSN set, keys live in account_db so a
+	// (pkg-go/storage doc): with EULER_DB_DSN set, keys live in account_db so a
 	// restarted verifier still resolves every live key; unset, the in-memory
 	// store keeps the demo and `go test` dependency-free.
 	//
@@ -161,13 +161,13 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// TRUST BOUNDARY: this is an internal endpoint reached only via APISIX
 	// forward-auth; the network layer must not expose it publicly. The
-	// identity headers it returns (X-Sc-Account-Id, ...) are injected by the
+	// identity headers it returns (X-Euler-Account-Id, ...) are injected by the
 	// gateway upstream and trusted by backend services solely because the
 	// gateway strips any client-supplied copies. Optionally, setting
-	// SC_INTERNAL_TOKEN requires the gateway to present the shared secret in
-	// X-Sc-Internal-Token (dev default: disabled).
-	if want := os.Getenv("SC_INTERNAL_TOKEN"); want != "" {
-		got := r.Header.Get("X-Sc-Internal-Token")
+	// EULER_INTERNAL_TOKEN requires the gateway to present the shared secret in
+	// X-Euler-Internal-Token (dev default: disabled).
+	if want := os.Getenv("EULER_INTERNAL_TOKEN"); want != "" {
+		got := r.Header.Get("X-Euler-Internal-Token")
 		if subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
 			slog.Warn("internal token mismatch on /internal/openapi/verify", "remote", r.RemoteAddr)
 			writeErr(w, "IAM.AccessDenied", "access denied")
@@ -210,10 +210,10 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Identity headers the gateway injects upstream (07§3.3).
-	w.Header().Set("X-Sc-Account-Id", strconv.FormatInt(identity.AccountID, 10))
-	w.Header().Set("X-Sc-Ak-Id", identity.AKID)
+	w.Header().Set("X-Euler-Account-Id", strconv.FormatInt(identity.AccountID, 10))
+	w.Header().Set("X-Euler-Ak-Id", identity.AKID)
 	if identity.Principal != "" {
-		w.Header().Set("X-Sc-Identity", identity.Principal)
+		w.Header().Set("X-Euler-Identity", identity.Principal)
 	}
 	w.WriteHeader(http.StatusOK)
 }

@@ -1,11 +1,11 @@
 /**
- * @sc/tokens — StarCloud design tokens (02-frontend-architecture.md §10.1).
+ * @eu/tokens — Euler design tokens (02-frontend-architecture.md §10.1).
  *
  * Tokens are the single source of truth: this module is the TS shape, and the
- * accompanying `style.css` surfaces them as CSS custom properties (`--sc-*`).
+ * accompanying `style.css` surfaces them as CSS custom properties (`--eu-*`).
  * `element.css` bridges Element Plus (`--el-*`) onto the same tokens.
  * The base shell sets these on :root; sub-apps consume them read-only and must
- * not redefine the `--sc-` prefix (02 §6.3 red line).
+ * not redefine the `--eu-` prefix (02 §6.3 red line).
  *
  * Theme: "Google Cloud Glass" — Google Cloud palette + acrylic glass surfaces.
  */

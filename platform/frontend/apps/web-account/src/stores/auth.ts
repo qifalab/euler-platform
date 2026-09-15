@@ -6,9 +6,9 @@
  * The access_token lives in memory only (02§5.1: never localStorage).
  */
 import { defineStore } from "pinia";
-import { bridge, inWujieSandbox } from "@sc/wujie-bridge";
+import { bridge, inWujieSandbox } from "@eu/wujie-bridge";
 
-export interface ScUser {
+export interface EuUser {
   id: number;
   name: string;
   realName?: string;
@@ -16,7 +16,7 @@ export interface ScUser {
 
 interface LoginResponse {
   accessToken: string;
-  user: ScUser;
+  user: EuUser;
 }
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -38,7 +38,7 @@ async function readEnvelope<T>(res: Response): Promise<T> {
 export const useAccountAuth = defineStore("accountAuth", {
   state: () => ({
     accessToken: "" as string,
-    user: null as ScUser | null,
+    user: null as EuUser | null,
   }),
   getters: { isAuthenticated: (s) => Boolean(s.accessToken) },
   actions: {

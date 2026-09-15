@@ -84,27 +84,27 @@ onUnmounted(() => {
  * is a soft-glass card. These rules are the single source of truth for the
  * .sub-app-* classes (the duplicate global copy in App.vue was removed).
  */
-.sub-app-host { min-height: calc(100vh - var(--sc-topbar-height)); background: transparent; }
-.sub-app-container { min-height: calc(100vh - var(--sc-topbar-height)); background: transparent; }
+.sub-app-host { min-height: calc(100vh - var(--eu-topbar-height)); background: transparent; }
+.sub-app-container { min-height: calc(100vh - var(--eu-topbar-height)); background: transparent; }
 .sub-app-degrade {
   max-width: 480px; margin: 64px auto; padding: 48px 24px;
-  text-align: center; color: var(--sc-text-primary);
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  text-align: center; color: var(--eu-text-primary);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
 }
 .sub-app-degrade-title { font-size: 16px; margin: 0 0 8px; }
-.sub-app-degrade-msg { color: var(--sc-color-danger); font-size: 14px; margin: 0 0 16px; }
+.sub-app-degrade-msg { color: var(--eu-color-danger); font-size: 14px; margin: 0 0 16px; }
 .sub-app-degrade-retry {
   display: inline-block; margin: 0 12px 12px 0; padding: 6px 16px;
-  border: none; border-radius: var(--sc-radius-md); cursor: pointer;
-  background: var(--sc-color-brand); color: var(--sc-text-on-brand); font-size: 13px;
-  transition: background var(--sc-transition);
+  border: none; border-radius: var(--eu-radius-md); cursor: pointer;
+  background: var(--eu-color-brand); color: var(--eu-text-on-brand); font-size: 13px;
+  transition: background var(--eu-transition);
 }
-.sub-app-degrade-retry:hover { background: var(--sc-color-brand-hover); }
-.sub-app-degrade-link { color: var(--sc-color-brand); text-decoration: none; transition: var(--sc-transition); }
-.sub-app-degrade-link:hover { color: var(--sc-color-brand-hover); }
+.sub-app-degrade-retry:hover { background: var(--eu-color-brand-hover); }
+.sub-app-degrade-link { color: var(--eu-color-brand); text-decoration: none; transition: var(--eu-transition); }
+.sub-app-degrade-link:hover { color: var(--eu-color-brand-hover); }
 </style>

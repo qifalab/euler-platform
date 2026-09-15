@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // newSQLTestStore wires the SQL store to a throwaway support_db.

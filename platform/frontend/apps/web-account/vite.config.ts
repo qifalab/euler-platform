@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 // web-account is a dual-form site (02§1.2): standalone site on account.* +
 // console sub-app entry. In standalone mode it renders its own top bar; in the
-// Wujie sandbox it renders shell-less (detected via @sc/wujie-bridge).
+// Wujie sandbox it renders shell-less (detected via @eu/wujie-bridge).
 export default defineConfig({
   plugins: [vue()],
   resolve: { alias: { "@": resolve(__dirname, "src") } },
@@ -29,7 +29,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: { main: resolve(__dirname, "index.html") },
-      external: ["vue", "vue-router", "element-plus", "@sc/tokens", "@sc/ui", "@sc/sdk", "@sc/wujie-bridge"],
+      external: ["vue", "vue-router", "element-plus", "@eu/tokens", "@eu/ui", "@eu/sdk", "@eu/wujie-bridge"],
     },
   },
 });

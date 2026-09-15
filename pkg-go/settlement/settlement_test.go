@@ -3,7 +3,7 @@ package settlement
 import (
 	"testing"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 func TestSettleSumsExactly(t *testing.T) {

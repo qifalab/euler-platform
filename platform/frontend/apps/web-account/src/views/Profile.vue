@@ -165,37 +165,37 @@ const securityItems = computed<SecurityItem[]>(() => [
 
 <style scoped>
 .profile-page {
-  padding: var(--sc-spacing-6);
-  min-height: calc(100vh - var(--sc-topbar-height));
+  padding: var(--eu-spacing-6);
+  min-height: calc(100vh - var(--eu-topbar-height));
 }
 .profile-title {
-  margin: 0 0 var(--sc-spacing-6);
+  margin: 0 0 var(--eu-spacing-6);
   font-size: 22px;
   font-weight: 600;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .profile-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--sc-spacing-6);
+  gap: var(--eu-spacing-6);
   align-items: start;
 }
 .profile-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-6);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-6);
 }
 .card-heading {
   margin: 0 0 20px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--sc-border);
+  border-bottom: 1px solid var(--eu-border);
   font-size: 16px;
   font-weight: 600;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .info-rows {
   margin: 0;
@@ -206,7 +206,7 @@ const securityItems = computed<SecurityItem[]>(() => [
   display: flex;
   align-items: center;
   padding: 14px 0;
-  border-bottom: 1px solid var(--sc-border);
+  border-bottom: 1px solid var(--eu-border);
 }
 .info-row:last-child {
   border-bottom: none;
@@ -215,7 +215,7 @@ const securityItems = computed<SecurityItem[]>(() => [
   flex: 0 0 120px;
   margin: 0;
   font-size: 14px;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
 }
 .info-value {
   flex: 1;
@@ -224,7 +224,7 @@ const securityItems = computed<SecurityItem[]>(() => [
   align-items: center;
   gap: 12px;
   font-size: 14px;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .info-tag {
   margin-left: 4px;
@@ -241,7 +241,7 @@ const securityItems = computed<SecurityItem[]>(() => [
   align-items: center;
   justify-content: space-between;
   padding: 16px 0;
-  border-bottom: 1px solid var(--sc-border);
+  border-bottom: 1px solid var(--eu-border);
   gap: 16px;
 }
 .security-item:last-child {
@@ -256,11 +256,11 @@ const securityItems = computed<SecurityItem[]>(() => [
 .security-label {
   font-size: 14px;
   font-weight: 500;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .security-desc {
   font-size: 12px;
-  color: var(--sc-text-secondary);
+  color: var(--eu-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

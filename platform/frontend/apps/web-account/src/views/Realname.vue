@@ -203,17 +203,17 @@ async function onSubmit() {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  min-height: calc(100vh - var(--sc-topbar-height));
-  padding: var(--sc-spacing-6);
+  min-height: calc(100vh - var(--eu-topbar-height));
+  padding: var(--eu-spacing-6);
 }
 .realname-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-8);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-8);
   width: 100%;
   max-width: 480px;
 }
@@ -221,35 +221,35 @@ async function onSubmit() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--sc-spacing-1);
+  margin-bottom: var(--eu-spacing-1);
 }
 .realname-title {
-  font-size: var(--sc-font-size-xl);
+  font-size: var(--eu-font-size-xl);
   margin: 0;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
 }
 .realname-sub {
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-secondary);
-  margin: 0 0 var(--sc-spacing-6);
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-secondary);
+  margin: 0 0 var(--eu-spacing-6);
 }
 .realname-user {
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
   font-weight: 500;
 }
 .realname-mode {
-  margin-bottom: var(--sc-spacing-5);
+  margin-bottom: var(--eu-spacing-5);
 }
 .realname-form {
-  margin-bottom: var(--sc-spacing-5);
+  margin-bottom: var(--eu-spacing-5);
 }
 .realname-submit {
   width: 100%;
 }
 .realname-note {
-  margin: var(--sc-spacing-4) 0 0;
-  font-size: var(--sc-font-size-xs);
-  color: var(--sc-text-secondary);
+  margin: var(--eu-spacing-4) 0 0;
+  font-size: var(--eu-font-size-xs);
+  color: var(--eu-text-secondary);
   line-height: 1.6;
 }
 </style>

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // ErrRuleConflict is returned when a Save loses the optimistic lock: the row
@@ -292,7 +292,7 @@ func scanRule(sc interface{ Scan(...any) error }) (*AlertRule, error) {
 }
 
 // newRuleRepo picks the backend. Persistence is opt-in (pkg-go/storage doc):
-// with SC_DB_DSN set, rules live in support_db so alert-engine and monitor
+// with EULER_DB_DSN set, rules live in support_db so alert-engine and monitor
 // restarts agree on what tenants asked for; unset, the in-memory repo keeps the
 // demo and `go test` dependency-free.
 //

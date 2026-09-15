@@ -2,26 +2,26 @@
 /**
  * Buy wizard (02§7.4): step form + live price summary on the right.
  *
- * Wired to the real backend chain (same shape as console-ecs, productCode=scredis):
- *  - GET  /api/v1/catalog/skus?productCode=scredis — spec catalogue
- *  - GET  /api/v1/catalog/placement?productCode=scredis — placement contract (M-6)
+ * Wired to the real backend chain (same shape as console-ecs, productCode=euredis):
+ *  - GET  /api/v1/catalog/skus?productCode=euredis — spec catalogue
+ *  - GET  /api/v1/catalog/placement?productCode=euredis — placement contract (M-6)
  *  - POST /api/v1/catalog/quote                  — 询价 (real pricing engine)
  *  - POST /api/v1/orders                         — create order (real orderId)
  *  - POST /api/v1/orders/{id}/pay                — mark PAID
  *  - POST /api/v1/orchestrator/fulfill           — saga → resource RUNNING
  *
- * SCREDIS offers BOTH prepaid (包年包月) and postpaid (按量) — managed DBs offer
- * both, like scrds. The catalogue lists prepaid + postpaid variants of each
+ * EUREDIS offers BOTH prepaid (包年包月) and postpaid (按量) — managed DBs offer
+ * both, like eurds. The catalogue lists prepaid + postpaid variants of each
  * spec as separate SKUs; the wizard groups them and flips the quote between
- * MONTH (prepaid) and HOUR (postpaid) by the selected charge type. scredis is
+ * MONTH (prepaid) and HOUR (postpaid) by the selected charge type. euredis is
  * ZONAL, so the AZ picker is present and the quote enforces the zone (M-6).
  * Price is server-trial-computed; the client never invents a unit price.
  */
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElSwitch, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@sc/sdk";
-import { useCatalogMeta } from "@sc/console-kit";
+import { createSDK, yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta } from "@eu/console-kit";
 
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -37,9 +37,9 @@ const form = ref({
 });
 
 // --- region / zone metadata (catalogue-driven, no hardcoded lists) ---
-const { regions, placement, load, zonesOf } = useCatalogMeta("scredis");
+const { regions, placement, load, zonesOf } = useCatalogMeta("euredis");
 
-// --- VPC options: the account's real scvpc resources (console-bff) ---
+// --- VPC options: the account's real euvpc resources (console-bff) ---
 interface ConsoleResource { ResourceId: string; ProductCode: string; Region: string; State: string }
 const vpcs = ref<ConsoleResource[]>([]);
 
@@ -94,7 +94,7 @@ function skuForCurrent(): string {
 
 onMounted(async () => {
   try {
-    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=scredis");
+    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euredis");
     skus.value = res.data ?? [];
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
@@ -113,10 +113,10 @@ onMounted(async () => {
   if (!zones.some((z) => z.zoneId === form.value.zone)) {
     form.value.zone = zones[0]?.zoneId ?? "";
   }
-  // VPC options: live scvpc resources of this account (never a fake id).
+  // VPC options: live euvpc resources of this account (never a fake id).
   try {
     const res = await sdk.get<ConsoleResource[]>("/console/resources");
-    vpcs.value = (res.data ?? []).filter((r) => r.ProductCode === "scvpc" && r.State !== "RELEASED");
+    vpcs.value = (res.data ?? []).filter((r) => r.ProductCode === "euvpc" && r.State !== "RELEASED");
   } catch {
     vpcs.value = [];
   }
@@ -176,7 +176,7 @@ async function refreshQuote() {
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "scredis",
+      productCode: "euredis",
       specCode,
       chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
@@ -213,7 +213,7 @@ async function submit() {
   try {
     // 1) Quote — the authoritative payable comes from the pricing engine.
     const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "scredis", specCode,
+      productCode: "euredis", specCode,
       chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
       quantity: 1, regionId: form.value.region, zoneId: form.value.zone,
@@ -226,7 +226,7 @@ async function submit() {
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
-        type: "NEW", productCode: "scredis", skuCode: specCode,
+        type: "NEW", productCode: "euredis", skuCode: specCode,
         regionId: form.value.region, quantity: 1,
         duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
         amountMinor,
@@ -241,12 +241,12 @@ async function submit() {
 
     // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
     // resource CREATING→RUNNING) and returns the new resource id. The
-    // productCode=scredis routes it to the DriverK8s binding.
+    // productCode=euredis routes it to the DriverK8s binding.
     const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
       "/api/v1/orchestrator/fulfill",
       {
         orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "scredis", region: form.value.region,
+        productCode: "euredis", region: form.value.region,
         specCode, chargeType: form.value.chargeType.toUpperCase(),
         zone: form.value.zone, vpcId: form.value.vpcId, subnetId: form.value.subnetId,
         ha: form.value.ha,
@@ -346,37 +346,37 @@ async function submit() {
 .buy-layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
 .buy-steps { margin-bottom: 24px; }
 .buy-form, .buy-confirm {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 24px;
 }
 .buy-confirm h2 { font-size: 16px; margin: 0 0 16px; }
 .confirm-list { list-style: none; padding: 0; margin: 0 0 16px; }
-.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--sc-border); font-size: 13px; }
+.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px; }
 .confirm-charge { margin-bottom: 16px; }
-.form-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 4px 0 0; }
+.form-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 4px 0 0; }
 .buy-nav { margin-top: 24px; display: flex; gap: 12px; }
 .buy-summary {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 20px;
   height: fit-content;
   position: sticky;
-  top: var(--sc-spacing-6);
+  top: var(--eu-spacing-6);
 }
 .buy-summary h2 { font-size: 15px; margin: 0 0 16px; }
 .sum-list { margin: 0; }
-.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--sc-border); }
-.sum-list dt { color: var(--sc-text-secondary); }
+.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--eu-border); }
+.sum-list dt { color: var(--eu-text-secondary); }
 .sum-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 16px; }
-.sum-total strong { font-size: 22px; color: var(--sc-color-danger); }
-.sum-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 8px 0 0; }
+.sum-total strong { font-size: 22px; color: var(--eu-color-danger); }
+.sum-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 8px 0 0; }
 </style>

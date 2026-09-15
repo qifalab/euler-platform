@@ -19,7 +19,7 @@ func TestConcurrentRepliesDoNotLoseMessages(t *testing.T) {
 
 	create := httptest.NewRequest(http.MethodPost, "/internal/tickets",
 		strings.NewReader(`{"category":"billing","priority":"NORMAL","message":"hello"}`))
-	create.Header.Set("X-Sc-Account-Id", "100123")
+	create.Header.Set("X-Euler-Account-Id", "100123")
 	createResp := httptest.NewRecorder()
 	a.handleCreate(createResp, create)
 	if createResp.Code != http.StatusCreated {
@@ -39,7 +39,7 @@ func TestConcurrentRepliesDoNotLoseMessages(t *testing.T) {
 			body := fmt.Sprintf(`{"message":"reply-%d"}`, i)
 			req := httptest.NewRequest(http.MethodPost,
 				"/internal/tickets/"+created.TicketID+"/reply", strings.NewReader(body))
-			req.Header.Set("X-Sc-Account-Id", "100123")
+			req.Header.Set("X-Euler-Account-Id", "100123")
 			rr := httptest.NewRecorder()
 			a.handleReply(rr, req)
 			if rr.Code != http.StatusOK {

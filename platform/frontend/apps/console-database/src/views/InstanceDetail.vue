@@ -3,7 +3,7 @@
  * console-database — RDS instance detail (02§7.3 detail-page pattern).
  * Resource info header (editable name, copyable id, status, expiry) + tab
  * group (监控/备份/参数/账号/操作日志). Reached via the list link
- * `#/scrds/instances/<instanceId>`.
+ * `#/eurds/instances/<instanceId>`.
  *
  * Header + info render real backend fields from /console/resources (the generic
  * resource aggregator) filtered to this instance's resourceId. The sub-tables
@@ -13,9 +13,9 @@
  */
 import { ref, computed, onMounted } from "vue";
 import { ElTabs, ElTabPane, ElButton, ElInput, ElTag, ElDescriptions, ElDescriptionsItem, ElEmpty } from "element-plus";
-import { StatusBadge } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
-import "@sc/tokens/style.css";
+import { StatusBadge } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
+import "@eu/tokens/style.css";
 
 interface ResourceItem {
   ResourceId: string;
@@ -148,12 +148,12 @@ void ElInput; void ElButton; void ElTag;
 .rds-detail-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rds-detail-title h1 { font-size: 18px; margin: 0; }
 .rds-detail-id {
-  font-size: var(--sc-font-size-xs); color: var(--sc-text-secondary);
+  font-size: var(--eu-font-size-xs); color: var(--eu-text-secondary);
   cursor: pointer; user-select: none;
 }
-.rds-detail-id:hover { color: var(--sc-color-brand); }
+.rds-detail-id:hover { color: var(--eu-color-brand); }
 .rds-detail-meta { display: flex; align-items: center; gap: 12px; }
 .rds-info { margin-bottom: 20px; }
-.rds-tabs { background: var(--sc-bg-container); border-radius: var(--sc-radius-md); padding: 0 12px; }
-.rds-error { color: var(--sc-color-danger); padding: 16px 0; }
+.rds-tabs { background: var(--eu-bg-container); border-radius: var(--eu-radius-md); padding: 0 12px; }
+.rds-error { color: var(--eu-color-danger); padding: 16px 0; }
 </style>

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-/** console-monitor shell — RouterView host + in-app view tabs (SCMON, 02§7.2). */
+/** console-monitor shell — RouterView host + in-app view tabs (EUMON, 02§7.2). */
 import { RouterView, RouterLink, useRoute } from "vue-router";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import MonitorDashboard from "./views/MonitorDashboard.vue";
 
-// The rule list links to #/scmon/dashboard/<ruleId> — a hash link, so the
+// The rule list links to #/eumon/dashboard/<ruleId> — a hash link, so the
 // browser never leaves the page. vue-router (history mode) cannot serve that
 // shape, so the dashboard is mounted here when the hash matches; without this
 // the link was a dead end (MonitorDashboard was never rendered anywhere).
@@ -13,7 +13,7 @@ function onHash() { hashRoute.value = location.hash; }
 onMounted(() => window.addEventListener("hashchange", onHash));
 onUnmounted(() => window.removeEventListener("hashchange", onHash));
 const detailRuleId = computed(() => {
-  const m = hashRoute.value.match(/scmon\/dashboard\/([^/?#]+)/);
+  const m = hashRoute.value.match(/eumon\/dashboard\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : null;
 });
 /** A tab click leaves the detail view: clear the hash so RouterView shows. */
@@ -48,12 +48,12 @@ const active = computed(() => tabs.find((t) => route.path.startsWith(t.to))?.to 
 
 <style scoped>
 .mon-app { padding: 16px 24px; }
-.mon-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--sc-border); margin-bottom: 16px; }
+.mon-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--eu-border); margin-bottom: 16px; }
 .mon-tab {
-  padding: 8px 16px; font-size: 14px; color: var(--sc-text-secondary);
+  padding: 8px 16px; font-size: 14px; color: var(--eu-text-secondary);
   text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
-  transition: color var(--sc-transition), border-color var(--sc-transition);
+  transition: color var(--eu-transition), border-color var(--eu-transition);
 }
-.mon-tab:hover { color: var(--sc-color-brand); }
-.mon-tab.active { color: var(--sc-color-brand); border-bottom-color: var(--sc-color-brand); font-weight: 500; }
+.mon-tab:hover { color: var(--eu-color-brand); }
+.mon-tab.active { color: var(--eu-color-brand); border-bottom-color: var(--eu-color-brand); font-weight: 500; }
 </style>

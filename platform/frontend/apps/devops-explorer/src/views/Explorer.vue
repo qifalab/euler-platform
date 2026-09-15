@@ -9,8 +9,8 @@
  *  browser cannot drift an algorithm it does not run.
  */
 import { ref, computed, onMounted, watch } from "vue";
-import { createSDK } from "@sc/sdk";
-import { PageHeader, StatusBadge } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PageHeader, StatusBadge } from "@eu/ui";
 
 const sdk = createSDK({ baseURL: "" });
 
@@ -26,7 +26,7 @@ interface ActionMeta {
 const actions = ref<ActionMeta[]>([]);
 
 // --- request form -----------------------------------------------------------
-const productCode = ref("scecs");
+const productCode = ref("euecs");
 const actionName = ref("RunInstances");
 const method = ref("POST");
 const path = ref("/");
@@ -206,7 +206,7 @@ function prettyJson(obj: unknown): string {
     <section class="explorer-form">
       <h3>请求参数</h3>
       <div class="form-grid">
-        <label>产品 <input v-model="productCode" placeholder="scecs" /></label>
+        <label>产品 <input v-model="productCode" placeholder="euecs" /></label>
         <label>Action <input v-model="actionName" placeholder="RunInstances" /></label>
         <label>Method
           <select v-model="method"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select>
@@ -243,7 +243,7 @@ function prettyJson(obj: unknown): string {
       <details class="form-creds">
         <summary>凭证 (调试会话 AK/SK)</summary>
         <div class="form-grid">
-          <label>AK（必填）<input v-model="ak" placeholder="请输入 AccessKey ID（SC 开头）" required /></label>
+          <label>AK（必填）<input v-model="ak" placeholder="请输入 AccessKey ID（EU 开头）" required /></label>
           <label>SK（必填）<input v-model="sk" type="password" placeholder="请输入 SecretAccessKey" required /></label>
           <label>Security Token (STS, 可选) <input v-model="securityToken" /></label>
         </div>
@@ -288,54 +288,54 @@ function prettyJson(obj: unknown): string {
           <pre class="code-block">{{ result.upstream.body }}</pre>
         </template>
       </div>
-      <p v-else-if="result" class="explorer-hint">未配置 SC_EXPLORER_TARGET,仅返回签名材料(源码开发模式)。配置后 Explorer 会将此签名请求代理到真实产品 API 并回传响应。</p>
+      <p v-else-if="result" class="explorer-hint">未配置 EULER_EXPLORER_TARGET,仅返回签名材料(源码开发模式)。配置后 Explorer 会将此签名请求代理到真实产品 API 并回传响应。</p>
     </section>
   </div>
 </template>
 
 <style scoped>
-.explorer { padding: var(--sc-spacing-6); max-width: 1100px; }
+.explorer { padding: var(--eu-spacing-6); max-width: 1100px; }
 .explorer-catalogue, .explorer-form, .explorer-result {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-5);
-  margin-bottom: var(--sc-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-5);
+  margin-bottom: var(--eu-spacing-4);
 }
-.explorer h3 { font-size: 15px; color: var(--sc-text-primary); margin: 0 0 var(--sc-spacing-3); display: flex; align-items: center; gap: var(--sc-spacing-2); }
-.action-chips { display: flex; flex-wrap: wrap; gap: var(--sc-spacing-2); }
-.action-chip { border: 1px solid var(--sc-border); background: var(--sc-glass-bg); color: var(--sc-text-secondary); padding: 4px 10px; border-radius: var(--sc-radius-sm); font-size: 12px; cursor: pointer; transition: var(--sc-transition); font-family: monospace; }
-.action-chip:hover { border-color: var(--sc-color-brand); color: var(--sc-color-brand); }
-.action-chip.active { background: var(--sc-color-brand); color: #fff; border-color: var(--sc-color-brand); }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sc-spacing-3); margin-bottom: var(--sc-spacing-4); }
-.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--sc-text-secondary); }
-.form-grid input, .form-grid select { padding: 6px 10px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); background: var(--sc-glass-bg); color: var(--sc-text-primary); font-size: 13px; }
-.form-rows { margin-bottom: var(--sc-spacing-3); }
-.rows-header { font-size: 12px; color: var(--sc-text-secondary); margin-bottom: 6px; }
+.explorer h3 { font-size: 15px; color: var(--eu-text-primary); margin: 0 0 var(--eu-spacing-3); display: flex; align-items: center; gap: var(--eu-spacing-2); }
+.action-chips { display: flex; flex-wrap: wrap; gap: var(--eu-spacing-2); }
+.action-chip { border: 1px solid var(--eu-border); background: var(--eu-glass-bg); color: var(--eu-text-secondary); padding: 4px 10px; border-radius: var(--eu-radius-sm); font-size: 12px; cursor: pointer; transition: var(--eu-transition); font-family: monospace; }
+.action-chip:hover { border-color: var(--eu-color-brand); color: var(--eu-color-brand); }
+.action-chip.active { background: var(--eu-color-brand); color: #fff; border-color: var(--eu-color-brand); }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--eu-spacing-3); margin-bottom: var(--eu-spacing-4); }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--eu-text-secondary); }
+.form-grid input, .form-grid select { padding: 6px 10px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); background: var(--eu-glass-bg); color: var(--eu-text-primary); font-size: 13px; }
+.form-rows { margin-bottom: var(--eu-spacing-3); }
+.rows-header { font-size: 12px; color: var(--eu-text-secondary); margin-bottom: 6px; }
 .row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-bottom: 6px; }
-.row input { padding: 6px 10px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); background: var(--sc-glass-bg); color: var(--sc-text-primary); font-size: 13px; }
-.row-del, .row-add { border: 1px solid var(--sc-border); background: var(--sc-glass-bg); color: var(--sc-text-secondary); border-radius: var(--sc-radius-sm); cursor: pointer; padding: 4px 10px; font-size: 12px; transition: var(--sc-transition); }
-.row-del:hover { color: var(--sc-color-danger); border-color: var(--sc-color-danger); }
-.row-add:hover { color: var(--sc-color-brand); border-color: var(--sc-color-brand); }
-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); background: var(--sc-glass-bg); color: var(--sc-text-primary); font-size: 13px; font-family: monospace; resize: vertical; box-sizing: border-box; }
-.form-creds { margin-bottom: var(--sc-spacing-4); border-top: 1px solid var(--sc-border); padding-top: var(--sc-spacing-3); }
-.form-creds summary { font-size: 13px; color: var(--sc-text-secondary); cursor: pointer; }
-.form-creds-note { font-size: 11px; color: var(--sc-text-secondary); margin-top: 6px; }
-.explorer-sign-btn { background: var(--sc-color-brand); color: #fff; border: none; padding: 9px 20px; border-radius: var(--sc-radius-md); font-size: 14px; font-weight: 500; cursor: pointer; transition: var(--sc-transition); }
-.explorer-sign-btn:hover:not(:disabled) { background: var(--sc-color-brand-hover); }
+.row input { padding: 6px 10px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); background: var(--eu-glass-bg); color: var(--eu-text-primary); font-size: 13px; }
+.row-del, .row-add { border: 1px solid var(--eu-border); background: var(--eu-glass-bg); color: var(--eu-text-secondary); border-radius: var(--eu-radius-sm); cursor: pointer; padding: 4px 10px; font-size: 12px; transition: var(--eu-transition); }
+.row-del:hover { color: var(--eu-color-danger); border-color: var(--eu-color-danger); }
+.row-add:hover { color: var(--eu-color-brand); border-color: var(--eu-color-brand); }
+textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); background: var(--eu-glass-bg); color: var(--eu-text-primary); font-size: 13px; font-family: monospace; resize: vertical; box-sizing: border-box; }
+.form-creds { margin-bottom: var(--eu-spacing-4); border-top: 1px solid var(--eu-border); padding-top: var(--eu-spacing-3); }
+.form-creds summary { font-size: 13px; color: var(--eu-text-secondary); cursor: pointer; }
+.form-creds-note { font-size: 11px; color: var(--eu-text-secondary); margin-top: 6px; }
+.explorer-sign-btn { background: var(--eu-color-brand); color: #fff; border: none; padding: 9px 20px; border-radius: var(--eu-radius-md); font-size: 14px; font-weight: 500; cursor: pointer; transition: var(--eu-transition); }
+.explorer-sign-btn:hover:not(:disabled) { background: var(--eu-color-brand-hover); }
 .explorer-sign-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.explorer-error { color: var(--sc-color-danger); font-size: 13px; margin-top: var(--sc-spacing-2); }
-.explorer-hint { color: var(--sc-text-secondary); font-size: 12px; margin-top: var(--sc-spacing-3); }
-.result-block { margin-bottom: var(--sc-spacing-4); }
-.result-label { font-size: 12px; color: var(--sc-text-secondary); margin-bottom: 4px; }
-.result-label.sub { margin-top: var(--sc-spacing-3); }
-.code-block { background: var(--sc-bg-container); border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); padding: var(--sc-spacing-3); font-size: 12px; font-family: monospace; color: var(--sc-text-primary); white-space: pre-wrap; word-break: break-all; overflow-x: auto; }
-.upstream-error { color: var(--sc-color-danger); }
-.result-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sc-spacing-2); margin-bottom: var(--sc-spacing-4); }
-.result-meta div { font-size: 12px; color: var(--sc-text-primary); display: flex; flex-direction: column; gap: 2px; }
-.result-meta span { color: var(--sc-text-secondary); font-size: 11px; }
+.explorer-error { color: var(--eu-color-danger); font-size: 13px; margin-top: var(--eu-spacing-2); }
+.explorer-hint { color: var(--eu-text-secondary); font-size: 12px; margin-top: var(--eu-spacing-3); }
+.result-block { margin-bottom: var(--eu-spacing-4); }
+.result-label { font-size: 12px; color: var(--eu-text-secondary); margin-bottom: 4px; }
+.result-label.sub { margin-top: var(--eu-spacing-3); }
+.code-block { background: var(--eu-bg-container); border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); padding: var(--eu-spacing-3); font-size: 12px; font-family: monospace; color: var(--eu-text-primary); white-space: pre-wrap; word-break: break-all; overflow-x: auto; }
+.upstream-error { color: var(--eu-color-danger); }
+.result-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--eu-spacing-2); margin-bottom: var(--eu-spacing-4); }
+.result-meta div { font-size: 12px; color: var(--eu-text-primary); display: flex; flex-direction: column; gap: 2px; }
+.result-meta span { color: var(--eu-text-secondary); font-size: 11px; }
 .result-meta code { font-family: monospace; font-size: 11px; word-break: break-all; }
 </style>

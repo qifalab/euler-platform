@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 func newSQLTestStore(t *testing.T) *SQLStore {
@@ -20,8 +20,8 @@ func testNotification(id string) Notification {
 	return Notification{
 		NotificationID: id, AccountID: 100123, Class: ClassReleaseWarning,
 		TemplateID: "release-warning-v1",
-		Params:     map[string]string{"resourceId": "scecs-cn-north-1-01-a1b2c3d4", "deadline": "2026-09-22"},
-		Channels:   []Channel{ChannelInApp, ChannelEmail}, BizKey: "scecs-cn-north-1-01-a1b2c3d4",
+		Params:     map[string]string{"resourceId": "euecs-cn-north-1-01-a1b2c3d4", "deadline": "2026-09-22"},
+		Channels:   []Channel{ChannelInApp, ChannelEmail}, BizKey: "euecs-cn-north-1-01-a1b2c3d4",
 		Status: StatusPending, CreatedAt: notifyClock,
 	}
 }
@@ -61,7 +61,7 @@ func TestSQLStorePersistBeforeSend(t *testing.T) {
 	if !got.Delivered() {
 		t.Fatal("one successful channel must satisfy Delivered()")
 	}
-	if got.Params["resourceId"] != "scecs-cn-north-1-01-a1b2c3d4" {
+	if got.Params["resourceId"] != "euecs-cn-north-1-01-a1b2c3d4" {
 		t.Fatalf("params round trip = %v", got.Params)
 	}
 	if len(got.Channels) != 2 || got.Channels[0] != ChannelInApp {
@@ -91,7 +91,7 @@ func TestSQLStoreQueries(t *testing.T) {
 	}
 
 	// The support-agent query: "was this resource ever warned?"
-	found, err := store.FindByBizKey(100123, ClassReleaseWarning, "scecs-cn-north-1-01-a1b2c3d4")
+	found, err := store.FindByBizKey(100123, ClassReleaseWarning, "euecs-cn-north-1-01-a1b2c3d4")
 	if err != nil {
 		t.Fatal(err)
 	}

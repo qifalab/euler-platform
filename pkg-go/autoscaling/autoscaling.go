@@ -1,5 +1,5 @@
 // Package autoscaling implements the scaling-policy decision engine for the
-// 弹性伸缩 product (scas, 09-roadmap §4.3 M-7.3, 06-kubernetes-productization.md
+// 弹性伸缩 product (euas, 09-roadmap §4.3 M-7.3, 06-kubernetes-productization.md
 // §2.6).
 //
 // # Policy layer, not the execution surface

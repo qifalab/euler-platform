@@ -4,8 +4,8 @@
  * Wujie sandbox: shell-less (the console provides the top bar).
  */
 import { RouterView } from "vue-router";
-import { inWujieSandbox } from "@sc/wujie-bridge";
-import { SiteTopbar } from "@sc/ui";
+import { inWujieSandbox } from "@eu/wujie-bridge";
+import { SiteTopbar } from "@eu/ui";
 
 const sandboxed = inWujieSandbox();
 </script>
@@ -20,7 +20,7 @@ const sandboxed = inWujieSandbox();
         <router-link to="/settlement">订单结算</router-link>
       </template>
       <template #actions>
-        <a class="mkt-console" href="https://console.starcloud.cn">返回控制台</a>
+        <a class="mkt-console" href="https://console.euler.emoera.com">返回控制台</a>
       </template>
     </SiteTopbar>
     <main class="mkt-body"><RouterView /></main>
@@ -29,8 +29,8 @@ const sandboxed = inWujieSandbox();
 
 <style>
 .mkt-shell { min-height: 100vh; }
-.mkt-console { color: var(--sc-color-brand); text-decoration: none; font-size: var(--sc-font-size-md); transition: color var(--sc-transition); }
-.mkt-console:hover { color: var(--sc-color-brand-hover); }
-.mkt-body { min-height: calc(100vh - var(--sc-topbar-height)); }
+.mkt-console { color: var(--eu-color-brand); text-decoration: none; font-size: var(--eu-font-size-md); transition: color var(--eu-transition); }
+.mkt-console:hover { color: var(--eu-color-brand-hover); }
+.mkt-body { min-height: calc(100vh - var(--eu-topbar-height)); }
 .mkt-subapp { min-height: 100vh; }
 </style>

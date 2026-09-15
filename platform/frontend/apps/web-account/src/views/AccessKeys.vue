@@ -346,14 +346,14 @@ function deleteKey(row: AccessKey) {
 
 <style scoped>
 .ak-page {
-  padding: var(--sc-spacing-6);
+  padding: var(--eu-spacing-6);
 }
 .ak-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--sc-spacing-6);
-  margin-bottom: var(--sc-spacing-5);
+  gap: var(--eu-spacing-6);
+  margin-bottom: var(--eu-spacing-5);
 }
 .ak-heading {
   flex: 1;
@@ -361,31 +361,31 @@ function deleteKey(row: AccessKey) {
 }
 .ak-title {
   margin: 0;
-  font-size: var(--sc-font-size-xl);
-  color: var(--sc-text-primary);
+  font-size: var(--eu-font-size-xl);
+  color: var(--eu-text-primary);
 }
 .ak-sub {
-  margin: var(--sc-spacing-2) 0 0;
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-secondary);
+  margin: var(--eu-spacing-2) 0 0;
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-secondary);
   line-height: 1.6;
 }
 .ak-owner {
-  margin: var(--sc-spacing-2) 0 0;
-  font-size: var(--sc-font-size-xs);
-  color: var(--sc-text-secondary);
+  margin: var(--eu-spacing-2) 0 0;
+  font-size: var(--eu-font-size-xs);
+  color: var(--eu-text-secondary);
 }
 .ak-create-wrap {
   display: inline-block;
 }
 .ak-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-4);
   overflow: hidden;
 }
 .ak-table {
@@ -400,60 +400,60 @@ function deleteKey(row: AccessKey) {
 }
 .ak-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-primary);
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-primary);
 }
 .ak-grace-tag {
-  margin-left: var(--sc-spacing-1);
+  margin-left: var(--eu-spacing-1);
 }
 .ak-create-body {
   display: flex;
   flex-direction: column;
-  gap: var(--sc-spacing-4);
+  gap: var(--eu-spacing-4);
 }
 .ak-alert {
-  padding: var(--sc-spacing-3) var(--sc-spacing-4);
-  background: var(--sc-color-warning-soft);
-  border: 1px solid var(--sc-color-warning);
-  border-radius: var(--sc-radius-md);
-  color: var(--sc-color-warning-text);
-  font-size: var(--sc-font-size-sm);
+  padding: var(--eu-spacing-3) var(--eu-spacing-4);
+  background: var(--eu-color-warning-soft);
+  border: 1px solid var(--eu-color-warning);
+  border-radius: var(--eu-radius-md);
+  color: var(--eu-color-warning-text);
+  font-size: var(--eu-font-size-sm);
   line-height: 1.6;
 }
 .ak-field {
   display: flex;
   flex-direction: column;
-  gap: var(--sc-spacing-1);
+  gap: var(--eu-spacing-1);
 }
 .ak-field-label {
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-secondary);
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-secondary);
 }
 .ak-field-value {
   display: flex;
   align-items: center;
-  gap: var(--sc-spacing-2);
-  padding: var(--sc-spacing-2) var(--sc-spacing-3);
-  background: var(--sc-bg-page);
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-md);
+  gap: var(--eu-spacing-2);
+  padding: var(--eu-spacing-2) var(--eu-spacing-3);
+  background: var(--eu-bg-page);
+  border: 1px solid var(--eu-border);
+  border-radius: var(--eu-radius-md);
 }
 .ak-code {
   flex: 1;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--sc-font-size-sm);
-  color: var(--sc-text-primary);
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-text-primary);
   word-break: break-all;
 }
 .ak-secret {
   letter-spacing: 0.5px;
 }
 .ak-rotate-note {
-  padding: var(--sc-spacing-2) var(--sc-spacing-3);
-  background: var(--sc-bg-page);
-  border-radius: var(--sc-radius-sm);
-  font-size: var(--sc-font-size-xs);
-  color: var(--sc-text-secondary);
+  padding: var(--eu-spacing-2) var(--eu-spacing-3);
+  background: var(--eu-bg-page);
+  border-radius: var(--eu-radius-sm);
+  font-size: var(--eu-font-size-xs);
+  color: var(--eu-text-secondary);
   line-height: 1.6;
 }
 </style>

@@ -1,4 +1,4 @@
-module github.com/starcloud/sc-platform/services/_tmpl-go
+module github.com/qifalab/euler-platform/services/_tmpl-go
 
 go 1.26
 

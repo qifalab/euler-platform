@@ -9,7 +9,7 @@
 // store) so the stdlib HTTP server is runnable standalone; production swaps the
 // store for the MySQL/Redis implementation behind the same interface.
 //
-// Tenancy is carried by the X-Sc-Account-Id header, which the gateway (APISIX)
+// Tenancy is carried by the X-Euler-Account-Id header, which the gateway (APISIX)
 // injects on every authenticated request (04§3.1 global plugins). A request
 // without it is rejected with 403 — an unauthenticated caller must not be able
 // to read or write another account's projects or tags.
@@ -115,5 +115,5 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	// TODO(scaffold): expose RED metrics via prometheus/client_golang.
 	// Mandatory labels: service, instance, region, env (05§7.2).
 	// FORBIDDEN as labels: account_id, resource_id (high cardinality — 05§7.2).
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }

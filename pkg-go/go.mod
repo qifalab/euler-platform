@@ -1,4 +1,4 @@
-module github.com/starcloud/sc-platform
+module github.com/qifalab/euler-platform
 
 go 1.26
 

@@ -11,7 +11,7 @@
 // 产品化" — phase-2 svc-monitor already sells basic monitoring/alert rules;
 // alert-center adds the advanced convergence + routing channel (09§4.0).
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST /api/v1/alertcenter/ingest  — ingest one alert (buffered)
 //	POST /api/v1/alertcenter/flush   — run converge + rate-limit, emit notifications
@@ -35,12 +35,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/alertcenter"
-	"github.com/starcloud/sc-platform/notify"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/alertcenter"
+	"github.com/qifalab/euler-platform/notify"
+	"github.com/qifalab/euler-platform/storage"
 )
 
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // notification is one emitted customer notification (the MVP record standing in
 // for the cloud.notify.message fan-out to svc-notify).
@@ -239,25 +239,25 @@ func (s *store) handleList(w http.ResponseWriter, r *http.Request) {
 func tenantFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, 403, "Common.MissingAccountId", "X-Sc-Account-Id header is required")
+		writeErr(w, 403, "Common.MissingAccountId", "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	var id int64
 	if _, err := fmt.Sscanf(raw, "%d", &id); err != nil {
-		writeErr(w, 400, "Common.InvalidParameter", "malformed X-Sc-Account-Id")
+		writeErr(w, 400, "Common.InvalidParameter", "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeOK(w http.ResponseWriter, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": "OK", "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -280,7 +280,7 @@ func main() {
 
 	s := newStore()
 	// The notification store decides where the emitted-notifications record
-	// lives. Persistence is opt-in (pkg-go/storage doc): with SC_DB_DSN set,
+	// lives. Persistence is opt-in (pkg-go/storage doc): with EULER_DB_DSN set,
 	// every emitted notification also lands in support_db.notification (the
 	// same rows svc-notify serves), so "you were warned" is answerable by
 	// query after this process dies; unset, the in-memory slice keeps the demo.

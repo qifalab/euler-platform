@@ -3,8 +3,8 @@
  *  filtered to PREPAID resources; autorenew flags from svc-order. */
 import { ref, onMounted } from "vue";
 import { ElSwitch, ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
-import { PageHeader } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PageHeader } from "@eu/ui";
 import { useProductLabels } from "@/useProductLabels";
 
 const sdk = createSDK({ baseURL: "" });
@@ -103,24 +103,24 @@ async function onToggle(r: RenewView) {
 </template>
 
 <style scoped>
-.renew { padding: var(--sc-spacing-6); max-width: 1200px; }
-.renew-error, .renew-loading, .renew-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.renew-error { color: var(--sc-color-danger); }
+.renew { padding: var(--eu-spacing-6); max-width: 1200px; }
+.renew-error, .renew-loading, .renew-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.renew-error { color: var(--eu-color-danger); }
 .renew-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
 .renew-table { width: 100%; border-collapse: collapse; background: transparent; }
-.renew-table th, .renew-table td { padding: var(--sc-spacing-3) var(--sc-spacing-4); text-align: left; border-bottom: 1px solid var(--sc-border); }
-.renew-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.renew-table td { font-size: 13px; color: var(--sc-text-primary); }
-.renew-table tbody tr { transition: background var(--sc-transition); }
-.renew-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.renew-table th, .renew-table td { padding: var(--eu-spacing-3) var(--eu-spacing-4); text-align: left; border-bottom: 1px solid var(--eu-border); }
+.renew-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.renew-table td { font-size: 13px; color: var(--eu-text-primary); }
+.renew-table tbody tr { transition: background var(--eu-transition); }
+.renew-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .renew-table tbody tr:last-child td { border-bottom: none; }
-.renew-ar-text { margin-left: var(--sc-spacing-3); font-size: 12px; color: var(--sc-text-secondary); }
+.renew-ar-text { margin-left: var(--eu-spacing-3); font-size: 12px; color: var(--eu-text-secondary); }
 </style>

@@ -4,7 +4,7 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createSDK } from "@sc/sdk";
+import { createSDK } from "@eu/sdk";
 import { useTicketMeta } from "@/useTicketMeta";
 const router = useRouter();
 const sdk = createSDK({ baseURL: "" });
@@ -70,41 +70,41 @@ async function submit() {
 </template>
 
 <style scoped>
-.create-ticket { padding: var(--sc-spacing-6); max-width: 720px; }
-.create-ticket h1 { font-size: 20px; font-weight: 500; color: var(--sc-text-primary); margin: 0 0 var(--sc-spacing-5); }
+.create-ticket { padding: var(--eu-spacing-6); max-width: 720px; }
+.create-ticket h1 { font-size: 20px; font-weight: 500; color: var(--eu-text-primary); margin: 0 0 var(--eu-spacing-5); }
 .ct-form {
   display: flex;
   flex-direction: column;
-  gap: var(--sc-spacing-4);
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
-  padding: var(--sc-spacing-6);
+  gap: var(--eu-spacing-4);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
+  padding: var(--eu-spacing-6);
 }
-.ct-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--sc-text-secondary); }
+.ct-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--eu-text-secondary); }
 .ct-field input, .ct-field select, .ct-field textarea {
   padding: 10px 12px;
-  background: var(--sc-bg-container);
-  border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-md);
+  background: var(--eu-bg-container);
+  border: 1px solid var(--eu-border);
+  border-radius: var(--eu-radius-md);
   font-size: 14px;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
   outline: none;
   font-family: inherit;
-  transition: border-color var(--sc-transition), box-shadow var(--sc-transition);
+  transition: border-color var(--eu-transition), box-shadow var(--eu-transition);
 }
 .ct-field input:focus, .ct-field select:focus, .ct-field textarea:focus {
-  border-color: var(--sc-color-brand);
-  box-shadow: 0 0 0 3px var(--sc-color-brand-soft);
+  border-color: var(--eu-color-brand);
+  box-shadow: 0 0 0 3px var(--eu-color-brand-soft);
 }
 .ct-submit {
-  align-self: flex-start; padding: 11px 24px; border: none; border-radius: var(--sc-radius-md);
-  background: var(--sc-color-brand); color: var(--sc-text-on-brand); font-size: 14px; cursor: pointer;
-  transition: background var(--sc-transition);
+  align-self: flex-start; padding: 11px 24px; border: none; border-radius: var(--eu-radius-md);
+  background: var(--eu-color-brand); color: var(--eu-text-on-brand); font-size: 14px; cursor: pointer;
+  transition: background var(--eu-transition);
 }
-.ct-submit:hover { background: var(--sc-color-brand-hover); }
+.ct-submit:hover { background: var(--eu-color-brand-hover); }
 .ct-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>

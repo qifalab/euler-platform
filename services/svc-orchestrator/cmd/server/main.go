@@ -4,7 +4,7 @@
 // The orchestrator is the ONLY owner of the resource lifecycle ledger
 // (03§5.2). A paid order triggers provisioning: it transitions the order to
 // FULFILLING, creates the resource instance (CREATING), fans out to the
-// ProvisionDriver (rc-compute for SCECS), and on success moves both to
+// ProvisionDriver (rc-compute for EUECS), and on success moves both to
 // COMPLETED/RUNNING (billing starts at RUNNING per the D8 invariant).
 //
 // Phase-1 keeps an in-memory lifecycle ledger + an in-process provision driver
@@ -12,7 +12,7 @@
 // pkg-go/provision MockDriver so the loop runs end-to-end). The DDL in sql/
 // is the production shape.
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST /api/v1/orchestrator/fulfill          — fulfil a paid order (saga)
 //	GET  /api/v1/orchestrator/resources         — list the account's resources
@@ -38,23 +38,23 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/order"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/provision"
-	"github.com/starcloud/sc-platform/resource"
+	"github.com/qifalab/euler-platform/order"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/provision"
+	"github.com/qifalab/euler-platform/resource"
 )
 
 // accountIDHeader is injected by the API gateway after authentication. The
 // service TRUSTS this header: it must only be reachable from the gateway /
 // internal network (see internalTokenMiddleware for the optional shared-secret
 // check), never exposed directly to the public internet.
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // maxBodyBytes caps JSON request bodies (defense against oversized payloads).
 const maxBodyBytes = 1 << 20 // 1 MiB
 
 // lifecycleStore wires the fulfilment saga to the resource ledger over HTTP.
-// The ledger decides where instances live (resource_db when SC_DB_DSN is set,
+// The ledger decides where instances live (resource_db when EULER_DB_DSN is set,
 // in-memory otherwise); the order mirror stays in memory in both modes —
 // order_main belongs to svc-order, and a second service writing it would be two
 // writers on one aggregate (see resourceLedger's doc).
@@ -95,21 +95,21 @@ func (s *lifecycleStore) seed() {
 	// Seed one running instance (matches console-bff seed for account 100123).
 	now := time.Now()
 	inst := &resource.Instance{
-		ResourceID: "scecs-cn-north-1-01-a1b2c3d4", AccountID: 100123,
-		ProductCode: "scecs", Region: "cn-north-1", ChargeType: resource.ChargePrepaid,
-		ResourceType: "instance", State: resource.StateRunning, SpecCode: "scecs.s2.large",
+		ResourceID: "euecs-cn-north-1-01-a1b2c3d4", AccountID: 100123,
+		ProductCode: "euecs", Region: "cn-north-1", ChargeType: resource.ChargePrepaid,
+		ResourceType: "instance", State: resource.StateRunning, SpecCode: "euecs.s2.large",
 		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
 	}
 	if err := s.ledger.Create(inst); err != nil {
 		panic(fmt.Sprintf("seed resource failed: %v", err))
 	}
 
-	// Seed one VPC (scvpc) so network-dependent wizards (scredis / sckafka
+	// Seed one VPC (euvpc) so network-dependent wizards (euredis / eukafka
 	// VPC dropdowns) list a real, placeable network from day one in dev.
 	vpc := &resource.Instance{
-		ResourceID: "scvpc-cn-north-1-01-vpc0a1b2c", AccountID: 100123,
-		ProductCode: "scvpc", Region: "cn-north-1", ChargeType: resource.ChargePostpaid,
-		ResourceType: "vpc", State: resource.StateRunning, SpecCode: "scvpc.standard",
+		ResourceID: "euvpc-cn-north-1-01-vpc0a1b2c", AccountID: 100123,
+		ProductCode: "euvpc", Region: "cn-north-1", ChargeType: resource.ChargePostpaid,
+		ResourceType: "vpc", State: resource.StateRunning, SpecCode: "euvpc.standard",
 		BillingStart: now.Add(-72 * time.Hour), CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now, Version: 1,
 	}
 	if err := s.ledger.Create(vpc); err != nil {
@@ -471,30 +471,30 @@ func instanceToMap(i *resource.Instance) map[string]any {
 }
 
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	// TRUST NOTE: X-Sc-Account-Id is injected by the API gateway after
+	// TRUST NOTE: X-Euler-Account-Id is injected by the API gateway after
 	// authentication; this service relies on network isolation (and optionally
 	// internalTokenMiddleware) rather than re-authenticating.
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -502,26 +502,26 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("orch-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }
 
 // internalTokenMiddleware optionally enforces an internal shared secret: when
-// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
-// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
-// X-Sc-Account-Id trust). Unset (dev default) = no check.
+// the EULER_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Euler-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Euler-Account-Id trust). Unset (dev default) = no check.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Sc-Internal-Token") != token {
+		if r.Header.Get("X-Euler-Internal-Token") != token {
 			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
 			return
 		}

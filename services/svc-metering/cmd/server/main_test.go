@@ -14,7 +14,7 @@ func ingest(t *testing.T, s *meteringStore, acct int64, resourceID, metric, valu
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{
 		"resourceId":  resourceID,
-		"productCode": "scecs",
+		"productCode": "euecs",
 		"metric":      metric,
 		"value":       value,
 	})

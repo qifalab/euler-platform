@@ -14,86 +14,86 @@ defineProps<{
 </script>
 
 <template>
-  <header class="sc-site-topbar">
-    <div class="sc-site-topbar-brand">
-      <a class="sc-site-topbar-logo" href="/">辰云</a>
-      <span class="sc-site-topbar-divider" aria-hidden="true" />
-      <span class="sc-site-topbar-title">{{ title }}</span>
+  <header class="eu-site-topbar">
+    <div class="eu-site-topbar-brand">
+      <a class="eu-site-topbar-logo" href="/">辰云</a>
+      <span class="eu-site-topbar-divider" aria-hidden="true" />
+      <span class="eu-site-topbar-title">{{ title }}</span>
     </div>
-    <nav class="sc-site-topbar-nav">
+    <nav class="eu-site-topbar-nav">
       <slot name="nav" />
     </nav>
-    <div class="sc-site-topbar-spacer" />
-    <div class="sc-site-topbar-actions">
+    <div class="eu-site-topbar-spacer" />
+    <div class="eu-site-topbar-actions">
       <slot name="actions" />
     </div>
   </header>
 </template>
 
 <style>
-.sc-site-topbar {
+.eu-site-topbar {
   position: sticky;
   top: 0;
   z-index: 100;
-  height: var(--sc-topbar-height);
+  height: var(--eu-topbar-height);
   display: flex;
   align-items: center;
-  gap: var(--sc-spacing-6);
-  padding: 0 var(--sc-spacing-6);
-  background: var(--sc-glass-bg);
-  -webkit-backdrop-filter: var(--sc-glass-blur);
-  backdrop-filter: var(--sc-glass-blur);
-  border-bottom: 1px solid var(--sc-glass-border);
+  gap: var(--eu-spacing-6);
+  padding: 0 var(--eu-spacing-6);
+  background: var(--eu-glass-bg);
+  -webkit-backdrop-filter: var(--eu-glass-blur);
+  backdrop-filter: var(--eu-glass-blur);
+  border-bottom: 1px solid var(--eu-glass-border);
 }
-.sc-site-topbar-brand {
+.eu-site-topbar-brand {
   display: flex;
   align-items: center;
-  gap: var(--sc-spacing-3);
+  gap: var(--eu-spacing-3);
   flex-shrink: 0;
 }
-.sc-site-topbar-logo {
-  font-size: var(--sc-font-size-lg);
+.eu-site-topbar-logo {
+  font-size: var(--eu-font-size-lg);
   font-weight: 600;
-  color: var(--sc-color-brand);
+  color: var(--eu-color-brand);
   text-decoration: none;
 }
-.sc-site-topbar-divider {
+.eu-site-topbar-divider {
   width: 1px;
   height: 16px;
-  background: var(--sc-border);
+  background: var(--eu-border);
 }
-.sc-site-topbar-title {
-  font-size: var(--sc-font-size-md);
+.eu-site-topbar-title {
+  font-size: var(--eu-font-size-md);
   font-weight: 500;
-  color: var(--sc-text-primary);
+  color: var(--eu-text-primary);
   white-space: nowrap;
 }
-.sc-site-topbar-nav {
+.eu-site-topbar-nav {
   display: flex;
   align-items: center;
-  gap: var(--sc-spacing-5);
+  gap: var(--eu-spacing-5);
   min-width: 0;
 }
-.sc-site-topbar-nav a {
-  color: var(--sc-text-secondary);
+.eu-site-topbar-nav a {
+  color: var(--eu-text-secondary);
   text-decoration: none;
-  font-size: var(--sc-font-size-md);
+  font-size: var(--eu-font-size-md);
   white-space: nowrap;
-  transition: color var(--sc-transition);
+  transition: color var(--eu-transition);
 }
-.sc-site-topbar-nav a:hover {
-  color: var(--sc-color-brand);
+.eu-site-topbar-nav a:hover {
+  color: var(--eu-color-brand);
 }
-.sc-site-topbar-nav a.router-link-active {
-  color: var(--sc-color-brand);
+.eu-site-topbar-nav a.router-link-active {
+  color: var(--eu-color-brand);
 }
-.sc-site-topbar-spacer {
+.eu-site-topbar-spacer {
   flex: 1;
 }
-.sc-site-topbar-actions {
+.eu-site-topbar-actions {
   display: flex;
   align-items: center;
-  gap: var(--sc-spacing-3);
+  gap: var(--eu-spacing-3);
   flex-shrink: 0;
 }
 </style>

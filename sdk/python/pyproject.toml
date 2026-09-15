@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cloudsdk"
 version = "0.1.0"
-description = "StarCloud Python SDK — CPS1-HMAC-SHA256 signing (07§4.1) + unified error model (03§9.3). One signing contract shared with pkg-go/cps1 and the gateway, pinned by the golden-vector fixture."
+description = "Euler Python SDK — CPS1-HMAC-SHA256 signing (07§4.1) + unified error model (03§9.3). One signing contract shared with pkg-go/cps1 and the gateway, pinned by the golden-vector fixture."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Proprietary" }
-authors = [{ name = "StarCloud Platform" }]
+authors = [{ name = "Euler Platform" }]
 
 [project.urls]
-Documentation = "https://docs.starcloud.cn"
+Documentation = "https://docs.euler.emoera.com"
 
 [tool.setuptools.packages.find]
 include = ["cloudsdk*"]

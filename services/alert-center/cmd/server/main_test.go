@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/starcloud/sc-platform/alertcenter"
+	"github.com/qifalab/euler-platform/alertcenter"
 )
 
 func doReq(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -19,7 +19,7 @@ func doReq(t *testing.T, h http.Handler, method, path string, body any) *httptes
 		}
 	}
 	req := httptest.NewRequest(method, path, &buf)
-	req.Header.Set("X-Sc-Account-Id", "100123")
+	req.Header.Set("X-Euler-Account-Id", "100123")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -54,23 +54,23 @@ func flushNotifications(t *testing.T, h http.Handler) []map[string]any {
 
 func TestConvergenceOverHTTP(t *testing.T) {
 	h := newMux(newStore())
-	// Three same-group alerts (tenant 100123 × scecs): dedup + inhibit → 1.
-	ingest(t, h, "scecs", "cpu", alertcenter.SeverityCritical)
-	ingest(t, h, "scecs", "memory", alertcenter.SeverityWarning)
-	ingest(t, h, "scecs", "disk", alertcenter.SeverityInfo)
+	// Three same-group alerts (tenant 100123 × euecs): dedup + inhibit → 1.
+	ingest(t, h, "euecs", "cpu", alertcenter.SeverityCritical)
+	ingest(t, h, "euecs", "memory", alertcenter.SeverityWarning)
+	ingest(t, h, "euecs", "disk", alertcenter.SeverityInfo)
 	// Different group survives.
-	ingest(t, h, "scoss", "requests", alertcenter.SeverityInfo)
+	ingest(t, h, "euoss", "requests", alertcenter.SeverityInfo)
 
 	notes := flushNotifications(t, h)
 	if len(notes) != 2 {
-		t.Fatalf("want 2 notifications (scecs + scoss groups), got %d", len(notes))
+		t.Fatalf("want 2 notifications (euecs + euoss groups), got %d", len(notes))
 	}
 }
 
 func TestDedupOverHTTP(t *testing.T) {
 	h := newMux(newStore())
-	ingest(t, h, "scecs", "cpu", alertcenter.SeverityCritical)
-	ingest(t, h, "scecs", "cpu", alertcenter.SeverityCritical) // identical → deduped
+	ingest(t, h, "euecs", "cpu", alertcenter.SeverityCritical)
+	ingest(t, h, "euecs", "cpu", alertcenter.SeverityCritical) // identical → deduped
 	notes := flushNotifications(t, h)
 	if len(notes) != 1 {
 		t.Fatalf("identical alerts must dedup to one notification, got %d", len(notes))

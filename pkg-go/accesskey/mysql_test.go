@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/kms"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/kms"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 func newSQLTestStore(t *testing.T) *SQLStore {

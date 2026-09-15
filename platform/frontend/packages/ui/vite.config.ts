@@ -13,7 +13,7 @@ export default defineConfig({
     rollupOptions: {
       // Shared layer — Vue & Element Plus are externals, injected by the base
       // via shared-manifest.json (02§6.5). Never bundle a second Vue.
-      external: ["vue", "element-plus", "@sc/tokens", "@sc/wujie-bridge"],
+      external: ["vue", "element-plus", "@eu/tokens", "@eu/wujie-bridge"],
     },
   },
 });

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 func newSQLTestCatalogRepo(t *testing.T) *sqlCatalogRepo {
@@ -17,7 +17,7 @@ func newSQLTestCatalogRepo(t *testing.T) *sqlCatalogRepo {
 // TestSQLCatalogLoaderLoadsSeed loads the catalogue from the schema of record
 // and checks the things the quote path silently depends on: non-empty sets,
 // DECIMAL prices that parse exactly, and — after V4 — placement columns that
-// match the code's model (scecs is ZONAL with cross-AZ HA; the V2 seed wrote
+// match the code's model (euecs is ZONAL with cross-AZ HA; the V2 seed wrote
 // everything REGIONAL, which would have disarmed the M-6 placement gate).
 func TestSQLCatalogLoaderLoadsSeed(t *testing.T) {
 	repo := newSQLTestCatalogRepo(t)
@@ -33,23 +33,23 @@ func TestSQLCatalogLoaderLoadsSeed(t *testing.T) {
 	for _, p := range data.Products {
 		byCode[p.ProductCode] = p
 	}
-	scecs, ok := byCode["scecs"]
+	euecs, ok := byCode["euecs"]
 	if !ok {
-		t.Fatal("scecs missing from t_product")
+		t.Fatal("euecs missing from t_product")
 	}
-	if scecs.RegionScope != "ZONAL" || !scecs.CrossAZ {
-		t.Fatalf("scecs placement = %s cross_az=%v, want ZONAL+true (V4 did not reconcile the seed)", scecs.RegionScope, scecs.CrossAZ)
+	if euecs.RegionScope != "ZONAL" || !euecs.CrossAZ {
+		t.Fatalf("euecs placement = %s cross_az=%v, want ZONAL+true (V4 did not reconcile the seed)", euecs.RegionScope, euecs.CrossAZ)
 	}
-	if vpc := byCode["scvpc"]; vpc.RegionScope != "REGIONAL" || vpc.CrossAZ {
-		t.Fatalf("scvpc placement = %s cross_az=%v, want REGIONAL+false", vpc.RegionScope, vpc.CrossAZ)
+	if vpc := byCode["euvpc"]; vpc.RegionScope != "REGIONAL" || vpc.CrossAZ {
+		t.Fatalf("euvpc placement = %s cross_az=%v, want REGIONAL+false", vpc.RegionScope, vpc.CrossAZ)
 	}
 
 	var found bool
 	for _, r := range data.Rules {
-		if r.SKUCode == "scecs.s2.large.prepaid" && r.RegionID == "*" && r.CustomerLevel == "" {
+		if r.SKUCode == "euecs.s2.large.prepaid" && r.RegionID == "*" && r.CustomerLevel == "" {
 			found = true
 			if r.ListPrice.String() != pricing.MustParseAmount("180").String() {
-				t.Fatalf("scecs.s2.large.prepaid list price = %s, want 180", r.ListPrice.String())
+				t.Fatalf("euecs.s2.large.prepaid list price = %s, want 180", r.ListPrice.String())
 			}
 			if r.DurationUnit != pricing.DurationMonth {
 				t.Fatalf("duration unit = %s, want MONTH", r.DurationUnit)
@@ -57,7 +57,7 @@ func TestSQLCatalogLoaderLoadsSeed(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("wildcard rule for scecs.s2.large.prepaid missing")
+		t.Fatal("wildcard rule for euecs.s2.large.prepaid missing")
 	}
 	if len(data.Promos) == 0 {
 		t.Fatal("seed promotions did not load")

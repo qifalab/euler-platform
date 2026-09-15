@@ -44,7 +44,7 @@ lint:kubeconform:
 
 # ---------------------------------------------------------------------------
 # Gateway semantics. YAML validity is not enough — the failures that matter
-# here are semantic and silent in production: a route without sc-auth is an
+# here are semantic and silent in production: a route without eu-auth is an
 # unauthenticated endpoint; a Nacos subscription string in the wrong form
 # resolves to zero upstreams and the route simply 502s.
 # ---------------------------------------------------------------------------

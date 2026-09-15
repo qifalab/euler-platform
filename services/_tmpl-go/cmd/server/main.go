@@ -101,5 +101,5 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	// TODO(scaffold): expose RED metrics via prometheus/client_golang.
 	// Mandatory labels: service, instance, region, env (05§7.2).
 	// FORBIDDEN as labels: account_id, resource_id (high cardinality — 05§7.2).
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }

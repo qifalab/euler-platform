@@ -6,21 +6,21 @@
 import { computed, h } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
-import { ResourceTable, useResourceTable } from "@sc/console-kit";
-import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
+import { ResourceTable, useResourceTable } from "@eu/console-kit";
+import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
 import { sdk } from "../sdk";
-import "@sc/tokens/style.css";
+import "@eu/tokens/style.css";
 
 type Row = Record<string, unknown>;
 const router = useRouter();
 
-// Real fetcher: console-bff /console/resources, filtered to scecs. The BFF
+// Real fetcher: console-bff /console/resources, filtered to euecs. The BFF
 // returns the shared Resource shape (store.go); map to list columns.
 const { rows, loading, error, columns, page, pageSize, total, setPage, refresh } = useResourceTable<Row>({
   api: async (_params, signal) => {
     const res = await sdk.get<Row[]>("/console/resources", { signal });
     const items = (res.data ?? [])
-      .filter((r) => r.ProductCode === "scecs")
+      .filter((r) => r.ProductCode === "euecs")
       .map((r) => ({
         instanceId: r.ResourceId,
         instanceName: r.ResourceId,
@@ -73,7 +73,7 @@ const tableColumns = computed(() =>
 .ecs-app { padding: 16px 24px; }
 .ecs-error {
   padding: 32px; text-align: center;
-  border: 1px solid var(--sc-border); border-radius: var(--sc-radius-lg);
+  border: 1px solid var(--eu-border); border-radius: var(--eu-radius-lg);
 }
-.ecs-error-msg { color: var(--sc-color-danger); font-size: 13px; margin: 0 0 12px; }
+.ecs-error-msg { color: var(--eu-color-danger); font-size: 13px; margin: 0 0 12px; }
 </style>

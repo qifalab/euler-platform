@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/metering"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/metering"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 func newSQLTestAggRepo(t *testing.T) *sqlAggRepo {
@@ -21,7 +21,7 @@ var aggHour = time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
 func testUsage(aggID string, qty string) metering.HourlyUsage {
 	return metering.HourlyUsage{
 		AggID: aggID, AccountID: 100123, Region: "cn-north-1",
-		ResourceType: "ecs", ResourceID: "scecs-cn-north-1-01-a1b2c3d4",
+		ResourceType: "ecs", ResourceID: "euecs-cn-north-1-01-a1b2c3d4",
 		MeteringItem: "cpu_core_hour", TotalQuantity: metering.MustParseQuantity(qty),
 		HourStart: aggHour, CoveredRatio: 100, WindowsSeen: 60, WindowsExpected: 60,
 		BatchID: metering.BatchRealtime,
@@ -88,10 +88,10 @@ func TestSQLAggRepoSurvivesRestart(t *testing.T) {
 	}
 	// The ownership metadata the read paths check must be rebuilt too: a
 	// restarted process that forgets who owns a resource 403s its own tenants.
-	if owner, known := restarted.accounts["scecs-cn-north-1-01-a1b2c3d4"]; !known || owner != 100123 {
+	if owner, known := restarted.accounts["euecs-cn-north-1-01-a1b2c3d4"]; !known || owner != 100123 {
 		t.Fatalf("rehydrated owner = %d known=%v, want 100123", owner, known)
 	}
-	if region := restarted.regions["scecs-cn-north-1-01-a1b2c3d4"]; region != "cn-north-1" {
+	if region := restarted.regions["euecs-cn-north-1-01-a1b2c3d4"]; region != "cn-north-1" {
 		t.Fatalf("rehydrated region = %q", region)
 	}
 }

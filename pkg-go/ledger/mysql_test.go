@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // newSQLTestLedger builds the domain Ledger on top of the real MySQL store, with

@@ -13,7 +13,7 @@
 //
 // This engine is the shared authoritative implementation; svc-iam (Go/Kratos)
 // implements the same semantics against the same policy
-// JSON. The gateway's sc-authorize plugin calls svc-iam CheckAccess, which
+// JSON. The gateway's eu-authorize plugin calls svc-iam CheckAccess, which
 // runs this evaluation — the engine is used both in-process (Go services doing
 // owner checks) and behind the RPC.
 package authz
@@ -99,14 +99,14 @@ func ParsePolicy(data []byte) (Policy, error) {
 // on this resource, in this context?
 type Request struct {
 	// Action is the operation, formatted {productCode}:{Operation},
-	// e.g. "scecs:StartInstance" (07§3.1, S3).
+	// e.g. "euecs:StartInstance" (07§3.1, S3).
 	Action string
 
 	// Resource is the target ARN:
-	// sc:{service}:{region}:{account_id}:{relative-resource}
+	// eu:{service}:{region}:{account_id}:{relative-resource}
 	Resource string
 
-	// Context carries the sc:-prefixed condition keys. Phase-1 supported keys:
+	// Context carries the eu:-prefixed condition keys. Phase-1 supported keys:
 	// SourceIp, CurrentTime, MFAPresent, ResourceGroupId (07§3.3).
 	Context map[string]string
 }
@@ -172,8 +172,8 @@ func decisionNumber(policyIdx, stmtIdx int, allow bool) string {
 }
 
 // matchAction reports whether any pattern in the list matches the action.
-// Wildcards: "*" matches everything; "scecs:*" matches all scecs operations;
-// "scecs:Describe*" matches by prefix. Matching is case-insensitive on the
+// Wildcards: "*" matches everything; "euecs:*" matches all euecs operations;
+// "euecs:Describe*" matches by prefix. Matching is case-insensitive on the
 // operation, matching cloud-vendor convention.
 func matchAction(patterns flexList, action string) bool {
 	for _, p := range patterns {
@@ -186,8 +186,8 @@ func matchAction(patterns flexList, action string) bool {
 
 // matchResource reports whether any ARN pattern matches the target resource.
 // ARN segments are matched with wildcard support in each position, so
-// "sc:iam:*:1001234567890:user/dev-*" matches
-// "sc:iam:cn-north-1:1001234567890:user/dev-alice".
+// "eu:iam:*:1001234567890:user/dev-*" matches
+// "eu:iam:cn-north-1:1001234567890:user/dev-alice".
 func matchResource(patterns flexList, resource string) bool {
 	for _, p := range patterns {
 		if p == "*" {
@@ -201,12 +201,12 @@ func matchResource(patterns flexList, resource string) bool {
 }
 
 // arnMatch compares two ARNs segment by segment (5 segments:
-// sc:{service}:{region}:{account_id}:{relative-resource}). The relative
+// eu:{service}:{region}:{account_id}:{relative-resource}). The relative
 // resource may itself contain "/" and wildcards; it is matched as a whole.
 //
 // A pattern or target with fewer than 5 segments does NOT match. Falling back
 // to a whole-string wildcard compare here would let a truncated pattern such
-// as "sc:iam:*" glob across the account-id segment — a cross-account grant the
+// as "eu:iam:*" glob across the account-id segment — a cross-account grant the
 // author never wrote.
 func arnMatch(pattern, target string) bool {
 	pParts := strings.SplitN(pattern, ":", 5)

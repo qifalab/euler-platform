@@ -1,9 +1,19 @@
-# StarCloud Platform (Alpha)
+# Euler Platform (Alpha)
+
+![status](https://img.shields.io/badge/status-Alpha-0066CC?style=flat-square)
+![Go](https://img.shields.io/badge/Go-1.26-555555?style=flat-square)
+![services](https://img.shields.io/badge/services-19-555555?style=flat-square)
+![tests](https://img.shields.io/badge/tests-621-555555?style=flat-square)
+![products](https://img.shields.io/badge/products-15-555555?style=flat-square)
+![proto](https://img.shields.io/badge/proto--hub-17-555555?style=flat-square)
+![license](https://img.shields.io/badge/license-Proprietary-555555?style=flat-square)
 
 自研公有云平台的参考实现：从官网注册到资源释放的完整商业闭环
 （注册 → 实名 → 充值/下单 → 开通 → 计量 → 出账 → 欠费治理 → 释放），
 以及控制台/官网前端、OpenAPI 生态（签名/SDK/Explorer）、双 AZ 拓扑与
 告警/稳定性平台。架构规格见 `docs/architecture/`（00–11 章，约束性事实源）。
+
+站点 `https://euler.emoera.com/` · 模块 `github.com/qifalab/euler-platform`
 
 **Alpha 状态**：全部 19 个服务可运行、可测试，并已接入真实 MySQL 持久化
 （33 个迁移、6 个 schema、86 张表，幂等可重跑）；资源履约仍走
@@ -12,15 +22,43 @@ ClickHouse 下沉是 phase-3 接线点（代码内已留锚点）。
 
 ---
 
+## 目录
+
+- [架构总览](#架构总览)
+- [At a glance](#at-a-glance)
+- [Quick start](#quick-start)
+- [Persistence model](#persistence-model)
+- [Repository layout](#repository-layout)
+- [Verification status](#verification-status)
+- [Alpha 已知边界](#alpha-已知边界)
+- [文档](#文档)
+- [不变量（改代码前先读）](#不变量改代码前先读)
+
+## 架构总览
+
+三条入口（官网 / 控制台 / OpenAPI）汇入同一条从签约到释放的业务闭环；
+每一环节都由独立服务承载，服务间以契约（proto）而非共享状态耦合。
+
+```mermaid
+flowchart LR
+  SITE["官网 site"] --> REG
+  CONSOLE["控制台 console"] --> REG
+  OPENAPI["OpenAPI / SDK"] --> REG
+
+  REG["注册"] --> REAL["实名"] --> PAY["充值 / 下单"] --> PROV["开通"] --> METER["计量"] --> BILL["出账"] --> DUN{"欠费?"}
+  DUN -- 否 --> METER
+  DUN -- 是 --> COLLECT["欠费治理"] --> RELEASE["释放"] --> PAY
+```
+
 ## At a glance
 
 | 维度 | 现状 |
 |---|---|
-| 可售产品 | 15 个：SCVPC / SCECS / SCBS / SCOSS / SCRDS / SCMON / SCEIP / SCECI / SCLB / SCAS / SCBACKUP / SCREDIS / SCKAFKA / SCLOG + RAM 子账号 |
+| 可售产品 | 15 个：EUVPC / EUECS / EUBS / EUOSS / EURDS / EUMON / EUEIP / EUECI / EULB / EUAS / EUBACKUP / EUREDIS / EUKAFKA / EULOG + RAM 子账号 |
 | 计费形态 | 包年包月 / 按量 / 资源包抵扣 / 抢占式浮动价（定价粒度是目录行，不是代码分支——按秒计费即一例） |
 | 服务 | 19 个 Go 服务（stdlib HTTP，`cmd/server` 可直接运行），端口 91xx/92xx |
 | 领域库 | `pkg-go` 38 个包、70 个测试文件、621 个测试函数（含资金双花、配额超卖、死锁回归） |
-| 持久化 | `SC_DB_DSN` 一键切换：真 MySQL（6 schema/86 表）或零依赖内存模式 |
+| 持久化 | `EULER_DB_DSN` 一键切换：真 MySQL（6 schema/86 表）或零依赖内存模式 |
 | 合同 | `proto-hub` 17 个 proto 包 + 破坏性变更 CI 门；CPS1 签名一份实现三处消费（SDK/Explorer/网关），7 条金样本向量钉死跨语言一致 |
 | 前端 | Vue + Wujie 微前端：官网 + 控制台基座 + 15 个子应用（`platform/frontend`） |
 
@@ -34,7 +72,7 @@ CREATE/DROP DATABASE 权限）、Node 18+ / pnpm（仅前端）。
 ```sh
 # 迁移工具按 migrations.json 应用全部服务 DDL；重复执行是安全的。
 cd tools/sqlmigrate
-export SC_DB_DSN='user:password@tcp(127.0.0.1:3306)/'
+export EULER_DB_DSN='user:password@tcp(127.0.0.1:3306)/'
 go run .                # 全量应用；-dry-run 预览；-only svc-order 单服务
 ```
 
@@ -46,20 +84,20 @@ go run .                # 全量应用；-dry-run 预览；-only svc-order 单�
 
 ```sh
 cd services/svc-order
-export SC_DB_DSN='user:password@tcp(127.0.0.1:3306)/'   # 不设 = 内存模式（demo/测试）
+export EULER_DB_DSN='user:password@tcp(127.0.0.1:3306)/'   # 不设 = 内存模式（demo/测试）
 go run ./cmd/server
 ```
 
-持久化是 **opt-in**：设了 `SC_DB_DSN`，状态落 `trade_db`，重启不丢；
+持久化是 **opt-in**：设了 `EULER_DB_DSN`，状态落 `trade_db`，重启不丢；
 未设则退回内存实现（`go test` 因此零外部依赖）。一个配置了 DSN 却连不上
 的服务会**启动失败**——资金/凭证/审计类服务不允许"静默降级为遗忘"。
 
 ### 3. 测试
 
 ```sh
-cd pkg-go && go test ./...                 # 无 DSN：纯内存，全绿
-cd pkg-go && SC_DB_DSN=... go test ./...   # 有 DSN：SQL 适配器在真库上跑
-cd services/svc-order && SC_DB_DSN=... go test ./...
+cd pkg-go && go test ./...                     # 无 DSN：纯内存，全绿
+cd pkg-go && EULER_DB_DSN=... go test ./...    # 有 DSN：SQL 适配器在真库上跑
+cd services/svc-order && EULER_DB_DSN=... go test ./...
 ```
 
 SQL 适配器的测试跑在 **schema of record** 上（`pkg-go/storage/sqltest`
@@ -71,7 +109,7 @@ SQL 适配器的测试跑在 **schema of record** 上（`pkg-go/storage/sqltest`
 
 ```sh
 cd platform/frontend && pnpm install && pnpm -r dev
-# console-base :5173；子应用 :517x/518x/519x（vite 代理注入 X-Sc-Account-Id）
+# console-base :5173；子应用 :517x/518x/519x（vite 代理注入 X-Euler-Account-Id）
 ```
 
 ## Persistence model
@@ -129,7 +167,7 @@ tools/                 sqlmigrate + 仓库校验器（YAML/Lua/routes/proto/topo
 - **多区域**：`pkg-go/multiregion` 模型与两地三中心 runbook 就绪，
   实际第二地域未点亮（P3 承诺"不承诺异地多活写"）。
 
-## Docs
+## 文档
 
 - `docs/architecture/00..11` — 平台规格（约束性）
 - `docs/architecture/09-roadmap.md` §4.0/§5.0 — 二/三期实装回写

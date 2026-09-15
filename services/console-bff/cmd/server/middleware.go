@@ -17,7 +17,7 @@ type ctxKey string
 const requestIDKey ctxKey = "request_id"
 
 // requestIDMiddleware generates a request id (≡ trace_id for the platform),
-// injects it into the context and the X-Sc-TraceId response header, and
+// injects it into the context and the X-Euler-TraceId response header, and
 // aligns with the APISIX request-id plugin (04§3.1 global plugins).
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +25,7 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		if rid == "" {
 			rid = uuid.NewString()
 		}
-		w.Header().Set("X-Sc-TraceId", rid)
+		w.Header().Set("X-Euler-TraceId", rid)
 		ctx := context.WithValue(r.Context(), requestIDKey, rid)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -69,16 +69,16 @@ func recoverMiddleware(next http.Handler) http.Handler {
 }
 
 // internalTokenMiddleware optionally enforces an internal shared secret: when
-// the SC_INTERNAL_TOKEN env var is set, every request must carry a matching
-// X-Sc-Internal-Token header (defense-in-depth for the gateway-injected
-// X-Sc-Account-Id trust). Unset (dev default) = no check.
+// the EULER_INTERNAL_TOKEN env var is set, every request must carry a matching
+// X-Euler-Internal-Token header (defense-in-depth for the gateway-injected
+// X-Euler-Account-Id trust). Unset (dev default) = no check.
 func internalTokenMiddleware(next http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Sc-Internal-Token") != token {
+		if r.Header.Get("X-Euler-Internal-Token") != token {
 			rid, _ := r.Context().Value(requestIDKey).(string)
 			http.Error(w, `{"RequestId":"`+rid+`","Code":"Common.Forbidden","Message":"invalid internal token"}`, http.StatusForbidden)
 			return

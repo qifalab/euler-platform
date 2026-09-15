@@ -4,8 +4,8 @@
  *  svc-api-meta; this view lists what is registered so the Explorer dropdown
  *  and docs reflect the real gate. */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@sc/sdk";
-import { PageHeader } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PageHeader } from "@eu/ui";
 
 const sdk = createSDK({ baseURL: "" });
 const actions = ref<ActionMeta[]>([]);
@@ -83,19 +83,19 @@ function safeParse(s: string): Record<string, unknown> {
 </template>
 
 <style scoped>
-.catalogue { padding: var(--sc-spacing-6); max-width: 1200px; }
-.catalogue-toolbar { display: flex; gap: var(--sc-spacing-3); margin-bottom: var(--sc-spacing-4); }
-.catalogue-toolbar input { flex: 1; max-width: 360px; padding: 6px 10px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); background: var(--sc-glass-bg); color: var(--sc-text-primary); font-size: 13px; }
-.catalogue-refresh { border: 1px solid var(--sc-border); background: var(--sc-glass-bg); color: var(--sc-text-secondary); padding: 6px 14px; border-radius: var(--sc-radius-sm); cursor: pointer; font-size: 13px; transition: var(--sc-transition); }
-.catalogue-refresh:hover { color: var(--sc-color-brand); border-color: var(--sc-color-brand); }
-.catalogue-error, .catalogue-loading, .catalogue-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.catalogue-error { color: var(--sc-color-danger); }
-.catalogue-table-card { background: var(--sc-glass-bg-soft); border: 1px solid var(--sc-glass-border); border-radius: var(--sc-radius-lg); box-shadow: var(--sc-shadow-sm); overflow: hidden; }
+.catalogue { padding: var(--eu-spacing-6); max-width: 1200px; }
+.catalogue-toolbar { display: flex; gap: var(--eu-spacing-3); margin-bottom: var(--eu-spacing-4); }
+.catalogue-toolbar input { flex: 1; max-width: 360px; padding: 6px 10px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); background: var(--eu-glass-bg); color: var(--eu-text-primary); font-size: 13px; }
+.catalogue-refresh { border: 1px solid var(--eu-border); background: var(--eu-glass-bg); color: var(--eu-text-secondary); padding: 6px 14px; border-radius: var(--eu-radius-sm); cursor: pointer; font-size: 13px; transition: var(--eu-transition); }
+.catalogue-refresh:hover { color: var(--eu-color-brand); border-color: var(--eu-color-brand); }
+.catalogue-error, .catalogue-loading, .catalogue-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.catalogue-error { color: var(--eu-color-danger); }
+.catalogue-table-card { background: var(--eu-glass-bg-soft); border: 1px solid var(--eu-glass-border); border-radius: var(--eu-radius-lg); box-shadow: var(--eu-shadow-sm); overflow: hidden; }
 .catalogue-table { width: 100%; border-collapse: collapse; background: transparent; }
-.catalogue-table th, .catalogue-table td { padding: var(--sc-spacing-3) var(--sc-spacing-4); text-align: left; border-bottom: 1px solid var(--sc-border); font-size: 13px; color: var(--sc-text-primary); }
-.catalogue-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.catalogue-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.catalogue-table th, .catalogue-table td { padding: var(--eu-spacing-3) var(--eu-spacing-4); text-align: left; border-bottom: 1px solid var(--eu-border); font-size: 13px; color: var(--eu-text-primary); }
+.catalogue-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.catalogue-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .catalogue-table tbody tr:last-child td { border-bottom: none; }
 .mono { font-family: monospace; }
-.schema-cell, .err-cell { font-size: 12px; color: var(--sc-text-secondary); }
+.schema-cell, .err-cell { font-size: 12px; color: var(--eu-text-secondary); }
 </style>

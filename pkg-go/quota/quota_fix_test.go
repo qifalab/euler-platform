@@ -13,7 +13,7 @@ var fixNow = time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 // phantom row that never matched the one CheckAndOccupy wrote.
 func TestGlobalScopeRegionNormalizedOnAllPaths(t *testing.T) {
 	m, store := newManager(fixNow)
-	const q = "quota_scoss_bucket" // GLOBAL in the fixture
+	const q = "quota_euoss_bucket" // GLOBAL in the fixture
 
 	tok, err := m.CheckAndOccupy(1, q, "cn-north-1", 5, "order-1")
 	if err != nil {
@@ -60,7 +60,7 @@ func TestGlobalScopeRegionNormalizedOnAllPaths(t *testing.T) {
 func TestCommitAfterSweepCannotDoubleCount(t *testing.T) {
 	m, store := newManager(fixNow)
 	m.SetTokenTTL(time.Minute)
-	tok, err := m.CheckAndOccupy(1, "quota_scecs_instance", "cn-north-1", 5, "order-1")
+	tok, err := m.CheckAndOccupy(1, "quota_euecs_instance", "cn-north-1", 5, "order-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestCommitAfterSweepCannotDoubleCount(t *testing.T) {
 	if !errors.Is(err, ErrTokenNotFound) {
 		t.Fatalf("commit after sweep: err = %v, want ErrTokenNotFound", err)
 	}
-	u, _ := store.GetUsage(1, "quota_scecs_instance", "cn-north-1")
+	u, _ := store.GetUsage(1, "quota_euecs_instance", "cn-north-1")
 	if u.Used != 0 || u.Occupying != 0 {
 		t.Fatalf("usage after sweep+commit = %+v, want 0/0", u)
 	}
@@ -100,7 +100,7 @@ func (f *failingUpdateStore) UpdateUsage(u Usage, v int) error {
 // is not silently lost (delete-first needs the rollback half).
 func TestCommitRestoresTokenOnUsageFailure(t *testing.T) {
 	m, store := newManager(fixNow)
-	tok, err := m.CheckAndOccupy(1, "quota_scecs_instance", "cn-north-1", 2, "order-1")
+	tok, err := m.CheckAndOccupy(1, "quota_euecs_instance", "cn-north-1", 2, "order-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestCommitRestoresTokenOnUsageFailure(t *testing.T) {
 	if err := m2.CommitOccupy(tok.TokenID); err != nil {
 		t.Fatalf("healthy retry should commit: %v", err)
 	}
-	final, _ := store.GetUsage(1, "quota_scecs_instance", "cn-north-1")
+	final, _ := store.GetUsage(1, "quota_euecs_instance", "cn-north-1")
 	if final.Used != 2 || final.Occupying != 0 {
 		t.Fatalf("usage = %+v, want Used 2 / Occupying 0", final)
 	}
@@ -131,7 +131,7 @@ func TestCommitRestoresTokenOnUsageFailure(t *testing.T) {
 func TestSweepDeletesTokenBeforeUsage(t *testing.T) {
 	m, store := newManager(fixNow)
 	m.SetTokenTTL(time.Minute)
-	if _, err := m.CheckAndOccupy(1, "quota_scecs_instance", "cn-north-1", 5, "o1"); err != nil {
+	if _, err := m.CheckAndOccupy(1, "quota_euecs_instance", "cn-north-1", 5, "o1"); err != nil {
 		t.Fatal(err)
 	}
 	m2 := NewManager(store, func() time.Time { return fixNow.Add(2 * time.Minute) }, nil)
@@ -142,7 +142,7 @@ func TestSweepDeletesTokenBeforeUsage(t *testing.T) {
 	if n, _ := m2.SweepExpired(); n != 0 {
 		t.Fatalf("second sweep must find nothing")
 	}
-	u, _ := store.GetUsage(1, "quota_scecs_instance", "cn-north-1")
+	u, _ := store.GetUsage(1, "quota_euecs_instance", "cn-north-1")
 	if u.Occupying != 0 {
 		t.Fatalf("occupying = %d, want 0 (not negative-clamped twice)", u.Occupying)
 	}

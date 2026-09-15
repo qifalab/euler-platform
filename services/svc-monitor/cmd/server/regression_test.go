@@ -37,7 +37,7 @@ func TestUpdateRuleRouteAndVersionGuard(t *testing.T) {
 	}
 
 	created := do(http.MethodPost, "/api/v1/monitor/rules",
-		`{"productCode":"scecs","resourceType":"instance","metric":"cpu_util","threshold":"80"}`)
+		`{"productCode":"euecs","resourceType":"instance","metric":"cpu_util","threshold":"80"}`)
 	if created.Code != http.StatusOK {
 		t.Fatalf("create: %d %s", created.Code, created.Body.String())
 	}

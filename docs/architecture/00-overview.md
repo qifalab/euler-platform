@@ -27,7 +27,7 @@
 
 **以自建基础设施为底座,以 Kubernetes 为核心资源池,对外提供"计算 + 存储 + 网络 + 托管数据库"最小可售闭环的自研云服务平台;以完全透明的计量计费与资源生命周期管理建立商业信任,以 API First 与标准化产品目录支撑产品线的持续扩张。**
 
-我们不追求在第一天复刻阿里云的 300+ 产品,而是先把"账号—购买—开通—计量—出账—续费—到期—释放"这条主链路做到金融级可靠,再按产品目录逐个"填槽"。一期 MVP 可售产品集为:**IAM/计费骨架/商品化中台 + SCVPC(网络)+ SCECS(云服务器 VM)+ SCBS(块存储)+ SCOSS(对象存储)+ SCRDS(托管 MySQL)+ SCMON(监控)+ SCEIP(弹性公网 IP)**,SCECI(弹性容器实例)后置二期(详见《01-product-catalog.md》§3.2、《09-roadmap.md》决策 D-01;对标启示见《10-research-and-selection-decisions.md》§3.4);该组合满足上述最小可售闭环(计算 + 存储 + 网络 + 托管数据库)。
+我们不追求在第一天复刻阿里云的 300+ 产品,而是先把"账号—购买—开通—计量—出账—续费—到期—释放"这条主链路做到金融级可靠,再按产品目录逐个"填槽"。一期 MVP 可售产品集为:**IAM/计费骨架/商品化中台 + EUVPC(网络)+ EUECS(云服务器 VM)+ EUBS(块存储)+ EUOSS(对象存储)+ EURDS(托管 MySQL)+ EUMON(监控)+ EUEIP(弹性公网 IP)**,EUECI(弹性容器实例)后置二期(详见《01-product-catalog.md》§3.2、《09-roadmap.md》决策 D-01;对标启示见《10-research-and-selection-decisions.md》§3.4);该组合满足上述最小可售闭环(计算 + 存储 + 网络 + 托管数据库)。
 
 ### 1.2 对标阿里云:全面学习,有限实现
 
@@ -90,11 +90,11 @@ flowchart TB
 
     subgraph L2["② 官网/控制台前端层(Vue + 微前端 Wujie)"]
         direction LR
-        FE_PORTAL["营销官网<br/>www.starcloud.cn<br/>首页/产品目录/详情/定价"]
-        FE_CONSOLE["统一控制台底座<br/>console.starcloud.cn<br/>导航/全局搜索/最近访问"]
+        FE_PORTAL["营销官网<br/>www.euler.emoera.com<br/>首页/产品目录/详情/定价"]
+        FE_CONSOLE["统一控制台底座<br/>console.euler.emoera.com<br/>导航/全局搜索/最近访问"]
         FE_SUB["产品控制台子应用<br/>(按产品大类合并,7~8 个)"]
-        FE_DOC["文档站<br/>docs.starcloud.cn<br/>快速入门/API 参考/在线调试"]
-        FE_BILL["费用中心<br/>billing.starcloud.cn<br/>账单/续费/发票"]
+        FE_DOC["文档站<br/>docs.euler.emoera.com<br/>快速入门/API 参考/在线调试"]
+        FE_BILL["费用中心<br/>billing.euler.emoera.com<br/>账单/续费/发票"]
     end
 
     subgraph L3["③ API 网关层(APISIX)"]
@@ -126,10 +126,10 @@ flowchart TB
 
     subgraph L5["⑤ 云产品资源层 —— 数据面 Data Plane"]
         direction LR
-        DP_COMPUTE["计算(SCECS/SCECI)<br/>K8s 容器/虚机/弹性实例"]
-        DP_STORE["存储(SCOSS/SCBS)<br/>MinIO 对象存储/块存储"]
-        DP_NET["网络(SCVPC/SCLB/SCEIP)<br/>VPC/负载均衡/EIP"]
-        DP_DB["托管数据库(SCRDS)<br/>MySQL/Redis 托管实例"]
+        DP_COMPUTE["计算(EUECS/EUECI)<br/>K8s 容器/虚机/弹性实例"]
+        DP_STORE["存储(EUOSS/EUBS)<br/>MinIO 对象存储/块存储"]
+        DP_NET["网络(EUVPC/EULB/EUEIP)<br/>VPC/负载均衡/EIP"]
+        DP_DB["托管数据库(EURDS)<br/>MySQL/Redis 托管实例"]
     end
 
     subgraph L6["⑥ 中间件层(管控面与数据面共享)"]
@@ -384,10 +384,10 @@ flowchart LR
 | 营销官网 | Vue SSR 独立应用 | 首页/目录/详情/定价/活动,SEO 敏感 |
 | 控制台底座 | Vue 微前端主应用(Wujie) | 登录态、导航、全局搜索、消息中心、子应用注册 |
 | 产品控制台子应用 | 按产品大类合并拆分(console-compute/console-network/console-storage/console-database/console-security/console-account/console-billing/console-monitor 等约 7~8 个,每子应用一仓库;**完整品类口径与子应用映射以《02-frontend-architecture.md》§1.2 为准**) | 独立仓库、独立发布 |
-| 费用中心 | 独立站 + 控制台子应用双入口(billing.starcloud.cn 子域) | 账单/续费/发票,财务强一致展示(billing 子域) |
-| 文档站 | 静态生成 + 在线调试组件(docs.starcloud.cn 子域) | 与 OpenAPI 元数据同源生成 |
-| 账号/SSO 中心 | 独立 SPA(account.starcloud.cn 子域) | 账号+SSO 中心,由 svc-iam 签发根域 Cookie,各子域共享 |
-| 工单站 | 独立站 + 控制台子应用双入口(ticket.starcloud.cn 子域) | 提交/查询工单 |
+| 费用中心 | 独立站 + 控制台子应用双入口(billing.euler.emoera.com 子域) | 账单/续费/发票,财务强一致展示(billing 子域) |
+| 文档站 | 静态生成 + 在线调试组件(docs.euler.emoera.com 子域) | 与 OpenAPI 元数据同源生成 |
+| 账号/SSO 中心 | 独立 SPA(account.euler.emoera.com 子域) | 账号+SSO 中心,由 svc-iam 签发根域 Cookie,各子域共享 |
+| 工单站 | 独立站 + 控制台子应用双入口(ticket.euler.emoera.com 子域) | 提交/查询工单 |
 | 运维/运营后台 | 独立应用(内网) | 客服工单、运营配置、审计查询 |
 
 **后端服务清单(17 个核心服务)**(详见《03-backend-services.md》§4.0 服务总表,名单以该表为准:总表 18 行、一期 17 个服务,alert-center 后置二期):
@@ -605,7 +605,7 @@ flowchart LR
 | 计量项 | 资源计费的最小采集单位(如 CPU·时、GB·月、请求次数),产品注册时强制定义;原始数据进 Kafka `cloud.metering.usage.raw` |
 | 出账 | 按计费规则把计量明细汇总为账单的过程,小时级出账 + 月度对账(商业验收口径为"无未解释差异") |
 | 生命周期状态机 | 运行/停机/欠费宽限(24h,大客户 72h)/锁定保留(30 天)/到期保留(包年包月 15 天)/释放的状态迁移与数据保留政策;参数以《01-product-catalog.md》D8 为唯一事实源 |
-| OpenAPI | 平台对外 RESTful API 契约,南北向经 APISIX 暴露,CPS1-HMAC-SHA256(x-cps-* 头)签名鉴权;一产品一子域名 `{productCode}.api.starcloud.cn`,RPC 风格 Action + 日期型 Version(URI 不承载版本号) |
+| OpenAPI | 平台对外 RESTful API 契约,南北向经 APISIX 暴露,CPS1-HMAC-SHA256(x-cps-* 头)签名鉴权;一产品一子域名 `{productCode}.api.euler.emoera.com`,RPC 风格 Action + 日期型 Version(URI 不承载版本号) |
 | IDL-first | 先写 Protobuf/OpenAPI 定义再生成代码,东西向 gRPC 的协作方式 |
 | GitOps | 以 Git 仓库为唯一事实源、ArgoCD 声明式收敛集群状态的交付模式 |
 | BFF | Backend For Frontend,为特定前端(控制台/官网)定制聚合的后端层,命名 `{场景}-bff`(console-bff/site-bff) |
@@ -619,24 +619,24 @@ flowchart LR
 
 | 规范项 | 取值 | 示例 |
 |---|---|---|
-| 主域名 | `starcloud.cn` | www.starcloud.cn / console.starcloud.cn / docs.starcloud.cn / scecs.api.starcloud.cn |
-| 品牌/平台前缀 | `sc`(替代 cldp/cps/CPSA) | sc-frontend-platform、@sc/ui、--sc-* CSS 变量、sc:ecs ARN |
-| 产品 code 前缀 | `sc` + 品类缩写(全小写) | scecs、scoss、scrds、scvpc、scbs、sceip、scmon、sceci、sccert |
+| 主域名 | `euler.emoera.com` | www.euler.emoera.com / console.euler.emoera.com / docs.euler.emoera.com / euecs.api.euler.emoera.com |
+| 品牌/平台前缀 | `sc`(替代 cldp/cps/CPSA) | eu-frontend-platform、@eu/ui、--eu-* CSS 变量、eu:ecs ARN |
+| 产品 code 前缀 | `sc` + 品类缩写(全小写) | euecs、euoss、eurds、euvpc、eubs、eueip、eumon、eueci、eucert |
 | 服务名 | `svc-{domain}`(统一 Go),Nacos Group = 应用名 | svc-iam、svc-order、svc-billing、svc-metering、svc-orchestrator、svc-kms、svc-api-meta、console-bff、site-bff |
 | 数据面控制器 | `rc-*` | rc-compute、rc-storage、rc-network、rc-database |
 | 租户标识字段 | `account_id`(≡ uid ≡ user_id ≡ tenant_id) | 全书物理列/Vitess vindex 分片键/Kafka 分区键一律 account_id |
 | 分片键 | account_id 单键(账号/交易/资源/计量四库统一,否决 region+account_id 组合路由) | 资源元数据可携带 region_id 但不作分片键 |
 | 分库分表 | account_db 4×16、trade/resource/metering_db 8×16(库×表口径) | Vitess Reshard 承载水平扩容(起步 8 库×16 表) |
-| 资源 ID 格式 | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | scecs-cn-north-1-01-a1b2c3d4 |
+| 资源 ID 格式 | `{productCode}-{regionId}-{分片因子2位}-{随机8位}` | euecs-cn-north-1-01-a1b2c3d4 |
 | region 命名 | `cn-north-1`/`cn-east-1`(短横线风格) | cn-north-1-a |
 | 可用区命名 | `{region}-{a/b/...}` | cn-north-1-a |
-| OpenAPI 域名 | `{productCode}.api.starcloud.cn`(一产品一子域名) | scecs.api.starcloud.cn |
+| OpenAPI 域名 | `{productCode}.api.euler.emoera.com`(一产品一子域名) | euecs.api.euler.emoera.com |
 | OpenAPI 版本载体 | RPC 风格 `Action` + 日期型 `Version` 参数(URI 不承载版本号) | ?Action=RunInstances&Version=2026-08-01 |
-| 权限 action | `{productCode}:{Operation}` | scecs:CreateInstance |
-| ARN | `sc:{service}:{region}:{account_id}:{relative-resource}` | sc:ecs:cn-east-1:100123:instance/scecs-cn-east-1-01-xxx |
-| 错误码 | `{Product}.{Module}.{Reason}`(PascalCase) | Quota.Exceeded.ScecsInstance |
+| 权限 action | `{productCode}:{Operation}` | euecs:CreateInstance |
+| ARN | `eu:{service}:{region}:{account_id}:{relative-resource}` | eu:ecs:cn-east-1:100123:instance/euecs-cn-east-1-01-xxx |
+| 错误码 | `{Product}.{Module}.{Reason}`(PascalCase) | Quota.Exceeded.EuecsInstance |
 | OpenAPI 签名头前缀 | `x-cps-`(签名协议专用,与品牌前缀 `sc` 解耦,保留不改) | x-cps-date、x-cps-content-sha256、x-cps-nonce |
-| AK 前缀 | `SC` | SC****3F |
+| AK 前缀 | `EU` | EU****3F |
 | Kafka topic 命名 | `cloud.{domain}.{aggregate}.{event}`(topic 不含环境,环境隔离靠集群隔离) | cloud.metering.usage.raw、cloud.trade.order.event |
 
 **租户标识等价声明**:全书凡出现 `uid`/`user_id`/`tenant_id` 指代租户主体的,均等价于 `account_id`,物理列与分片键统一写 `account_id`。

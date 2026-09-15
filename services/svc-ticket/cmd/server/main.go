@@ -16,7 +16,7 @@
 // Store-interface pattern used by pkg-go/order and pkg-go/quota.
 //
 // The gateway (APISIX) injects the authenticated tenant identity via the
-// X-Sc-Account-Id header; a missing header is rejected with 403 (03§3.3).
+// X-Euler-Account-Id header; a missing header is rejected with 403 (03§3.3).
 package main
 
 import (
@@ -37,7 +37,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/starcloud/sc-platform/identifier"
+	"github.com/qifalab/euler-platform/identifier"
 )
 
 // --- Ticket domain model ----------------------------------------------------
@@ -385,7 +385,7 @@ func (a *app) handleClose(w http.ResponseWriter, r *http.Request) {
 // --- Public API handlers (envelope-wrapped) --------------------------------
 
 // apiCreateReq is the POST /api/v1/tickets body. It mirrors createReq but the
-// handler returns the platform envelope so @sc/sdk can unwrap Data.
+// handler returns the platform envelope so @eu/sdk can unwrap Data.
 type apiCreateReq struct {
 	Category string `json:"category"`
 	Priority string `json:"priority"`
@@ -555,7 +555,7 @@ func (a *app) handleAPIMeta(w http.ResponseWriter, r *http.Request) {
 
 // accountFrom reads the authenticated tenant id injected by the gateway.
 func accountFrom(r *http.Request) (int64, bool) {
-	raw := r.Header.Get("X-Sc-Account-Id")
+	raw := r.Header.Get("X-Euler-Account-Id")
 	if raw == "" {
 		return 0, false
 	}
@@ -593,7 +593,7 @@ func readyz(w http.ResponseWriter, _ *http.Request) {
 func metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	// TODO(svc-ticket): expose RED metrics via prometheus/client_golang.
-	_, _ = w.Write([]byte("# HELP sc_ticket_dummy 0\n# TYPE sc_ticket_dummy counter\nsc_ticket_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_ticket_dummy 0\n# TYPE eu_ticket_dummy counter\nsc_ticket_dummy 0\n"))
 }
 
 // --- JSON helpers -----------------------------------------------------------
@@ -606,7 +606,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // apiResponse wraps every JSON payload with the platform envelope
-// {RequestId, Code, Message, Data} so the @sc/sdk client can branch on a stable
+// {RequestId, Code, Message, Data} so the @eu/sdk client can branch on a stable
 // Code and unwrap Data (03§9.3). Mirrors svc-notify's envelope.
 type apiResponse struct {
 	Code      string `json:"Code"`
@@ -688,8 +688,8 @@ func main() {
 		}
 	})
 
-	// Public API (platform-envelope, consumed by @sc/sdk in web-ticket). The
-	// Vite dev proxy forwards /api/v1/tickets here with X-Sc-Account-Id set.
+	// Public API (platform-envelope, consumed by @eu/sdk in web-ticket). The
+	// Vite dev proxy forwards /api/v1/tickets here with X-Euler-Account-Id set.
 	mux.HandleFunc("/api/v1/tickets", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:

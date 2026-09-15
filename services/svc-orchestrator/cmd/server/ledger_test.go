@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/resource"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/resource"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // newSQLTestLedger wires the SQL ledger to a throwaway resource_db built from the
@@ -21,9 +21,9 @@ var testClock = time.Date(2026, 9, 15, 14, 0, 0, 0, time.UTC)
 
 func newInstance(id string, orderID int64) *resource.Instance {
 	return &resource.Instance{
-		ResourceID: id, AccountID: 100123, ProductCode: "scecs", ResourceType: "instance",
+		ResourceID: id, AccountID: 100123, ProductCode: "euecs", ResourceType: "instance",
 		Region: "cn-north-1", ChargeType: resource.ChargePrepaid, State: resource.StateCreating,
-		SpecCode: "scecs.s2.large", OrderID: orderID, Version: 1,
+		SpecCode: "euecs.s2.large", OrderID: orderID, Version: 1,
 		CreatedAt: testClock, UpdatedAt: testClock,
 	}
 }
@@ -32,7 +32,7 @@ func TestSQLLedgerInstanceRoundTrip(t *testing.T) {
 	ledger := newSQLTestLedger(t)
 	const acct = int64(100123)
 
-	inst := newInstance("scecs-cn-north-1-01-00000042", 42)
+	inst := newInstance("euecs-cn-north-1-01-00000042", 42)
 	if err := ledger.Create(inst); err != nil {
 		t.Fatal(err)
 	}
@@ -45,12 +45,12 @@ func TestSQLLedgerInstanceRoundTrip(t *testing.T) {
 		t.Fatal("created instance not found")
 	}
 	if got.State != resource.StateCreating || got.ChargeType != resource.ChargePrepaid ||
-		got.SpecCode != "scecs.s2.large" || got.OrderID != 42 || got.Version != 1 {
+		got.SpecCode != "euecs.s2.large" || got.OrderID != 42 || got.Version != 1 {
 		t.Fatalf("instance round trip = %+v", got)
 	}
 	// resource_type is NOT NULL in the schema; a caller that left it empty gets
 	// the phase-1 default rather than a failed insert.
-	bare := newInstance("scecs-cn-north-1-02-00000043", 43)
+	bare := newInstance("euecs-cn-north-1-02-00000043", 43)
 	bare.ResourceType = ""
 	if err := ledger.Create(bare); err != nil {
 		t.Fatalf("empty resource type: %v", err)
@@ -73,7 +73,7 @@ func TestSQLLedgerTransitionStampsBillingAndJournals(t *testing.T) {
 	ledger := newSQLTestLedger(t)
 	const acct = int64(100123)
 
-	inst := newInstance("scecs-cn-north-1-03-00000044", 44)
+	inst := newInstance("euecs-cn-north-1-03-00000044", 44)
 	if err := ledger.Create(inst); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestSQLLedgerReleasePath(t *testing.T) {
 	ledger := newSQLTestLedger(t)
 	const acct = int64(100123)
 
-	inst := newInstance("scecs-cn-north-1-04-00000045", 45)
+	inst := newInstance("euecs-cn-north-1-04-00000045", 45)
 	if err := ledger.Create(inst); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestSQLLedgerReleasePath(t *testing.T) {
 func TestSQLLedgerProvisionRecordUpserts(t *testing.T) {
 	ledger := newSQLTestLedger(t)
 
-	inst := newInstance("scecs-cn-north-1-05-00000046", 46)
+	inst := newInstance("euecs-cn-north-1-05-00000046", 46)
 	if err := ledger.Create(inst); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestSQLLedgerSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 
 	first := newSQLLedger(ctx, db)
-	inst := newInstance("scecs-cn-north-1-06-00000047", 47)
+	inst := newInstance("euecs-cn-north-1-06-00000047", 47)
 	if err := first.Create(inst); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestSQLLedgerSurvivesRestart(t *testing.T) {
 func TestSQLLedgerMatchesMemoryStore(t *testing.T) {
 	run := func(ledger resourceLedger) *resource.Instance {
 		t.Helper()
-		inst := newInstance("scecs-cn-north-1-07-00000048", 48)
+		inst := newInstance("euecs-cn-north-1-07-00000048", 48)
 		if err := ledger.Create(inst); err != nil {
 			t.Fatalf("create: %v", err)
 		}

@@ -1,0 +1,244 @@
+syntax = "proto3";
+
+package euler.iam.v1;
+
+option go_package = "github.com/qifalab/euler-platform/proto/euler/iam/v1;iamv1";
+
+// AccountService is the identity root service. Day-1 service — every other
+// service depends on it (对标启示 1; 03§4.1.1).
+//
+// svc-iam (Go/Kratos) owns: account registration, real-name status,
+// RAM users/groups/roles, AK/SK lifecycle, and the policy engine. The gateway
+// calls VerifyIdentity on every OpenAPI request (the全网最热路径, P99 < 5ms,
+// served entirely from cache — 03§4.1.1).
+service AccountService {
+  // Register creates a master account. Real-name is a separate step.
+  // Emits cloud.user.event(account.created).
+  rpc Register(RegisterRequest) returns (Account);
+
+  // Login validates credentials and issues a session. Internal-only — the
+  // gateway/BFF never calls this for OpenAPI traffic (that path is AK/SK
+  // signature). Emits cloud.user.login.event.
+  rpc Login(LoginRequest) returns (Session);
+
+  // VerifyIdentity is the gateway auth hot path: returns the identity for a
+  // given JWT or AK. Must be fully cached (Redis L2 + local L1); no DB hits.
+  rpc VerifyIdentity(VerifyRequest) returns (Identity);
+
+  // CheckAccess evaluates a RAM policy: does identity have action on resource?
+  // Default Deny; any explicit Deny wins (07§3.3). Returns a decision number
+  // for audit (no policy-detail leak).
+  rpc CheckAccess(CheckAccessRequest) returns (AccessDecision);
+}
+
+// RamService manages sub-identities and credentials (07§2).
+service RamService {
+  rpc CreateUser(CreateUserRequest) returns (RamUser);
+  rpc DeleteUser(DeleteUserRequest) returns (Ack);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc AttachPolicy(AttachPolicyRequest) returns (Ack);
+  rpc DetachPolicy(DetachPolicyRequest) returns (Ack);
+
+  // CreateAccessKey issues an AK/SK pair. SK is returned ONCE; the platform
+  // stores only the KMS envelope ciphertext (sk_cipher + sk_key_version).
+  // Max 2 AKs per identity (07§2.2).
+  rpc CreateAccessKey(CreateAccessKeyRequest) returns (AccessKey);
+  rpc UpdateAccessKeyStatus(UpdateAccessKeyStatusRequest) returns (Ack);
+  rpc DeleteAccessKey(DeleteAccessKeyRequest) returns (Ack); // soft delete, 7-day restorable
+  rpc RotateAccessKey(RotateAccessKeyRequest) returns (AccessKey); // new AK active, old ≤72h grace
+  rpc ListAccessKeys(ListAccessKeysRequest) returns (ListAccessKeysResponse);
+}
+
+// --- Identity model (07§1) ---
+
+message Account {
+  int64 account_id = 1;          // ≡ uid ≡ user_id ≡ tenant_id (全局标识规范)
+  string account_name = 2;       // login name (email/mobile)
+  AccountStatus status = 3;
+  RealNameStatus real_name_status = 4;
+  AccountType account_type = 5;  // individual | enterprise
+  bool mfa_bound = 6;
+}
+
+enum AccountStatus {
+  ACCOUNT_STATUS_UNSPECIFIED = 0;
+  ACCOUNT_STATUS_NORMAL = 1;
+  ACCOUNT_STATUS_FROZEN = 2;
+  ACCOUNT_STATUS_CANCELLATION_LOCKED = 3;
+}
+
+enum RealNameStatus {
+  REAL_NAME_STATUS_UNSPECIFIED = 0;
+  REAL_NAME_STATUS_NOT_VERIFIED = 1;
+  REAL_NAME_STATUS_INDIVIDUAL = 2;
+  REAL_NAME_STATUS_ENTERPRISE = 3;
+}
+
+enum AccountType {
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  ACCOUNT_TYPE_INDIVIDUAL = 1;
+  ACCOUNT_TYPE_ENTERPRISE = 2;
+}
+
+message RamUser {
+  int64 account_id = 1;
+  string username = 2;           // unique within account
+  string display_name = 3;
+  bool login_enabled = 4;
+  bool ak_enabled = 5;
+  bool mfa_required = 6;
+  RamUserStatus status = 7;
+}
+
+enum RamUserStatus {
+  RAM_USER_STATUS_UNSPECIFIED = 0;
+  RAM_USER_STATUS_ENABLED = 1;
+  RAM_USER_STATUS_DISABLED = 2;
+  RAM_USER_STATUS_DELETED = 3; // audit-retained
+}
+
+// AK/SK. sk_plain is populated ONLY in the CreateAccessKey response; every
+// other RPC returns sk empty (07§2.2 — platform never stores or re-serves SK).
+message AccessKey {
+  string ak = 1;                 // 32 chars, prefix "EU"
+  int64 account_id = 2;
+  string owner_type = 3;         // "master" | "ram_user" | "role"
+  int64 owner_id = 4;
+  AccessKeyStatus status = 5;
+  string sk_plain = 6;           // one-time only, never persisted
+  int32 sk_key_version = 7;      // KMS master key version
+  int64 last_used_at = 8;
+  int64 rotated_at = 9;
+}
+
+enum AccessKeyStatus {
+  ACCESS_KEY_STATUS_UNSPECIFIED = 0;
+  ACCESS_KEY_STATUS_ENABLED = 1;
+  ACCESS_KEY_STATUS_DISABLED = 2;
+  ACCESS_KEY_STATUS_DELETED = 3; // 7-day restorable
+}
+
+// --- Auth / session (adjudication S13: access 15min, refresh 7d, Lax) ---
+
+message Session {
+  string access_token = 1;       // JWT RS256, 15 min, in-memory only
+  string refresh_token = 2;      // opaque, 7d, rotating; HttpOnly+Secure+SameSite=Lax cookie
+  int64 expires_at = 3;          // access-token expiry (unix seconds)
+}
+
+message Identity {
+  int64 account_id = 1;
+  string identity_type = 2;      // "master" | "ram_user" | "role"
+  string principal = 3;          // e.g. "user/alice"
+  string ak = 4;                 // empty for JWT session
+  bool mfa_present = 5;
+  int64 policy_version = 6;      // for cache invalidation via cloud.sys.authz.policy.changed
+}
+
+// --- Policy engine (07§3) ---
+
+message CheckAccessRequest {
+  Identity identity = 1;
+  string action = 2;             // e.g. "euecs:StartInstance"
+  string resource_arn = 3;       // eu:{service}:{region}:{account_id}:{relative}
+  map<string, string> context = 4; // SourceIp, CurrentTime, MFAPresent, ResourceGroupId
+}
+
+message AccessDecision {
+  bool allow = 1;
+  string decision_number = 2;   // audit reference, no policy detail
+}
+
+// --- Request/response messages ---
+
+message RegisterRequest {
+  string account_name = 1;       // email or mobile
+  string password = 2;           // argon2id hashed client-side is preferred; server re-hashes
+  AccountType account_type = 3;
+}
+
+message LoginRequest {
+  string account_name = 1;
+  string password = 2;
+  string mfa_code = 3;           // TOTP, required if mfa_bound
+  string source_ip = 4;
+  string user_agent = 5;
+}
+
+message VerifyRequest {
+  // One of:
+  string access_token = 1;       // JWT
+  string ak = 2;                 // for signature verification path
+  string action = 3;             // requested action (for authz pre-check by gateway)
+}
+
+message Ack {}
+
+message CreateUserRequest {
+  int64 account_id = 1;
+  string username = 2;
+  string display_name = 3;
+  bool login_enabled = 4;
+  bool ak_enabled = 5;
+  bool mfa_required = 6;
+}
+
+message DeleteUserRequest {
+  int64 account_id = 1;
+  string username = 2;
+}
+
+message ListUsersRequest {
+  int64 account_id = 1;
+  int32 page_number = 2;
+  int32 page_size = 3;
+}
+
+message ListUsersResponse {
+  repeated RamUser users = 1;
+  int32 total_count = 2;
+}
+
+message AttachPolicyRequest {
+  int64 account_id = 1;
+  string principal = 2;         // "user/alice" | "group/devs" | "role/svcrole"
+  int64 policy_id = 3;
+}
+
+message DetachPolicyRequest {
+  int64 account_id = 1;
+  string principal = 2;
+  int64 policy_id = 3;
+}
+
+message CreateAccessKeyRequest {
+  int64 account_id = 1;
+  string owner_type = 2;        // "master" | "ram_user" | "role"
+  int64 owner_id = 3;
+}
+
+message UpdateAccessKeyStatusRequest {
+  int64 account_id = 1;
+  string ak = 2;
+  AccessKeyStatus status = 3;
+}
+
+message DeleteAccessKeyRequest {
+  int64 account_id = 1;
+  string ak = 2;
+}
+
+message RotateAccessKeyRequest {
+  int64 account_id = 1;
+  string ak = 2;                // the AK to rotate; new AK active, old enters ≤72h grace
+}
+
+message ListAccessKeysRequest {
+  int64 account_id = 1;
+  int64 owner_id = 2;
+  string owner_type = 3;
+}
+
+message ListAccessKeysResponse {
+  repeated AccessKey keys = 1;  // sk_plain always empty here
+}

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** Orders list (02§1.2 billing center). Wired to svc-order GET /api/v1/orders. */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@sc/sdk";
-import { PageHeader } from "@sc/ui";
+import { createSDK } from "@eu/sdk";
+import { PageHeader } from "@eu/ui";
 import { useProductLabels } from "@/useProductLabels";
 
 const sdk = createSDK({ baseURL: "" });
@@ -76,24 +76,24 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.orders { padding: var(--sc-spacing-6); max-width: 1200px; }
-.orders-error, .orders-loading, .orders-empty { color: var(--sc-text-secondary); padding: var(--sc-spacing-6); }
-.orders-error { color: var(--sc-color-danger); }
+.orders { padding: var(--eu-spacing-6); max-width: 1200px; }
+.orders-error, .orders-loading, .orders-empty { color: var(--eu-text-secondary); padding: var(--eu-spacing-6); }
+.orders-error { color: var(--eu-color-danger); }
 .orders-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow: hidden;
 }
 .orders-table { width: 100%; border-collapse: collapse; background: transparent; }
-.orders-table th, .orders-table td { padding: var(--sc-spacing-3) var(--sc-spacing-4); text-align: left; border-bottom: 1px solid var(--sc-border); }
-.orders-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.orders-table td { font-size: 13px; color: var(--sc-text-primary); }
-.orders-table tbody tr { transition: background var(--sc-transition); }
-.orders-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.orders-table th, .orders-table td { padding: var(--eu-spacing-3) var(--eu-spacing-4); text-align: left; border-bottom: 1px solid var(--eu-border); }
+.orders-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.orders-table td { font-size: 13px; color: var(--eu-text-primary); }
+.orders-table tbody tr { transition: background var(--eu-transition); }
+.orders-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .orders-table tbody tr:last-child td { border-bottom: none; }
-.state-pending { color: var(--sc-color-warning-text); font-weight: 500; }
+.state-pending { color: var(--eu-color-warning-text); font-weight: 500; }
 </style>

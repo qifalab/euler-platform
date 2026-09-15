@@ -111,16 +111,16 @@ func (m *memStore) ListExpiredTokens(now time.Time) ([]Token, error) {
 
 func newManager(now time.Time) (*Manager, *memStore) {
 	store := newStore()
-	store.defs["quota_scecs_instance"] = Definition{
-		QuotaCode:    "quota_scecs_instance",
-		ProductCode:  "scecs",
+	store.defs["quota_euecs_instance"] = Definition{
+		QuotaCode:    "quota_euecs_instance",
+		ProductCode:  "euecs",
 		DefaultValue: 20,
 		Scope:        ScopeRegion,
 		Adjustable:   true,
 	}
-	store.defs["quota_scoss_bucket"] = Definition{
-		QuotaCode:    "quota_scoss_bucket",
-		ProductCode:  "scoss",
+	store.defs["quota_euoss_bucket"] = Definition{
+		QuotaCode:    "quota_euoss_bucket",
+		ProductCode:  "euoss",
 		DefaultValue: 100,
 		Scope:        ScopeGlobal,
 	}
@@ -138,11 +138,11 @@ const acct = int64(100123)
 func TestOccupyThenCommit(t *testing.T) {
 	m, _ := newManager(base)
 
-	tok, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 3, "order-9001")
+	tok, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 3, "order-9001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Occupying != 3 || u.Used != 0 {
 		t.Fatalf("after occupy: used=%d occupying=%d, want 0/3", u.Used, u.Occupying)
 	}
@@ -155,7 +155,7 @@ func TestOccupyThenCommit(t *testing.T) {
 	if err := m.CommitOccupy(tok.TokenID); err != nil {
 		t.Fatal(err)
 	}
-	u, _ = m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ = m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Used != 3 || u.Occupying != 0 {
 		t.Fatalf("after commit: used=%d occupying=%d, want 3/0", u.Used, u.Occupying)
 	}
@@ -168,11 +168,11 @@ func TestPutTokenFailureRollsBackQuota(t *testing.T) {
 	m, store := newManager(base)
 	store.failPutToken = true
 
-	if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 3, "order-fail"); err == nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 3, "order-fail"); err == nil {
 		t.Fatal("CheckAndOccupy should fail when PutToken fails")
 	}
 
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Occupying != 0 || u.Used != 0 {
 		t.Fatalf("after failed occupy: used=%d occupying=%d, want 0/0 (capacity must not leak)", u.Used, u.Occupying)
 	}
@@ -187,7 +187,7 @@ func TestPutTokenFailureRollsBackQuota(t *testing.T) {
 func TestOccupyThenRelease(t *testing.T) {
 	m, _ := newManager(base)
 
-	tok, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 5, "order-9002")
+	tok, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 5, "order-9002")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestOccupyThenRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Occupying != 0 || u.Used != 0 {
 		t.Fatalf("after release: used=%d occupying=%d, want 0/0", u.Used, u.Occupying)
 	}
@@ -209,7 +209,7 @@ func TestOccupyThenRelease(t *testing.T) {
 // escalation.
 func TestReleaseIsIdempotent(t *testing.T) {
 	m, _ := newManager(base)
-	tok, _ := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 2, "order-1")
+	tok, _ := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 2, "order-1")
 
 	if err := m.ReleaseOccupy(tok.TokenID); err != nil {
 		t.Fatal(err)
@@ -228,10 +228,10 @@ func TestReleaseIsIdempotent(t *testing.T) {
 
 func TestQuotaExceededRejected(t *testing.T) {
 	m, _ := newManager(base)
-	if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 20, "order-1"); err != nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 20, "order-1"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 1, "order-2")
+	_, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 1, "order-2")
 	if !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("expected ErrQuotaExceeded, got %v", err)
 	}
@@ -243,10 +243,10 @@ func TestQuotaExceededRejected(t *testing.T) {
 func TestInFlightReservationsCountAgainstLimit(t *testing.T) {
 	m, _ := newManager(base)
 	// Reserve everything but do not commit.
-	if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 20, "order-1"); err != nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 20, "order-1"); err != nil {
 		t.Fatal(err)
 	}
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Used != 0 {
 		t.Fatal("nothing is committed yet")
 	}
@@ -262,7 +262,7 @@ func TestInFlightReservationsCountAgainstLimit(t *testing.T) {
 // silently: customers are refused while hardware sits idle.
 func TestExpiredTokenSweptBack(t *testing.T) {
 	m, _ := newManager(base)
-	if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 8, "order-abandoned"); err != nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 8, "order-abandoned"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,7 +284,7 @@ func TestExpiredTokenSweptBack(t *testing.T) {
 	if swept != 1 {
 		t.Fatalf("swept = %d, want 1", swept)
 	}
-	u, _ := store.GetUsage(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := store.GetUsage(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Occupying != 0 {
 		t.Fatalf("occupying = %d after sweep, want 0", u.Occupying)
 	}
@@ -307,7 +307,7 @@ func newManagerFrom(m *Manager, at time.Time) (*Manager, *memStore) {
 // returned that capacity to the pool.
 func TestExpiredTokenCannotCommit(t *testing.T) {
 	m, _ := newManager(base)
-	tok, _ := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 3, "order-slow")
+	tok, _ := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 3, "order-slow")
 
 	late, _ := newManagerFrom(m, base.Add(16*time.Minute))
 	if err := late.CommitOccupy(tok.TokenID); !errors.Is(err, ErrTokenExpired) {
@@ -334,7 +334,7 @@ func TestConcurrentOccupyCannotOversell(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			<-start
-			if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 1,
+			if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 1,
 				fmt.Sprintf("order-%d", idx)); err == nil {
 				mu.Lock()
 				granted++
@@ -348,7 +348,7 @@ func TestConcurrentOccupyCannotOversell(t *testing.T) {
 	if granted > 20 {
 		t.Fatalf("%d reservations granted against a limit of 20 — capacity was oversold", granted)
 	}
-	u, _ := store.GetUsage(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := store.GetUsage(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Occupying != granted {
 		t.Fatalf("counter says %d occupying but %d were granted", u.Occupying, granted)
 	}
@@ -364,21 +364,21 @@ func TestGlobalScopeIgnoresRegion(t *testing.T) {
 	// A global quota counts across regions; passing a region must not create
 	// per-region buckets that each allow the full limit.
 	m, _ := newManager(base)
-	if _, err := m.CheckAndOccupy(acct, "quota_scoss_bucket", "cn-north-1", 60, "o1"); err != nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euoss_bucket", "cn-north-1", 60, "o1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.CheckAndOccupy(acct, "quota_scoss_bucket", "cn-east-1", 60, "o2"); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err := m.CheckAndOccupy(acct, "quota_euoss_bucket", "cn-east-1", 60, "o2"); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("a global quota must not reset per region, got %v", err)
 	}
 }
 
 func TestRegionScopeIsIndependent(t *testing.T) {
 	m, _ := newManager(base)
-	if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 20, "o1"); err != nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 20, "o1"); err != nil {
 		t.Fatal(err)
 	}
 	// A different region has its own capacity — that is what REGION scope means.
-	if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-east-1", 20, "o2"); err != nil {
+	if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-east-1", 20, "o2"); err != nil {
 		t.Fatalf("region-scoped quota should be independent per region: %v", err)
 	}
 }
@@ -412,11 +412,11 @@ func TestWarnThreshold(t *testing.T) {
 // is right.
 func TestReconcileAgainstResourceLedger(t *testing.T) {
 	m, _ := newManager(base)
-	tok, _ := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 5, "o1")
+	tok, _ := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 5, "o1")
 	_ = m.CommitOccupy(tok.TokenID)
 
 	// The resource ledger says only 3 instances actually exist.
-	res, err := m.Reconcile(acct, "quota_scecs_instance", "cn-north-1", 3)
+	res, err := m.Reconcile(acct, "quota_euecs_instance", "cn-north-1", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,15 +424,15 @@ func TestReconcileAgainstResourceLedger(t *testing.T) {
 		t.Fatalf("drift = %d, want 2", res.Drift)
 	}
 
-	if err := m.Correct(acct, "quota_scecs_instance", "cn-north-1", 3); err != nil {
+	if err := m.Correct(acct, "quota_euecs_instance", "cn-north-1", 3); err != nil {
 		t.Fatal(err)
 	}
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Used != 3 {
 		t.Fatalf("after correction used = %d, want 3", u.Used)
 	}
 
-	after, _ := m.Reconcile(acct, "quota_scecs_instance", "cn-north-1", 3)
+	after, _ := m.Reconcile(acct, "quota_euecs_instance", "cn-north-1", 3)
 	if after.Drifted() {
 		t.Fatal("counter should agree with the ledger after correction")
 	}
@@ -442,13 +442,13 @@ func TestReconcileAgainstResourceLedger(t *testing.T) {
 
 func TestReleaseCommittedOnResourceRelease(t *testing.T) {
 	m, _ := newManager(base)
-	tok, _ := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", 4, "o1")
+	tok, _ := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", 4, "o1")
 	_ = m.CommitOccupy(tok.TokenID)
 
-	if err := m.ReleaseCommitted(acct, "quota_scecs_instance", "cn-north-1", 4); err != nil {
+	if err := m.ReleaseCommitted(acct, "quota_euecs_instance", "cn-north-1", 4); err != nil {
 		t.Fatal(err)
 	}
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Used != 0 {
 		t.Fatalf("used = %d after release, want 0", u.Used)
 	}
@@ -458,10 +458,10 @@ func TestCountersNeverGoNegative(t *testing.T) {
 	// A double release, or a release racing the sweeper, must clamp rather
 	// than produce a negative counter that would grant phantom capacity.
 	m, _ := newManager(base)
-	if err := m.ReleaseCommitted(acct, "quota_scecs_instance", "cn-north-1", 5); err != nil {
+	if err := m.ReleaseCommitted(acct, "quota_euecs_instance", "cn-north-1", 5); err != nil {
 		t.Fatal(err)
 	}
-	u, _ := m.Describe(acct, "quota_scecs_instance", "cn-north-1")
+	u, _ := m.Describe(acct, "quota_euecs_instance", "cn-north-1")
 	if u.Used < 0 || u.Occupying < 0 {
 		t.Fatalf("negative counter: used=%d occupying=%d", u.Used, u.Occupying)
 	}
@@ -473,7 +473,7 @@ func TestCountersNeverGoNegative(t *testing.T) {
 func TestInvalidAmountRejected(t *testing.T) {
 	m, _ := newManager(base)
 	for _, n := range []int{0, -1} {
-		if _, err := m.CheckAndOccupy(acct, "quota_scecs_instance", "cn-north-1", n, "o"); !errors.Is(err, ErrInvalidAmount) {
+		if _, err := m.CheckAndOccupy(acct, "quota_euecs_instance", "cn-north-1", n, "o"); !errors.Is(err, ErrInvalidAmount) {
 			t.Errorf("amount %d: expected ErrInvalidAmount, got %v", n, err)
 		}
 	}

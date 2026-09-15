@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * console-monitor — monitoring dashboard (SCMON), the monitor category sub-app
+ * console-monitor — monitoring dashboard (EUMON), the monitor category sub-app
  * detail page (02§7.3). Rule info header + tabbed dashboard. Reached via the
- * rule list's name link (#/scmon/dashboard/:id).
+ * rule list's name link (#/eumon/dashboard/:id).
  *
  * The header + config tab render the real rule from GET /api/v1/monitor/rules
  * (svc-monitor), filtered to this rule's id. The metric chart, sample stat
@@ -20,9 +20,9 @@ import {
   ElDescriptionsItem,
   ElEmpty,
 } from "element-plus";
-import { StatusBadge } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
-import "@sc/tokens/style.css";
+import { StatusBadge } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
+import "@eu/tokens/style.css";
 
 interface MonitorRule {
   ruleId: string;
@@ -132,17 +132,17 @@ function copyId() {
 .mon-detail { padding: 16px 24px; }
 .mon-header {
   display: flex; align-items: flex-start; justify-content: space-between;
-  gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--sc-border);
+  gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--eu-border);
 }
 .mon-header-left { display: flex; flex-direction: column; gap: 8px; }
 .mon-name-input { width: 320px; }
 .mon-id-row { display: flex; align-items: center; gap: 8px; }
-.mon-id { font-size: var(--sc-font-size-sm); color: var(--sc-text-secondary); }
+.mon-id { font-size: var(--eu-font-size-sm); color: var(--eu-text-secondary); }
 .mon-header-right { display: flex; gap: 24px; padding-top: 4px; }
 .mon-meta { display: flex; flex-direction: column; gap: 4px; }
-.mon-meta-label { font-size: var(--sc-font-size-sm); color: var(--sc-text-secondary); }
-.mon-meta-value { font-size: var(--sc-font-size-md); color: var(--sc-text-primary); }
+.mon-meta-label { font-size: var(--eu-font-size-sm); color: var(--eu-text-secondary); }
+.mon-meta-value { font-size: var(--eu-font-size-md); color: var(--eu-text-primary); }
 .mon-tabs { margin-top: 16px; }
-.mon-error { color: var(--sc-color-danger); padding: 16px 0; }
-.mon-loading { color: var(--sc-text-secondary); padding: 16px 0; }
+.mon-error { color: var(--eu-color-danger); padding: 16px 0; }
+.mon-loading { color: var(--eu-text-secondary); padding: 16px 0; }
 </style>

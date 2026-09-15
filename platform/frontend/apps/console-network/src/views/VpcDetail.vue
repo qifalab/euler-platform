@@ -2,7 +2,7 @@
 /**
  * VpcDetail — VPC resource detail page (02§7.3 detail-page pattern).
  * Resource info header (name/editable, id-copy, status) over an ElTabs group
- * (子网 / 路由表 / 网关 / 操作日志). Reached via the list's #/scvpc/vpcs/{vpcId} link.
+ * (子网 / 路由表 / 网关 / 操作日志). Reached via the list's #/euvpc/vpcs/{vpcId} link.
  *
  * Header + descriptions render real backend fields from /console/resources (the
  * generic resource aggregator) filtered to this VPC's resourceId. The sub-tables
@@ -12,7 +12,7 @@
  */
 import { computed, ref, onMounted } from "vue";
 import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty } from "element-plus";
-import { StatusBadge } from "@sc/ui";
+import { StatusBadge } from "@eu/ui";
 
 interface ResourceItem {
   ResourceId: string;
@@ -38,7 +38,7 @@ interface ResourceListEnvelope {
   CreatedAt: string;
 }
 
-// Read the id from the hash (#/scvpc/vpcs/<id>); the base syncs the URL into
+// Read the id from the hash (#/euvpc/vpcs/<id>); the base syncs the URL into
 // the sub-app via Wujie, so location.hash is authoritative.
 const vpcId = computed(() => {
   const m = (location.hash || "").match(/vpcs\/([^/?#]+)/);
@@ -152,10 +152,10 @@ const activeTab = ref("subnet");
 .vpc-detail { padding: 16px 24px; }
 .vpc-detail-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
 .vpc-detail-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.vpc-detail-name { font-size: 18px; font-weight: 600; color: var(--sc-text-primary); }
-.vpc-detail-name-input { font-size: 16px; padding: 4px 8px; border: 1px solid var(--sc-border); border-radius: var(--sc-radius-sm); }
-.vpc-detail-id { font-size: var(--sc-font-size-xs); color: var(--sc-text-secondary); display: flex; align-items: center; gap: 4px; }
+.vpc-detail-name { font-size: 18px; font-weight: 600; color: var(--eu-text-primary); }
+.vpc-detail-name-input { font-size: 16px; padding: 4px 8px; border: 1px solid var(--eu-border); border-radius: var(--eu-radius-sm); }
+.vpc-detail-id { font-size: var(--eu-font-size-xs); color: var(--eu-text-secondary); display: flex; align-items: center; gap: 4px; }
 .vpc-detail-desc { margin-bottom: 16px; }
-.vpc-detail-tabs { background: var(--sc-bg-container); border-radius: var(--sc-radius-md); padding: 0 12px; }
-.vpc-error { color: var(--sc-color-danger); padding: 16px 0; }
+.vpc-detail-tabs { background: var(--eu-bg-container); border-radius: var(--eu-radius-md); padding: 0 12px; }
+.vpc-error { color: var(--eu-color-danger); padding: 16px 0; }
 </style>

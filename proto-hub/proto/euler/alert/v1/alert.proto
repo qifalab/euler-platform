@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package euler.alert.v1;
+
+option go_package = "github.com/qifalab/euler-platform/proto/euler/alert/v1;alertv1";
+
+// The alert domain has two cooperating components (03§4.4.5 / 03§4.4.6):
+//
+//   alert-engine (租户规则引擎, L2 对客告警评估): reads tenant MetricRule from
+//     MySQL alert_rule (owned by svc-monitor), evaluates against the tenant
+//     VictoriaMetrics cluster every period (default 1 min, threshold/同比/环比),
+//     and on trigger produces an AlertEvent to Kafka `cloud.sys.alert.event`.
+//     Evaluate-ONLY — it never notifies (03§4.4.5).
+//
+//   alert-center (告警中心): consumes Kafka `cloud.sys.alert.event` (also the
+//     platform Alertmanager webhook L0/L1 ingress), applies 去重/分组/抑制/静默
+//     four-stage convergence, routes by tenant contacts & support plan, enforces
+//     single-tenant rate limit (10 条/分钟 防通知风暴), then emits to
+//     cloud.notify.message reusing svc-notify channels. Alert history is retained
+//     in ClickHouse for the console (03§4.4.6).
+
+// AlertEngine evaluates tenant rules only. It reads rules it does not own and
+// pushes events downstream; it performs no user-facing notification.
+service AlertEngine {
+  // Evaluate triggers a single rule evaluation (metric pull + threshold match).
+  // Used by the scheduler loop; on breach the engine emits cloud.sys.alert.event.
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+}
+
+// AlertCenter is the convergence / customer-notification gateway.
+service AlertCenter {
+  // Ingest accepts an alert event directly (e.g. from the platform Alertmanager
+  // webhook L0/L1 ingress). Tenant-rule events arrive via Kafka instead.
+  rpc Ingest(IngestRequest) returns (Ack);                   // 告警事件接入
+  // DescribeAlerts queries the retained, converged alert history for the console
+  // (租户控制台查询, 03§4.4.6).
+  rpc DescribeAlerts(DescribeAlertsRequest) returns (DescribeAlertsResponse);
+}
+
+// AlertEvent is the unified alert record flowing through cloud.sys.alert.event,
+// keyed by fingerprint (the partition key). fingerprint is the dedup/convergence
+// key at alert-center (e.g. sha1(account_id|rule_id|metric|level)).
+message AlertEvent {
+  string fingerprint = 1;        // partition key + dedup key (03§7)
+  int64 account_id = 2;          // 分片键
+  AlertLevel level = 3;
+  string metric = 4;             // e.g. cpu_utilization
+  string value = 5;              // observed value, decimal string (never float)
+  int64 rule_id = 6;             // tenant rule (svc-monitor alert_rule); 0 for L0/L1 platform alerts
+  int64 occurred_at = 7;         // unix seconds, UTC
+  string resource_id = 8;        // optional affected resource
+  string product_code = 9;       // optional
+  string source = 10;            // "rule-engine" | "alertmanager" (L0/L1)
+}
+
+enum AlertLevel {
+  ALERT_LEVEL_UNSPECIFIED = 0;
+  ALERT_LEVEL_INFO = 1;
+  ALERT_LEVEL_WARN = 2;
+  ALERT_LEVEL_CRITICAL = 3;
+  ALERT_LEVEL_FATAL = 4;
+}
+
+// --- Request / response messages ---
+
+message EvaluateRequest {
+  int64 rule_id = 1;
+  int64 account_id = 2;
+  int64 now = 3;                 // evaluation anchor (unix seconds), for test/backfill
+}
+
+message EvaluateResponse {
+  bool breached = 1;             // threshold crossed at this evaluation
+  string observed_value = 2;     // decimal string, empty if not breached
+}
+
+message IngestRequest {
+  AlertEvent event = 1;
+}
+
+message DescribeAlertsRequest {
+  int64 account_id = 1;
+  int64 start_time = 2;          // optional range, unix seconds
+  int64 end_time = 3;
+  AlertLevel min_level = 4;      // optional filter
+  int32 page_number = 5;
+  int32 page_size = 6;
+}
+
+message DescribeAlertsResponse {
+  repeated AlertEvent alerts = 1;
+  int32 total_count = 2;
+}
+
+message Ack {}

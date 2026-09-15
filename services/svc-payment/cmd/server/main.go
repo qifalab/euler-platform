@@ -17,7 +17,7 @@
 // a non-negative available balance (overdraft is an account arrears state, never
 // a negative number here).
 //
-// Routes (gateway-authorized, X-Sc-Account-Id injected):
+// Routes (gateway-authorized, X-Euler-Account-Id injected):
 //
 //	POST /api/v1/payment/recharge — credit cash in from a payment channel
 //	GET  /api/v1/payment/balance  — current available + frozen balance
@@ -47,20 +47,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/ledger"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/ledger"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // accountIDHeader carries the caller's account id. TRUST NOTE: this header is
 // injected by the API gateway after authentication; this service trusts it and
 // must never be exposed directly to the public network. Deployments that want
-// defense-in-depth set SC_INTERNAL_TOKEN, which makes the service additionally
-// require a matching X-Sc-Internal-Token shared-secret header (dev default:
+// defense-in-depth set EULER_INTERNAL_TOKEN, which makes the service additionally
+// require a matching X-Euler-Internal-Token shared-secret header (dev default:
 // unset, check disabled).
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
-const internalTokenHeader = "X-Sc-Internal-Token"
+const internalTokenHeader = "X-Euler-Internal-Token"
 
 // maxBodyBytes bounds request bodies before JSON decoding (~1MB).
 const maxBodyBytes = 1 << 20
@@ -156,7 +156,7 @@ type paymentServer struct {
 }
 
 // newPaymentServer wires the ledger. Persistence is opt-in (pkg-go/storage
-// doc): with SC_DB_DSN set the ledger is trade_db's account_balance +
+// doc): with EULER_DB_DSN set the ledger is trade_db's account_balance +
 // ledger_entry, so balances survive a restart; unset, the service keeps the
 // in-memory store that makes the runnable demo dependency-free.
 //
@@ -192,7 +192,7 @@ func newPaymentServer(ctx context.Context) (*paymentServer, error) {
 
 // newInMemoryPaymentServer builds the demo server: in-memory store, local id
 // counter, seeded balance. Handler tests construct it directly, so they never
-// depend on whether the developer's shell has SC_DB_DSN set — a test that wrote
+// depend on whether the developer's shell has EULER_DB_DSN set — a test that wrote
 // demo recharges into trade_db would be a data incident.
 func newInMemoryPaymentServer() *paymentServer {
 	ps := &paymentServer{ledger: ledger.New(newInMemStore(), time.Now, localCounter())}
@@ -374,12 +374,12 @@ func balanceToMap(b ledger.Balance) map[string]any {
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
@@ -411,13 +411,13 @@ func writeLedgerErr(w http.ResponseWriter, err error) {
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -425,21 +425,21 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("pay-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }
 
 // internalTokenMiddleware optionally enforces a shared-secret header for
-// service-to-service calls. When SC_INTERNAL_TOKEN is set, every request must
-// carry a matching X-Sc-Internal-Token; unset (dev default) the check is off.
-// This complements — not replaces — the gateway trust on X-Sc-Account-Id.
+// service-to-service calls. When EULER_INTERNAL_TOKEN is set, every request must
+// carry a matching X-Euler-Internal-Token; unset (dev default) the check is off.
+// This complements — not replaces — the gateway trust on X-Euler-Account-Id.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("SC_INTERNAL_TOKEN")
+	token := os.Getenv("EULER_INTERNAL_TOKEN")
 	if token == "" {
 		return h
 	}

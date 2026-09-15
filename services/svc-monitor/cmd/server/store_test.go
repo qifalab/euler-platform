@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // support_db is shared: the quota service's migrations create id_sequence (the
@@ -25,7 +25,7 @@ var testNow = time.Date(2026, 9, 15, 14, 0, 0, 0, time.UTC)
 
 func newRule(acct int64, metric string) *AlertRule {
 	return &AlertRule{
-		AccountID: acct, ProductCode: "scecs", ResourceType: "instance",
+		AccountID: acct, ProductCode: "euecs", ResourceType: "instance",
 		Metric: metric, Threshold: "80.0000", ComparisonOperator: cmpGreaterThanOrEqual,
 		Period: 60, EvalPeriods: 1, NotificationChannels: []string{"IN_APP", "EMAIL"},
 		Status: 1, Version: 1, CreatedAt: testNow, UpdatedAt: testNow,

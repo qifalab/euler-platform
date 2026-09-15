@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/kms"
+	"github.com/qifalab/euler-platform/kms"
 )
 
 // MaxKeysPerIdentity caps AKs per identity (07§2.2 rule 2).
@@ -40,11 +40,11 @@ const MaxRotationGrace = 72 * time.Hour
 const SoftDeleteRetention = 7 * 24 * time.Hour
 
 // AKLength is the total character length of an access key id, including the
-// "SC" prefix (07§2.5).
+// "EU" prefix (07§2.5).
 const AKLength = 32
 
 // Prefix is the platform access-key prefix, replacing LTAI/CPSA (07§2.5).
-const Prefix = "SC"
+const Prefix = "EU"
 
 // Status is the AK lifecycle state.
 type Status int
@@ -345,7 +345,7 @@ func (m *Manager) RecordUsage(ak, sourceIP string, at time.Time) error {
 // and cloud-vendor AKs are conventionally full alphanumerics.
 const akAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-// generateAK returns a 32-character access key id beginning with "SC".
+// generateAK returns a 32-character access key id beginning with "EU".
 func generateAK() (string, error) {
 	body, err := randomString(AKLength - len(Prefix))
 	if err != nil {

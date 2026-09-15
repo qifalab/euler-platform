@@ -14,9 +14,9 @@ func newMachineAt(t time.Time) *Machine {
 
 func newInstance(state State) *Instance {
 	return &Instance{
-		ResourceID:   "scecs-cn-north-1-01-a1b2c3d4",
+		ResourceID:   "euecs-cn-north-1-01-a1b2c3d4",
 		AccountID:    100123,
-		ProductCode:  "scecs",
+		ProductCode:  "euecs",
 		ResourceType: "instance",
 		Region:       "cn-north-1",
 		Zone:         "cn-north-1-a",

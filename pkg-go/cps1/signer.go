@@ -110,7 +110,7 @@ var (
 
 // Credentials is the key material used to sign or verify a request.
 //
-// AK is the public access-key identifier (prefix "SC"). SK is the secret key
+// AK is the public access-key identifier (prefix "EU"). SK is the secret key
 // plaintext, required because verification recomputes the HMAC — SK is stored
 // at rest as a KMS envelope ciphertext (sk_cipher + sk_key_version) and is
 // decrypted only in the gateway verification cache (07-security.md §2.2/§2.5).
@@ -374,8 +374,8 @@ func stringToSign(req Request, region, service string) (string, error) {
 // x-cps-* headers the caller must attach to the outgoing request.
 //
 // The caller supplies region and service (service is the productCode-derived
-// service namespace, e.g. "ecs" for scecs; the routing subdomain is
-// {productCode}.api.starcloud.cn per 04-middleware §3.2). The Host header must
+// service namespace, e.g. "ecs" for euecs; the routing subdomain is
+// {productCode}.api.euler.emoera.com per 04-middleware §3.2). The Host header must
 // already be present in req.Headers. If x-cps-content-sha256 is unset, it is
 // computed from Body. If x-cps-date is unset, now is used.
 func Sign(req Request, creds Credentials, region, service string, now time.Time) (SignedRequest, error) {
@@ -460,7 +460,7 @@ func SignedHeaderList(headers map[string]string) (string, error) {
 // part of the signature algorithm and lives in the gateway plugin.
 //
 // region and service MUST be derived from the routed product subdomain, not
-// from any client-supplied value (scecs.api.starcloud.cn → region cn-north-1,
+// from any client-supplied value (euecs.api.euler.emoera.com → region cn-north-1,
 // service "ecs"). The caller resolves these before invoking Verify.
 func Verify(req Request, creds Credentials, region, service string, now time.Time) error {
 	if req.Headers == nil {

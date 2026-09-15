@@ -300,7 +300,7 @@ func TestContextCarriesDataBetweenSteps(t *testing.T) {
 		{
 			Name: "create_resource",
 			Do: func(c *Context) error {
-				c.Set("resource_id", "scecs-cn-north-1-01-a1b2c3d4")
+				c.Set("resource_id", "euecs-cn-north-1-01-a1b2c3d4")
 				return nil
 			},
 		},
@@ -308,7 +308,7 @@ func TestContextCarriesDataBetweenSteps(t *testing.T) {
 			Name: "start_metering",
 			Do: func(c *Context) error {
 				id := c.GetString("resource_id")
-				if id != "scecs-cn-north-1-01-a1b2c3d4" {
+				if id != "euecs-cn-north-1-01-a1b2c3d4" {
 					return fmt.Errorf("resource_id not carried forward: %q", id)
 				}
 				return nil
@@ -329,7 +329,7 @@ func TestContextAvailableDuringCompensation(t *testing.T) {
 		{
 			Name: "create_resource",
 			Do: func(c *Context) error {
-				c.Set("resource_id", "scecs-cn-north-1-01-deadbeef")
+				c.Set("resource_id", "euecs-cn-north-1-01-deadbeef")
 				return nil
 			},
 			Undo: func(c *Context) error {
@@ -343,7 +343,7 @@ func TestContextAvailableDuringCompensation(t *testing.T) {
 	if res.Status != FlowCompensated {
 		t.Fatalf("status = %s", res.Status)
 	}
-	if deletedID != "scecs-cn-north-1-01-deadbeef" {
+	if deletedID != "euecs-cn-north-1-01-deadbeef" {
 		t.Fatalf("compensation could not see the created resource id, got %q", deletedID)
 	}
 }

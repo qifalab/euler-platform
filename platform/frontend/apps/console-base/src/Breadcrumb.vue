@@ -32,7 +32,7 @@ const crumbs = computed(() => {
 
 <style scoped>
 /* Transparent: the breadcrumb floats on the body mesh gradient (tokens). */
-.breadcrumb { display: flex; align-items: center; gap: 6px; padding: 10px 24px; font-size: 13px; color: var(--sc-text-secondary); background: transparent; }
-.bc-sep { color: var(--sc-text-disabled); }
-.bc-item { color: var(--sc-text-primary); }
+.breadcrumb { display: flex; align-items: center; gap: 6px; padding: 10px 24px; font-size: 13px; color: var(--eu-text-secondary); background: transparent; }
+.bc-sep { color: var(--eu-text-disabled); }
+.bc-item { color: var(--eu-text-primary); }
 </style>

@@ -22,8 +22,8 @@
 -- resource_instance: az_id 正式化
 --
 -- 一期 zone VARCHAR(32) 是 Day1 预留字段 (00§1.2 P3). M-6 把它从"预留"变为
--- "实装": 重命名为 az_id 语义, 加索引. REGIONAL 资源 (scoss/scvpc/scmon) 的
--- az_id 可空 (它们跨 AZ, 无单一归宿); ZONAL 资源 (scecs/scrds/scbs/sceip) 的
+-- "实装": 重命名为 az_id 语义, 加索引. REGIONAL 资源 (euoss/euvpc/eumon) 的
+-- az_id 可空 (它们跨 AZ, 无单一归宿); ZONAL 资源 (euecs/eurds/eubs/eueip) 的
 -- az_id 非空 (绑定到一个 AZ, 见 svc-catalog RegionScope M-6.1b).
 --
 -- 不用 ALTER TABLE RENAME COLUMN 是为兼容 5.7 (rename column 是 8.0+); 这里用

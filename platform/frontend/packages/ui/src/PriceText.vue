@@ -29,14 +29,14 @@ const formatted = computed(() => {
 </script>
 
 <template>
-  <span class="sc-price-text">
-    <span class="sc-price-symbol">{{ symbol }}</span>
-    <span class="sc-price-amount">{{ formatted }}</span>
+  <span class="eu-price-text">
+    <span class="eu-price-symbol">{{ symbol }}</span>
+    <span class="eu-price-amount">{{ formatted }}</span>
   </span>
 </template>
 
 <style>
-.sc-price-text { color: var(--sc-text-primary); font-variant-numeric: tabular-nums; }
-.sc-price-symbol { font-size: var(--sc-font-size-sm); margin-right: 2px; }
-.sc-price-amount { font-size: var(--sc-font-size-lg); font-weight: 600; }
+.eu-price-text { color: var(--eu-text-primary); font-variant-numeric: tabular-nums; }
+.eu-price-symbol { font-size: var(--eu-font-size-sm); margin-right: 2px; }
+.eu-price-amount { font-size: var(--eu-font-size-lg); font-weight: 600; }
 </style>

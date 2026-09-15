@@ -26,7 +26,7 @@
 //
 // Token scheme (02§5.1):
 //   - access_token: HS256-signed JWT, 15 min, returned in the JSON body (memory-only on the client)
-//   - refresh_token: opaque crypto/rand string, 7 days, HttpOnly cookie on Domain=.starcloud.cn
+//   - refresh_token: opaque crypto/rand string, 7 days, HttpOnly cookie on Domain=.euler.emoera.com
 //     (in dev the cookie domain is localhost; the frontend reads it via credentials:include)
 //
 // This is a stdlib-HTTP service (repo convention). The password hash is
@@ -55,10 +55,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/authz"
-	"github.com/starcloud/sc-platform/kms"
-	"github.com/starcloud/sc-platform/sts"
-	"github.com/starcloud/sc-platform/totp"
+	"github.com/qifalab/euler-platform/authz"
+	"github.com/qifalab/euler-platform/kms"
+	"github.com/qifalab/euler-platform/sts"
+	"github.com/qifalab/euler-platform/totp"
 )
 
 const (
@@ -74,39 +74,39 @@ const (
 	maxBodyBytes = 1 << 20 // 1 MiB
 )
 
-// hmacSecret is the HS256 signing key. Loaded from SC_JWT_SECRET; when unset
+// hmacSecret is the HS256 signing key. Loaded from EULER_JWT_SECRET; when unset
 // (dev) a process-local random key is generated so the service stays usable,
 // at the cost of invalidating tokens across restarts. Production must set
-// SC_JWT_SECRET (loaded from KMS/secret manager — 07§5.3).
+// EULER_JWT_SECRET (loaded from KMS/secret manager — 07§5.3).
 var hmacSecret = loadJWTSecret()
 
 func loadJWTSecret() string {
-	if s := os.Getenv("SC_JWT_SECRET"); s != "" {
+	if s := os.Getenv("EULER_JWT_SECRET"); s != "" {
 		return s
 	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	slog.Warn("SC_JWT_SECRET not set — generated ephemeral JWT signing key (dev only); tokens will not survive restarts")
+	slog.Warn("EULER_JWT_SECRET not set — generated ephemeral JWT signing key (dev only); tokens will not survive restarts")
 	return hex.EncodeToString(b)
 }
 
 // cookieSecure controls the Secure attribute of the refresh cookie.
-// SC_COOKIE_SECURE=true/false overrides; when unset it defaults to true in
-// production (SC_ENV=prod/production) and false in dev so plain-HTTP localhost
+// EULER_COOKIE_SECURE=true/false overrides; when unset it defaults to true in
+// production (EULER_ENV=prod/production) and false in dev so plain-HTTP localhost
 // keeps working.
 var cookieSecure = loadCookieSecure()
 
 func loadCookieSecure() bool {
-	if v := os.Getenv("SC_COOKIE_SECURE"); v != "" {
+	if v := os.Getenv("EULER_COOKIE_SECURE"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err == nil {
 			return b
 		}
-		slog.Warn("invalid SC_COOKIE_SECURE, falling back to env default", "value", v)
+		slog.Warn("invalid EULER_COOKIE_SECURE, falling back to env default", "value", v)
 	}
-	env := strings.ToLower(os.Getenv("SC_ENV"))
+	env := strings.ToLower(os.Getenv("EULER_ENV"))
 	return env == "prod" || env == "production"
 }
 
@@ -219,7 +219,7 @@ type ramUser struct {
 // at creation and never stored in plaintext — only its salted hash is retained
 // for later verification (prod never returns the secret again).
 type accessKey struct {
-	AKID          string // "SC"+14 chars, masked for display after creation
+	AKID          string // "EU"+14 chars, masked for display after creation
 	SecretHash    string // salted sha256 of the plaintext secret
 	Status        int    // 1 enabled, 2 disabled
 	CreatedAt     time.Time
@@ -288,21 +288,21 @@ func seedRAM(accountID int64) {
 // kept), matching prod behavior (07§2.7).
 func seedAK(accountID int64) {
 	now := time.Now()
-	akID := "SC" + randMasked(14)
+	akID := "EU" + randMasked(14)
 	accessKeys[accountID] = []accessKey{{
-		AKID: akID, SecretHash: randHex(16) + "$" + sha256Hex(randHex(16)+"sc-seed-secret"),
+		AKID: akID, SecretHash: randHex(16) + "$" + sha256Hex(randHex(16)+"eu-seed-secret"),
 		Status: 1, CreatedAt: now, LastUsed: now.Add(-2 * time.Hour),
 	}}
 }
 
 // seedRAMRolesPolicies provisions the three canonical roles and two system
-// policies for the seed account (07§3.2 — ScEcsFullAccess / ScReadOnlyAccess
+// policies for the seed account (07§3.2 — EuEcsFullAccess / EuReadOnlyAccess
 // system-policy naming). The policies are real authz.Policy documents the
 // simulator evaluates, so the 策略模拟器 has real rows on first load.
 func seedRAMRolesPolicies(accountID int64) {
 	now := time.Now()
-	fullAccess := `{"Version":"1","Statement":[{"Effect":"Allow","Action":"scecs:*","Resource":"*"}]}`
-	readOnly := `{"Version":"1","Statement":[{"Effect":"Allow","Action":["scecs:Describe*","scecs:List*"],"Resource":"*"}]}`
+	fullAccess := `{"Version":"1","Statement":[{"Effect":"Allow","Action":"euecs:*","Resource":"*"}]}`
+	readOnly := `{"Version":"1","Statement":[{"Effect":"Allow","Action":["euecs:Describe*","euecs:List*"],"Resource":"*"}]}`
 	mustParseStored := func(name, typ, doc string) storedPolicy {
 		p, err := authz.ParsePolicy([]byte(doc))
 		if err != nil {
@@ -311,18 +311,18 @@ func seedRAMRolesPolicies(accountID int64) {
 		return storedPolicy{ID: nextPolicyID(), AccountID: accountID, Name: name, Type: typ, Document: doc, Parsed: p, CreatedAt: now}
 	}
 	ramPolicies[accountID] = map[string]storedPolicy{
-		"ScEcsFullAccess":  mustParseStored("ScEcsFullAccess", "system", fullAccess),
-		"ScReadOnlyAccess": mustParseStored("ScReadOnlyAccess", "system", readOnly),
+		"EuEcsFullAccess":  mustParseStored("EuEcsFullAccess", "system", fullAccess),
+		"EuReadOnlyAccess": mustParseStored("EuReadOnlyAccess", "system", readOnly),
 	}
 	ramRoles[accountID] = map[string]ramRole{
-		"Admin":    {ID: nextRoleID(), AccountID: accountID, Name: "Admin", Description: "全部权限", Policies: []string{"ScEcsFullAccess"}, Status: 1, CreatedAt: now},
-		"Operator": {ID: nextRoleID(), AccountID: accountID, Name: "Operator", Description: "运维操作", Policies: []string{"ScEcsFullAccess"}, Status: 1, CreatedAt: now},
-		"ReadOnly": {ID: nextRoleID(), AccountID: accountID, Name: "ReadOnly", Description: "只读", Policies: []string{"ScReadOnlyAccess"}, Status: 1, CreatedAt: now},
+		"Admin":    {ID: nextRoleID(), AccountID: accountID, Name: "Admin", Description: "全部权限", Policies: []string{"EuEcsFullAccess"}, Status: 1, CreatedAt: now},
+		"Operator": {ID: nextRoleID(), AccountID: accountID, Name: "Operator", Description: "运维操作", Policies: []string{"EuEcsFullAccess"}, Status: 1, CreatedAt: now},
+		"ReadOnly": {ID: nextRoleID(), AccountID: accountID, Name: "ReadOnly", Description: "只读", Policies: []string{"EuReadOnlyAccess"}, Status: 1, CreatedAt: now},
 	}
 }
 
 // randMasked returns a random uppercase alphanumeric string of length n, used to
-// build a display akId like "SC"+14 chars. It is NOT the secret.
+// build a display akId like "EU"+14 chars. It is NOT the secret.
 func randMasked(n int) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
@@ -471,14 +471,14 @@ type envelope struct {
 }
 
 func writeJSON(w http.ResponseWriter, status int, code string, data any) {
-	reqID := w.Header().Get("X-Sc-TraceId")
+	reqID := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(envelope{RequestId: reqID, Code: code, Data: data})
 }
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
-	reqID := w.Header().Get("X-Sc-TraceId")
+	reqID := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(envelope{RequestId: reqID, Code: code, Message: msg})
@@ -503,17 +503,17 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // setRefreshCookie writes the HttpOnly refresh_token cookie. In production the
-// Domain is .starcloud.cn (root, shared across console/billing/ticket); in dev
+// Domain is .euler.emoera.com (root, shared across console/billing/ticket); in dev
 // the browser scopes it to localhost.
 func setRefreshCookie(w http.ResponseWriter, token string, exp time.Time) {
 	http.SetCookie(w, &http.Cookie{
-		Name: "sc_refresh", Value: token, Expires: exp, HttpOnly: true,
+		Name: "eu_refresh", Value: token, Expires: exp, HttpOnly: true,
 		Secure: cookieSecure, SameSite: http.SameSiteLaxMode, Path: "/api/auth",
 	})
 }
 
 func clearRefreshCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "sc_refresh", Value: "", Expires: time.Unix(0, 0), HttpOnly: true, Path: "/api/auth"})
+	http.SetCookie(w, &http.Cookie{Name: "eu_refresh", Value: "", Expires: time.Unix(0, 0), HttpOnly: true, Path: "/api/auth"})
 }
 
 type loginRequest struct {
@@ -865,7 +865,7 @@ func handleMFABind(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, 200, "OK", map[string]any{
 		"secret":            totp.SecretBase32(secret),
-		"provisioningUri":   totp.ProvisioningURI(secret, cur.AccountName, "StarCloud"),
+		"provisioningUri":   totp.ProvisioningURI(secret, cur.AccountName, "Euler"),
 		"activationRequired": true,
 	})
 }
@@ -1274,7 +1274,7 @@ func handleCreateAccessKey(w http.ResponseWriter, r *http.Request) {
 // produce identical credentials.
 func issueAccessKey() (akID, secretPlain string, k accessKey) {
 	_ = nextAKIDSeq()
-	akID = "SC" + randMasked(14)
+	akID = "EU" + randMasked(14)
 	secretPlain = randHex(20)
 	salt := randHex(16)
 	now := time.Now()
@@ -1644,7 +1644,7 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRefresh(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("sc_refresh")
+	c, err := r.Cookie("eu_refresh")
 	if err != nil {
 		writeErr(w, 401, "Auth.NoSession", "无活跃会话")
 		return
@@ -1682,7 +1682,7 @@ func handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("sc_refresh")
+	c, err := r.Cookie("eu_refresh")
 	if err == nil {
 		mu.Lock()
 		delete(sessions, c.Value)
@@ -1717,7 +1717,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, "OK", map[string]any{
 		"user":           map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
 		"realNameStatus": a.RealNameStatus,
-		"permissions":    map[string]any{"actions": []string{"scecs:Read", "scecs:Start", "scoss:Read", "scrds:Read", "scvpc:Read", "scmon:Read"}},
+		"permissions":    map[string]any{"actions": []string{"euecs:Read", "euecs:Start", "euoss:Read", "eurds:Read", "euvpc:Read", "eumon:Read"}},
 	})
 }
 
@@ -1725,11 +1725,11 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = "webauth-" + randHex(8)
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }
@@ -1755,12 +1755,12 @@ func main() {
 
 	// Real seeded account with a real salted password hash (not a mock that
 	// always returns success). Credentials are logged once for dev convenience.
-	seedAccount(100123, "admin@starcloud.cn", "种子管理员", "starcloud123")
+	seedAccount(100123, "admin@euler.emoera.com", "种子管理员", "euler123")
 	// STS temporary-credential issuer (phase-3 D-3). Default TTL; a nil issuer
 	// here would leave the endpoint 503ing, which is better than issuing
 	// permanent credentials by accident.
 	stsIssuer, _ = sts.NewIssuer(sts.DefaultTTL, nil)
-	slog.Warn("DEV SEED account provisioned", "email", "admin@starcloud.cn",
+	slog.Warn("DEV SEED account provisioned", "email", "admin@euler.emoera.com",
 		"account_id", 100123, "note", "salted SHA-256; prod uses argon2id")
 	// Seed demo RAM sub-users + one AccessKey + RAM roles/policies so the
 	// console pages render real rows on first load (phase-1 dev only; prod

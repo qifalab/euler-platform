@@ -124,7 +124,7 @@ const stateLabels: Record<string, string> = {
 
 <template>
   <div v-if="open" class="gs-overlay" @click.self="close">
-    <div class="gs-panel sc-glass-strong">
+    <div class="gs-panel eu-glass-strong">
       <input ref="inputRef" v-model="query" class="gs-input" placeholder="搜索产品、资源、文档…" />
       <ul class="gs-list">
         <template v-if="appHits.length">
@@ -160,32 +160,32 @@ const stateLabels: Record<string, string> = {
 </template>
 
 <style scoped>
-/* Glass palette: overlay blur + strong-glass panel (tokens .sc-glass-strong). */
+/* Glass palette: overlay blur + strong-glass panel (tokens .eu-glass-strong). */
 .gs-overlay {
   position: fixed; inset: 0;
-  background: var(--sc-overlay);
+  background: var(--eu-overlay);
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   z-index: 3000;
   display: flex; justify-content: center; align-items: flex-start;
   padding-top: 120px;
 }
-.gs-panel { width: 100%; max-width: 560px; border-radius: var(--sc-radius-xl); overflow: hidden; }
-.gs-input { width: 100%; border: none; border-bottom: 1px solid var(--sc-border); padding: 16px 20px; font-size: 15px; outline: none; background: transparent; color: var(--sc-text-primary); }
+.gs-panel { width: 100%; max-width: 560px; border-radius: var(--eu-radius-xl); overflow: hidden; }
+.gs-input { width: 100%; border: none; border-bottom: 1px solid var(--eu-border); padding: 16px 20px; font-size: 15px; outline: none; background: transparent; color: var(--eu-text-primary); }
 .gs-list { list-style: none; margin: 0; padding: 8px 0; max-height: 320px; overflow-y: auto; }
 .gs-group {
   padding: 8px 20px 4px;
   font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
-  color: var(--sc-text-secondary); text-transform: uppercase;
+  color: var(--eu-text-secondary); text-transform: uppercase;
 }
 .gs-item {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 20px; margin: 0 var(--sc-spacing-1);
-  cursor: pointer; border-radius: var(--sc-radius-sm);
-  transition: var(--sc-transition);
+  padding: 10px 20px; margin: 0 var(--eu-spacing-1);
+  cursor: pointer; border-radius: var(--eu-radius-sm);
+  transition: var(--eu-transition);
 }
-.gs-item:hover { background: var(--sc-color-brand-soft); }
-.gs-title { font-size: 14px; color: var(--sc-text-primary); }
-.gs-code { font-size: 12px; color: var(--sc-text-secondary); }
-.gs-empty { padding: 16px 20px; color: var(--sc-text-secondary); font-size: 13px; }
+.gs-item:hover { background: var(--eu-color-brand-soft); }
+.gs-title { font-size: 14px; color: var(--eu-text-primary); }
+.gs-code { font-size: 12px; color: var(--eu-text-secondary); }
+.gs-empty { padding: 16px 20px; color: var(--eu-text-secondary); font-size: 13px; }
 </style>

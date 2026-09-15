@@ -6,8 +6,8 @@
  */
 import { ref, onMounted } from "vue";
 import { ElButton } from "element-plus";
-import { PageHeader, StatusBadge } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
+import { PageHeader, StatusBadge } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
 
 const sdk = createSDK({ baseURL: "" });
 
@@ -189,29 +189,29 @@ onMounted(() => void load());
 
 <style scoped>
 .stability { padding: 0; }
-.st-section { font-size: 15px; font-weight: 500; color: var(--sc-text-primary); margin: 20px 0 4px; }
-.st-hint { color: var(--sc-text-secondary); font-size: 13px; margin: 0 0 12px; }
+.st-section { font-size: 15px; font-weight: 500; color: var(--eu-text-primary); margin: 20px 0 4px; }
+.st-hint { color: var(--eu-text-secondary); font-size: 13px; margin: 0 0 12px; }
 .st-table-card {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   overflow-x: auto;
 }
 .st-table { width: 100%; border-collapse: collapse; background: transparent; white-space: nowrap; }
-.st-table th, .st-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--sc-border); }
-.st-table th { background: var(--sc-glass-bg-soft); color: var(--sc-text-secondary); font-size: 12px; font-weight: 500; }
-.st-table td { font-size: 13px; color: var(--sc-text-primary); }
-.st-table tbody tr { transition: background var(--sc-transition); }
-.st-table tbody tr:hover { background: var(--sc-color-brand-soft); }
+.st-table th, .st-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--eu-border); }
+.st-table th { background: var(--eu-glass-bg-soft); color: var(--eu-text-secondary); font-size: 12px; font-weight: 500; }
+.st-table td { font-size: 13px; color: var(--eu-text-primary); }
+.st-table tbody tr { transition: background var(--eu-transition); }
+.st-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .st-table tbody tr:last-child td { border-bottom: none; }
-.st-table tbody tr.remediate td { background: var(--sc-color-danger-soft); }
-.st-name { font-family: var(--sc-font-family-mono, monospace); font-size: 12px; }
-td.burn { color: var(--sc-color-danger); font-weight: 600; }
-.st-sla { font-size: 12px; color: var(--sc-text-secondary); }
-.st-sla.ok { color: var(--sc-color-success, var(--sc-color-brand)); }
-.st-error, .st-loading { color: var(--sc-text-secondary); padding: 24px; }
-.st-error { color: var(--sc-color-danger); }
+.st-table tbody tr.remediate td { background: var(--eu-color-danger-soft); }
+.st-name { font-family: var(--eu-font-family-mono, monospace); font-size: 12px; }
+td.burn { color: var(--eu-color-danger); font-weight: 600; }
+.st-sla { font-size: 12px; color: var(--eu-text-secondary); }
+.st-sla.ok { color: var(--eu-color-success, var(--eu-color-brand)); }
+.st-error, .st-loading { color: var(--eu-text-secondary); padding: 24px; }
+.st-error { color: var(--eu-color-danger); }
 </style>

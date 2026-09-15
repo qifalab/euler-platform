@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // SQLStore is the MySQL/Vitess implementation of Store, over support_db's

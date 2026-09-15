@@ -40,12 +40,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/starcloud/sc-platform/multiregion"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/topology"
+	"github.com/qifalab/euler-platform/multiregion"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/topology"
 )
 
-const accountIDHeader = "X-Sc-Account-Id"
+const accountIDHeader = "X-Euler-Account-Id"
 
 // product mirrors t_product (三件套 leg 1: resource type). RegionScope is the
 // P2 placement scope (00§4.4, 09§4.3 M-6): REGIONAL resources spread across AZs
@@ -93,7 +93,7 @@ type region struct {
 	Zones      []zone `json:"zones"`
 }
 
-// image is a public OS image a compute product (SCECS) can boot from. The
+// image is a public OS image a compute product (EUECS) can boot from. The
 // catalogue owns it for the same reason it owns SKUs: the console must not
 // invent bootable images client-side — an image id that provisioning does not
 // know would fail at fulfilment time, which is the most expensive place to
@@ -166,101 +166,101 @@ func newCatalogStoreWith(data catalogData) *catalogStore {
 }
 
 // seedProducts lists the sellable products of decision R-01 / adjudication
-// C1+S1: SCVPC / SCECS / SCBS / SCOSS / SCRDS / SCMON / SCEIP. SCECI (弹性容器
+// C1+S1: EUVPC / EUECS / EUBS / EUOSS / EURDS / EUMON / EUEIP. EUECI (弹性容器
 // 实例) lands in phase-2 (M-7.1, 09-roadmap §4.3): a per-second-billed container
-// instance fulfilled by the K8s driver (DriverK8s), distinct from SCECS's VM
+// instance fulfilled by the K8s driver (DriverK8s), distinct from EUECS's VM
 // driver (DriverVM/_mock).
 func seedProducts() []product {
 	return []product{
-		{ProductCode: "scvpc", ProductName: "辰云专有网络", Category: "network", Description: "租户逻辑隔离网络,一切资源的网络边界", ResourceType: "vpc", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "network-line"},
-		{ProductCode: "scecs", ProductName: "辰云服务器", Category: "compute", Description: "云上虚拟服务器,一切资源的基础算力载体", ResourceType: "instance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "compute-line"},
-		{ProductCode: "scbs", ProductName: "辰云块存储", Category: "storage", Description: "挂载云服务器的高性能云盘", ResourceType: "disk", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "storage-line"},
-		{ProductCode: "scoss", ProductName: "辰云对象存储", Category: "storage", Description: "RESTful 海量非结构化存储,S3 兼容生态锚点", ResourceType: "bucket", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "storage-line"},
-		{ProductCode: "scrds", ProductName: "辰云数据库MySQL版", Category: "database", Description: "托管 MySQL 关系型数据库,企业上云标配", ResourceType: "dbinstance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "data-line"},
-		{ProductCode: "scmon", ProductName: "辰云监控", Category: "monitor", Description: "资源与自定义指标监控告警", ResourceType: "monitor", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "platform-line"},
-		{ProductCode: "sceip", ProductName: "弹性公网IP", Category: "network", Description: "可独立购买与动态绑定的公网地址", ResourceType: "eip", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "network-line"},
-		// SCECI 弹性容器实例 (M-7.1, 09 §4.3 M-7, 06 §4.2 four-component pattern).
+		{ProductCode: "euvpc", ProductName: "辰云专有网络", Category: "network", Description: "租户逻辑隔离网络,一切资源的网络边界", ResourceType: "vpc", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "network-line"},
+		{ProductCode: "euecs", ProductName: "辰云服务器", Category: "compute", Description: "云上虚拟服务器,一切资源的基础算力载体", ResourceType: "instance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "compute-line"},
+		{ProductCode: "eubs", ProductName: "辰云块存储", Category: "storage", Description: "挂载云服务器的高性能云盘", ResourceType: "disk", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "storage-line"},
+		{ProductCode: "euoss", ProductName: "辰云对象存储", Category: "storage", Description: "RESTful 海量非结构化存储,S3 兼容生态锚点", ResourceType: "bucket", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "storage-line"},
+		{ProductCode: "eurds", ProductName: "辰云数据库MySQL版", Category: "database", Description: "托管 MySQL 关系型数据库,企业上云标配", ResourceType: "dbinstance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "data-line"},
+		{ProductCode: "eumon", ProductName: "辰云监控", Category: "monitor", Description: "资源与自定义指标监控告警", ResourceType: "monitor", RegionScope: "REGIONAL", Status: 2, OwnerTeam: "platform-line"},
+		{ProductCode: "eueip", ProductName: "弹性公网IP", Category: "network", Description: "可独立购买与动态绑定的公网地址", ResourceType: "eip", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "network-line"},
+		// EUECI 弹性容器实例 (M-7.1, 09 §4.3 M-7, 06 §4.2 four-component pattern).
 		// ZONAL: a container pod lands on a node in one AZ at create time (the
 		// scheduler binds it to the AZ whose node has free capacity). Per-second
 		// postpaid billing — the cheapest form for bursty/ephemeral compute, the
-		// "弹性" partner to SCECS's VM 旗舰 (09 §3.2 D-03). Fulfilled by DriverK8s,
+		// "弹性" partner to EUECS's VM 旗舰 (09 §3.2 D-03). Fulfilled by DriverK8s,
 		// bound in provision.Registry (rc-eci controller), NOT the VM driver.
-		{ProductCode: "sceci", ProductName: "弹性容器实例", Category: "compute", Description: "秒级拉起的容器实例,按秒计费,弹性计算的轻量搭档", ResourceType: "eci", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "compute-line"},
-		// SCLB 负载均衡 (M-7.2, P0): REGIONAL — a load balancer spans AZs (it is
+		{ProductCode: "eueci", ProductName: "弹性容器实例", Category: "compute", Description: "秒级拉起的容器实例,按秒计费,弹性计算的轻量搭档", ResourceType: "eci", RegionScope: "ZONAL", CrossAZ: false, Status: 2, OwnerTeam: "compute-line"},
+		// EULB 负载均衡 (M-7.2, P0): REGIONAL — a load balancer spans AZs (it is
 		// the cross-AZ entry point). POSTPAID by usage (LCU + traffic). DriverK8s:
 		// APISIX (L7) + LVS/IPVS (L4) abstracted as one CR (09 §4.2).
-		{ProductCode: "sclb", ProductName: "辰云负载均衡", Category: "network", Description: "四层/七层负载均衡,跨可用区流量入口", ResourceType: "slb", RegionScope: "REGIONAL", CrossAZ: true, Status: 2, OwnerTeam: "network-line"},
-		// SCAS 弹性伸缩 (M-7.3, P2): REGIONAL scaling group — the policy layer
+		{ProductCode: "eulb", ProductName: "辰云负载均衡", Category: "network", Description: "四层/七层负载均衡,跨可用区流量入口", ResourceType: "slb", RegionScope: "REGIONAL", CrossAZ: true, Status: 2, OwnerTeam: "network-line"},
+		// EUAS 弹性伸缩 (M-7.3, P2): REGIONAL scaling group — the policy layer
 		// over HPA/VPA/CA (06 §2.6). POSTPAID management fee; managed ECS/ECI
 		// bill separately. DriverK8s.
-		{ProductCode: "scas", ProductName: "弹性伸缩", Category: "management", Description: "伸缩组策略引擎,基于 ECS/ECI 自动扩缩容", ResourceType: "scalinggroup", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "compute-line"},
-		// SCBACKUP 云备份 (M-7.4, P2): REGIONAL backup policy — scheduled snapshot
+		{ProductCode: "euas", ProductName: "弹性伸缩", Category: "management", Description: "伸缩组策略引擎,基于 ECS/ECI 自动扩缩容", ResourceType: "scalinggroup", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "compute-line"},
+		// EUBACKUP 云备份 (M-7.4, P2): REGIONAL backup policy — scheduled snapshot
 		// + cross-AZ copy. POSTPAID by stored capacity. Retention enforced (06 §4.1).
-		{ProductCode: "scbackup", ProductName: "云备份", Category: "storage", Description: "定时快照与跨可用区备份策略,保留期自动清理", ResourceType: "backuppolicy", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "storage-line"},
-		// SCREDIS 托管 Redis (M-7.5, P1, 09 §4.2 managed/middleware productization):
+		{ProductCode: "eubackup", ProductName: "云备份", Category: "storage", Description: "定时快照与跨可用区备份策略,保留期自动清理", ResourceType: "backuppolicy", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "storage-line"},
+		// EUREDIS 托管 Redis (M-7.5, P1, 09 §4.2 managed/middleware productization):
 		// ZONAL with cross-AZ HA replica (master+replica across AZs) — the platform's
 		// own redis-cluster ops (M-6.2a) turned into a managed product. Both prepay
-		// and postpay (managed DBs offer both, like scrds). DriverK8s.
-		{ProductCode: "scredis", ProductName: "辰云数据库Redis版", Category: "database", Description: "托管 Redis,主备跨可用区,平台运维经验产品化", ResourceType: "redisinstance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "data-line"},
-		// SCKAFKA 托管 Kafka (M-7.5, P1, 09 §4.2 managed/middleware productization):
+		// and postpay (managed DBs offer both, like eurds). DriverK8s.
+		{ProductCode: "euredis", ProductName: "辰云数据库Redis版", Category: "database", Description: "托管 Redis,主备跨可用区,平台运维经验产品化", ResourceType: "redisinstance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "data-line"},
+		// EUKAFKA 托管 Kafka (M-7.5, P1, 09 §4.2 managed/middleware productization):
 		// ZONAL with cross-AZ HA (brokers across AZs, min.insync.replicas=2 tolerates
 		// one AZ loss) — the platform's own kafka-kraft ops (M-6.2a) productized.
-		// Both prepay and postpay (managed middleware, like scredis). DriverK8s.
-		{ProductCode: "sckafka", ProductName: "辰云消息队列Kafka版", Category: "middleware", Description: "托管 Kafka,跨可用区 broker,平台运维经验产品化", ResourceType: "kafkainstance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "data-line"},
-		// SCLOG 日志服务 (M-7.5, P1, 09 §4.2): REGIONAL ingestion + storage
+		// Both prepay and postpay (managed middleware, like euredis). DriverK8s.
+		{ProductCode: "eukafka", ProductName: "辰云消息队列Kafka版", Category: "middleware", Description: "托管 Kafka,跨可用区 broker,平台运维经验产品化", ResourceType: "kafkainstance", RegionScope: "ZONAL", CrossAZ: true, Status: 2, OwnerTeam: "data-line"},
+		// EULOG 日志服务 (M-7.5, P1, 09 §4.2): REGIONAL ingestion + storage
 		// (Vector collect + ClickHouse store, multi-tenant topic/table). Cross-AZ
 		// storage is a replica flag, not a placement constraint. DriverK8s.
-		{ProductCode: "sclog", ProductName: "辰云日志服务", Category: "middleware", Description: "日志采集与存储,Vector+ClickHouse,多租户隔离", ResourceType: "loginstance", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "data-line"},
+		{ProductCode: "eulog", ProductName: "辰云日志服务", Category: "middleware", Description: "日志采集与存储,Vector+ClickHouse,多租户隔离", ResourceType: "loginstance", RegionScope: "REGIONAL", CrossAZ: false, Status: 2, OwnerTeam: "data-line"},
 	}
 }
 
 // seedSKUs lists the sellable SKUs: one row per product × spec × charge form.
 func seedSKUs() []sku {
 	return []sku{
-		{SKUCode: "scecs.s2.small.prepaid", ProductCode: "scecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
-		{SKUCode: "scecs.s2.small.postpaid", ProductCode: "scecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
-		{SKUCode: "scecs.s2.large.prepaid", ProductCode: "scecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
-		{SKUCode: "scecs.s2.large.postpaid", ProductCode: "scecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
-		{SKUCode: "scecs.s2.xlarge.prepaid", ProductCode: "scecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":4,"mem_gb":8}`, Status: "1"},
-		{SKUCode: "scecs.s2.xlarge.postpaid", ProductCode: "scecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":4,"mem_gb":8}`, Status: "1"},
-		{SKUCode: "scbs.essd.prepaid", ProductCode: "scbs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"disk_type":"essd","min_gb":20}`, Status: "1"},
-		{SKUCode: "scbs.essd.postpaid", ProductCode: "scbs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"disk_type":"essd","min_gb":20}`, Status: "1"},
-		{SKUCode: "scoss.standard.postpaid", ProductCode: "scoss", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"storage_class":"standard"}`, Status: "1"},
-		{SKUCode: "scrds.mysql8.small.prepaid", ProductCode: "scrds", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"mysql","version":"8.0","cpu":2,"mem_gb":4,"ha":true}`, Status: "1"},
-		{SKUCode: "scrds.mysql8.small.postpaid", ProductCode: "scrds", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"mysql","version":"8.0","cpu":2,"mem_gb":4,"ha":true}`, Status: "1"},
-		{SKUCode: "sceip.bandwidth.prepaid", ProductCode: "sceip", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"billing":"bandwidth","mbps":5}`, Status: "1"},
-		{SKUCode: "sceip.traffic.postpaid", ProductCode: "sceip", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"billing":"traffic"}`, Status: "1"},
-		{SKUCode: "scvpc.standard.postpaid", ProductCode: "scvpc", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard"}`, Status: "1"},
-		{SKUCode: "scmon.basic.postpaid", ProductCode: "scmon", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"granularity_s":60}`, Status: "1"},
-		// SCECI 弹性容器实例 (M-7.1): per-second POSTPAID only — containers are
+		{SKUCode: "euecs.s2.small.prepaid", ProductCode: "euecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
+		{SKUCode: "euecs.s2.small.postpaid", ProductCode: "euecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
+		{SKUCode: "euecs.s2.large.prepaid", ProductCode: "euecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
+		{SKUCode: "euecs.s2.large.postpaid", ProductCode: "euecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
+		{SKUCode: "euecs.s2.xlarge.prepaid", ProductCode: "euecs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"cpu":4,"mem_gb":8}`, Status: "1"},
+		{SKUCode: "euecs.s2.xlarge.postpaid", ProductCode: "euecs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":4,"mem_gb":8}`, Status: "1"},
+		{SKUCode: "eubs.essd.prepaid", ProductCode: "eubs", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"disk_type":"essd","min_gb":20}`, Status: "1"},
+		{SKUCode: "eubs.essd.postpaid", ProductCode: "eubs", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"disk_type":"essd","min_gb":20}`, Status: "1"},
+		{SKUCode: "euoss.standard.postpaid", ProductCode: "euoss", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"storage_class":"standard"}`, Status: "1"},
+		{SKUCode: "eurds.mysql8.small.prepaid", ProductCode: "eurds", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"mysql","version":"8.0","cpu":2,"mem_gb":4,"ha":true}`, Status: "1"},
+		{SKUCode: "eurds.mysql8.small.postpaid", ProductCode: "eurds", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"mysql","version":"8.0","cpu":2,"mem_gb":4,"ha":true}`, Status: "1"},
+		{SKUCode: "eueip.bandwidth.prepaid", ProductCode: "eueip", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"billing":"bandwidth","mbps":5}`, Status: "1"},
+		{SKUCode: "eueip.traffic.postpaid", ProductCode: "eueip", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"billing":"traffic"}`, Status: "1"},
+		{SKUCode: "euvpc.standard.postpaid", ProductCode: "euvpc", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard"}`, Status: "1"},
+		{SKUCode: "eumon.basic.postpaid", ProductCode: "eumon", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"granularity_s":60}`, Status: "1"},
+		// EUECI 弹性容器实例 (M-7.1): per-second POSTPAID only — containers are
 		// the elastic/bursty form, billed by the second, no prepaid variant (a
-		// reserved container would just be a VM). cpu/mem_gb mirror SCECS specs.
-		{SKUCode: "sceci.c2.small.postpaid", ProductCode: "sceci", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
-		{SKUCode: "sceci.c2.large.postpaid", ProductCode: "sceci", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
-		{SKUCode: "sceci.c2.xlarge.postpaid", ProductCode: "sceci", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":4,"mem_gb":8}`, Status: "1"},
-		// SCLB 负载均衡 (M-7.2): POSTPAID by usage (L7 = APISIX by QPS, L4 = conn).
-		{SKUCode: "sclb.l1.small.postpaid", ProductCode: "sclb", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"type":"l7","max_qps":100}`, Status: "1"},
-		{SKUCode: "sclb.l1.large.postpaid", ProductCode: "sclb", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"type":"l7","max_qps":5000}`, Status: "1"},
-		{SKUCode: "sclb.l4.conn.postpaid", ProductCode: "sclb", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"type":"l4","max_conn":100000}`, Status: "1"},
-		// SCAS 弹性伸缩 (M-7.3): POSTPAID management fee per scaling-group-hour.
-		{SKUCode: "scas.standard.postpaid", ProductCode: "scas", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"managed_type":"ecs"}`, Status: "1"},
-		{SKUCode: "scas.eci.postpaid", ProductCode: "scas", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"managed_type":"eci"}`, Status: "1"},
-		// SCBACKUP 云备份 (M-7.4): POSTPAID by stored capacity.
-		{SKUCode: "scbackup.standard.postpaid", ProductCode: "scbackup", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard"}`, Status: "1"},
-		{SKUCode: "scbackup.crossaz.postpaid", ProductCode: "scbackup", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"crossaz","cross_az":true}`, Status: "1"},
-		// SCREDIS 托管 Redis (M-7.5): both prepay and postpay (managed DB).
-		{SKUCode: "scredis.redis.small.prepaid", ProductCode: "scredis", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":1,"ha":true}`, Status: "1"},
-		{SKUCode: "scredis.redis.small.postpaid", ProductCode: "scredis", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":1,"ha":true}`, Status: "1"},
-		{SKUCode: "scredis.redis.large.prepaid", ProductCode: "scredis", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":4,"ha":true}`, Status: "1"},
-		{SKUCode: "scredis.redis.large.postpaid", ProductCode: "scredis", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":4,"ha":true}`, Status: "1"},
-		// SCKAFKA 托管 Kafka (M-7.5): both prepay and postpay (managed middleware).
-		{SKUCode: "sckafka.kafka.standard.prepaid", ProductCode: "sckafka", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":3,"cross_az":true}`, Status: "1"},
-		{SKUCode: "sckafka.kafka.standard.postpaid", ProductCode: "sckafka", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":3,"cross_az":true}`, Status: "1"},
-		{SKUCode: "sckafka.kafka.large.prepaid", ProductCode: "sckafka", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":5,"cross_az":true}`, Status: "1"},
-		{SKUCode: "sckafka.kafka.large.postpaid", ProductCode: "sckafka", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":5,"cross_az":true}`, Status: "1"},
-		// SCLOG 日志服务 (M-7.5): REGIONAL, postpaid by ingestion + storage.
-		{SKUCode: "sclog.log.standard.postpaid", ProductCode: "sclog", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard","retention_days":7,"storage_gb":50}`, Status: "1"},
-		{SKUCode: "sclog.log.pro.postpaid", ProductCode: "sclog", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"pro","retention_days":30,"storage_gb":500,"cross_az":true}`, Status: "1"},
+		// reserved container would just be a VM). cpu/mem_gb mirror EUECS specs.
+		{SKUCode: "eueci.c2.small.postpaid", ProductCode: "eueci", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":1,"mem_gb":2}`, Status: "1"},
+		{SKUCode: "eueci.c2.large.postpaid", ProductCode: "eueci", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":2,"mem_gb":4}`, Status: "1"},
+		{SKUCode: "eueci.c2.xlarge.postpaid", ProductCode: "eueci", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"cpu":4,"mem_gb":8}`, Status: "1"},
+		// EULB 负载均衡 (M-7.2): POSTPAID by usage (L7 = APISIX by QPS, L4 = conn).
+		{SKUCode: "eulb.l1.small.postpaid", ProductCode: "eulb", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"type":"l7","max_qps":100}`, Status: "1"},
+		{SKUCode: "eulb.l1.large.postpaid", ProductCode: "eulb", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"type":"l7","max_qps":5000}`, Status: "1"},
+		{SKUCode: "eulb.l4.conn.postpaid", ProductCode: "eulb", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"type":"l4","max_conn":100000}`, Status: "1"},
+		// EUAS 弹性伸缩 (M-7.3): POSTPAID management fee per scaling-group-hour.
+		{SKUCode: "euas.standard.postpaid", ProductCode: "euas", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"managed_type":"ecs"}`, Status: "1"},
+		{SKUCode: "euas.eci.postpaid", ProductCode: "euas", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"managed_type":"eci"}`, Status: "1"},
+		// EUBACKUP 云备份 (M-7.4): POSTPAID by stored capacity.
+		{SKUCode: "eubackup.standard.postpaid", ProductCode: "eubackup", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard"}`, Status: "1"},
+		{SKUCode: "eubackup.crossaz.postpaid", ProductCode: "eubackup", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"crossaz","cross_az":true}`, Status: "1"},
+		// EUREDIS 托管 Redis (M-7.5): both prepay and postpay (managed DB).
+		{SKUCode: "euredis.redis.small.prepaid", ProductCode: "euredis", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":1,"ha":true}`, Status: "1"},
+		{SKUCode: "euredis.redis.small.postpaid", ProductCode: "euredis", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":1,"ha":true}`, Status: "1"},
+		{SKUCode: "euredis.redis.large.prepaid", ProductCode: "euredis", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":4,"ha":true}`, Status: "1"},
+		{SKUCode: "euredis.redis.large.postpaid", ProductCode: "euredis", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"redis","version":"7.0","mem_gb":4,"ha":true}`, Status: "1"},
+		// EUKAFKA 托管 Kafka (M-7.5): both prepay and postpay (managed middleware).
+		{SKUCode: "eukafka.kafka.standard.prepaid", ProductCode: "eukafka", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":3,"cross_az":true}`, Status: "1"},
+		{SKUCode: "eukafka.kafka.standard.postpaid", ProductCode: "eukafka", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":3,"cross_az":true}`, Status: "1"},
+		{SKUCode: "eukafka.kafka.large.prepaid", ProductCode: "eukafka", ChargeType: pricing.ChargePrepaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":5,"cross_az":true}`, Status: "1"},
+		{SKUCode: "eukafka.kafka.large.postpaid", ProductCode: "eukafka", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"engine":"kafka","version":"3.7","broker_count":5,"cross_az":true}`, Status: "1"},
+		// EULOG 日志服务 (M-7.5): REGIONAL, postpaid by ingestion + storage.
+		{SKUCode: "eulog.log.standard.postpaid", ProductCode: "eulog", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"standard","retention_days":7,"storage_gb":50}`, Status: "1"},
+		{SKUCode: "eulog.log.pro.postpaid", ProductCode: "eulog", ChargeType: pricing.ChargePostpaid, SpecJSON: `{"tier":"pro","retention_days":30,"storage_gb":500,"cross_az":true}`, Status: "1"},
 	}
 }
 
@@ -269,60 +269,60 @@ func seedSKUs() []sku {
 func seedRules() []pricing.PricingRule {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	return []pricing.PricingRule{
-		// SCECS 包年包月 (元/月)
-		{RuleID: 1, SKUCode: "scecs.s2.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("90"), EffectiveFrom: from},
-		{RuleID: 2, SKUCode: "scecs.s2.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("180"), EffectiveFrom: from},
-		{RuleID: 3, SKUCode: "scecs.s2.xlarge.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("360"), EffectiveFrom: from},
-		{RuleID: 4, SKUCode: "scecs.s2.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("150"), CustomerLevel: "ENTERPRISE", EffectiveFrom: from},
-		{RuleID: 5, SKUCode: "scecs.s2.large.prepaid", RegionID: "cn-east-1", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("200"), EffectiveFrom: from},
-		// SCECS 按量 (元/小时)
-		{RuleID: 6, SKUCode: "scecs.s2.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.125"), EffectiveFrom: from},
-		{RuleID: 7, SKUCode: "scecs.s2.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.25"), EffectiveFrom: from},
-		{RuleID: 8, SKUCode: "scecs.s2.xlarge.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.5"), EffectiveFrom: from},
-		// SCBS
-		{RuleID: 9, SKUCode: "scbs.essd.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("1"), EffectiveFrom: from},
-		{RuleID: 10, SKUCode: "scbs.essd.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.0014"), EffectiveFrom: from},
-		// SCOSS
-		{RuleID: 11, SKUCode: "scoss.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.00017"), EffectiveFrom: from},
-		// SCRDS
-		{RuleID: 12, SKUCode: "scrds.mysql8.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("420"), EffectiveFrom: from},
-		{RuleID: 13, SKUCode: "scrds.mysql8.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.7"), EffectiveFrom: from},
-		// SCEIP
-		{RuleID: 14, SKUCode: "sceip.bandwidth.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("23"), EffectiveFrom: from},
-		{RuleID: 15, SKUCode: "sceip.traffic.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.8"), EffectiveFrom: from},
-		// SCVPC / SCMON 基础档零费率
-		{RuleID: 16, SKUCode: "scvpc.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0"), EffectiveFrom: from},
-		{RuleID: 17, SKUCode: "scmon.basic.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0"), EffectiveFrom: from},
-		// SCECI 弹性容器实例 (M-7.1): per-second billing — DurationUnit SECOND,
+		// EUECS 包年包月 (元/月)
+		{RuleID: 1, SKUCode: "euecs.s2.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("90"), EffectiveFrom: from},
+		{RuleID: 2, SKUCode: "euecs.s2.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("180"), EffectiveFrom: from},
+		{RuleID: 3, SKUCode: "euecs.s2.xlarge.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("360"), EffectiveFrom: from},
+		{RuleID: 4, SKUCode: "euecs.s2.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("150"), CustomerLevel: "ENTERPRISE", EffectiveFrom: from},
+		{RuleID: 5, SKUCode: "euecs.s2.large.prepaid", RegionID: "cn-east-1", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("200"), EffectiveFrom: from},
+		// EUECS 按量 (元/小时)
+		{RuleID: 6, SKUCode: "euecs.s2.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.125"), EffectiveFrom: from},
+		{RuleID: 7, SKUCode: "euecs.s2.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.25"), EffectiveFrom: from},
+		{RuleID: 8, SKUCode: "euecs.s2.xlarge.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.5"), EffectiveFrom: from},
+		// EUBS
+		{RuleID: 9, SKUCode: "eubs.essd.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("1"), EffectiveFrom: from},
+		{RuleID: 10, SKUCode: "eubs.essd.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.0014"), EffectiveFrom: from},
+		// EUOSS
+		{RuleID: 11, SKUCode: "euoss.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.00017"), EffectiveFrom: from},
+		// EURDS
+		{RuleID: 12, SKUCode: "eurds.mysql8.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("420"), EffectiveFrom: from},
+		{RuleID: 13, SKUCode: "eurds.mysql8.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.7"), EffectiveFrom: from},
+		// EUEIP
+		{RuleID: 14, SKUCode: "eueip.bandwidth.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("23"), EffectiveFrom: from},
+		{RuleID: 15, SKUCode: "eueip.traffic.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.8"), EffectiveFrom: from},
+		// EUVPC / EUMON 基础档零费率
+		{RuleID: 16, SKUCode: "euvpc.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0"), EffectiveFrom: from},
+		{RuleID: 17, SKUCode: "eumon.basic.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0"), EffectiveFrom: from},
+		// EUECI 弹性容器实例 (M-7.1): per-second billing — DurationUnit SECOND,
 		// the unit M-4.2 reserved for exactly this (09 §4.2). The list price is
 		// per-second; the pricing engine multiplies list × quantity × duration,
 		// so a 3600-second quote = list × 3600, reconciling to the hourly rate.
-		{RuleID: 18, SKUCode: "sceci.c2.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationSecond, ListPrice: pricing.MustParseAmount("0.000035"), EffectiveFrom: from},
-		{RuleID: 19, SKUCode: "sceci.c2.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationSecond, ListPrice: pricing.MustParseAmount("0.00007"), EffectiveFrom: from},
-		{RuleID: 20, SKUCode: "sceci.c2.xlarge.postpaid", RegionID: "*", DurationUnit: pricing.DurationSecond, ListPrice: pricing.MustParseAmount("0.00014"), EffectiveFrom: from},
-		// SCLB 负载均衡 (M-7.2): per-hour postpaid by usage tier.
-		{RuleID: 21, SKUCode: "sclb.l1.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.06"), EffectiveFrom: from},
-		{RuleID: 22, SKUCode: "sclb.l1.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.3"), EffectiveFrom: from},
-		{RuleID: 23, SKUCode: "sclb.l4.conn.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.12"), EffectiveFrom: from},
-		// SCAS 弹性伸缩 (M-7.3): per-hour management fee (managed instances bill separately).
-		{RuleID: 24, SKUCode: "scas.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
-		{RuleID: 25, SKUCode: "scas.eci.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
-		// SCBACKUP 云备份 (M-7.4): per-hour by stored capacity tier.
-		{RuleID: 26, SKUCode: "scbackup.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.0007"), EffectiveFrom: from},
-		{RuleID: 27, SKUCode: "scbackup.crossaz.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.0014"), EffectiveFrom: from},
-		// SCREDIS 托管 Redis (M-7.5): prepay 元/月 + postpay 元/小时 (managed DB, both forms).
-		{RuleID: 28, SKUCode: "scredis.redis.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("78"), EffectiveFrom: from},
-		{RuleID: 29, SKUCode: "scredis.redis.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.16"), EffectiveFrom: from},
-		{RuleID: 30, SKUCode: "scredis.redis.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("300"), EffectiveFrom: from},
-		{RuleID: 31, SKUCode: "scredis.redis.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.62"), EffectiveFrom: from},
-		// SCKAFKA 托管 Kafka (M-7.5): prepay 元/月 + postpay 元/小时 (managed middleware, both forms).
-		{RuleID: 32, SKUCode: "sckafka.kafka.standard.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("450"), EffectiveFrom: from},
-		{RuleID: 33, SKUCode: "sckafka.kafka.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.85"), EffectiveFrom: from},
-		{RuleID: 34, SKUCode: "sckafka.kafka.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("1200"), EffectiveFrom: from},
-		{RuleID: 35, SKUCode: "sckafka.kafka.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("2.4"), EffectiveFrom: from},
-		// SCLOG 日志服务 (M-7.5): postpaid by storage-hour (ingestion_gb metered by USAGE, 05§4.1).
-		{RuleID: 36, SKUCode: "sclog.log.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.005"), EffectiveFrom: from},
-		{RuleID: 37, SKUCode: "sclog.log.pro.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
+		{RuleID: 18, SKUCode: "eueci.c2.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationSecond, ListPrice: pricing.MustParseAmount("0.000035"), EffectiveFrom: from},
+		{RuleID: 19, SKUCode: "eueci.c2.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationSecond, ListPrice: pricing.MustParseAmount("0.00007"), EffectiveFrom: from},
+		{RuleID: 20, SKUCode: "eueci.c2.xlarge.postpaid", RegionID: "*", DurationUnit: pricing.DurationSecond, ListPrice: pricing.MustParseAmount("0.00014"), EffectiveFrom: from},
+		// EULB 负载均衡 (M-7.2): per-hour postpaid by usage tier.
+		{RuleID: 21, SKUCode: "eulb.l1.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.06"), EffectiveFrom: from},
+		{RuleID: 22, SKUCode: "eulb.l1.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.3"), EffectiveFrom: from},
+		{RuleID: 23, SKUCode: "eulb.l4.conn.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.12"), EffectiveFrom: from},
+		// EUAS 弹性伸缩 (M-7.3): per-hour management fee (managed instances bill separately).
+		{RuleID: 24, SKUCode: "euas.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
+		{RuleID: 25, SKUCode: "euas.eci.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
+		// EUBACKUP 云备份 (M-7.4): per-hour by stored capacity tier.
+		{RuleID: 26, SKUCode: "eubackup.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.0007"), EffectiveFrom: from},
+		{RuleID: 27, SKUCode: "eubackup.crossaz.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.0014"), EffectiveFrom: from},
+		// EUREDIS 托管 Redis (M-7.5): prepay 元/月 + postpay 元/小时 (managed DB, both forms).
+		{RuleID: 28, SKUCode: "euredis.redis.small.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("78"), EffectiveFrom: from},
+		{RuleID: 29, SKUCode: "euredis.redis.small.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.16"), EffectiveFrom: from},
+		{RuleID: 30, SKUCode: "euredis.redis.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("300"), EffectiveFrom: from},
+		{RuleID: 31, SKUCode: "euredis.redis.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.62"), EffectiveFrom: from},
+		// EUKAFKA 托管 Kafka (M-7.5): prepay 元/月 + postpay 元/小时 (managed middleware, both forms).
+		{RuleID: 32, SKUCode: "eukafka.kafka.standard.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("450"), EffectiveFrom: from},
+		{RuleID: 33, SKUCode: "eukafka.kafka.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.85"), EffectiveFrom: from},
+		{RuleID: 34, SKUCode: "eukafka.kafka.large.prepaid", RegionID: "*", DurationUnit: pricing.DurationMonth, ListPrice: pricing.MustParseAmount("1200"), EffectiveFrom: from},
+		{RuleID: 35, SKUCode: "eukafka.kafka.large.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("2.4"), EffectiveFrom: from},
+		// EULOG 日志服务 (M-7.5): postpaid by storage-hour (ingestion_gb metered by USAGE, 05§4.1).
+		{RuleID: 36, SKUCode: "eulog.log.standard.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.005"), EffectiveFrom: from},
+		{RuleID: 37, SKUCode: "eulog.log.pro.postpaid", RegionID: "*", DurationUnit: pricing.DurationHour, ListPrice: pricing.MustParseAmount("0.02"), EffectiveFrom: from},
 	}
 }
 
@@ -333,7 +333,7 @@ func seedPromos() []pricing.Promotion {
 	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	return []pricing.Promotion{
 		{PromoID: "promo-newuser-2026", PromoType: pricing.PromoDiscountRate, ScopeType: "ORDER", RateBasisPoints: 3000, UserTag: "new", StartAt: from, EndAt: to},
-		{PromoID: "promo-ecs-annual", PromoType: pricing.PromoDiscountRate, ScopeType: "PRODUCT", ScopeRef: "scecs", RateBasisPoints: 8500, StartAt: from, EndAt: to},
+		{PromoID: "promo-ecs-annual", PromoType: pricing.PromoDiscountRate, ScopeType: "PRODUCT", ScopeRef: "euecs", RateBasisPoints: 8500, StartAt: from, EndAt: to},
 	}
 }
 
@@ -363,11 +363,11 @@ func seedRegions() []region {
 // both modes. Status 2 = on-sale, mirroring the product convention.
 func seedImages() []image {
 	return []image{
-		{ImageID: "centos-7.9", Name: "CentOS 7.9 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
-		{ImageID: "ubuntu-22.04", Name: "Ubuntu 22.04 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
-		{ImageID: "debian-12", Name: "Debian 12 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
-		{ImageID: "rocky-9", Name: "Rocky Linux 9 64位", OS: "linux", Arch: "x86_64", ProductCode: "scecs", Status: 2},
-		{ImageID: "windows-2022", Name: "Windows Server 2022 数据中心版 64位", OS: "windows", Arch: "x86_64", ProductCode: "scecs", Status: 2},
+		{ImageID: "centos-7.9", Name: "CentOS 7.9 64位", OS: "linux", Arch: "x86_64", ProductCode: "euecs", Status: 2},
+		{ImageID: "ubuntu-22.04", Name: "Ubuntu 22.04 64位", OS: "linux", Arch: "x86_64", ProductCode: "euecs", Status: 2},
+		{ImageID: "debian-12", Name: "Debian 12 64位", OS: "linux", Arch: "x86_64", ProductCode: "euecs", Status: 2},
+		{ImageID: "rocky-9", Name: "Rocky Linux 9 64位", OS: "linux", Arch: "x86_64", ProductCode: "euecs", Status: 2},
+		{ImageID: "windows-2022", Name: "Windows Server 2022 数据中心版 64位", OS: "windows", Arch: "x86_64", ProductCode: "euecs", Status: 2},
 	}
 }
 
@@ -393,7 +393,7 @@ func seedCategories() []category {
 // the resource_id built with the right zone context.
 type quoteRequest struct {
 	ProductCode string `json:"productCode"`
-	SpecCode    string `json:"specCode"`    // SKU code, e.g. scecs.s2.large.prepaid
+	SpecCode    string `json:"specCode"`    // SKU code, e.g. euecs.s2.large.prepaid
 	ChargeType  string `json:"chargeType"`  // PREPAID / POSTPAID
 	Duration    int64  `json:"duration"`     // months for PREPAID; ignored for POSTPAID
 	Quantity    int64  `json:"quantity"`     // instances; defaults to 1
@@ -493,7 +493,7 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 
 	// Duration unit follows the catalogue rule, not a hardcoded assumption.
 	// Historically postpaid was always HOUR and prepaid MONTH, but the rule is
-	// the authority — and SCECI (M-7.1) breaks the assumption: its postpaid
+	// the authority — and EUECI (M-7.1) breaks the assumption: its postpaid
 	// rule is per-SECOND (09 §4.2). Deriving the unit from the matched rule
 	// means a new billing granularity is a catalogue row, not a code change,
 	// and selectRule's DurationUnit match (pricing.go) keeps working. The
@@ -780,7 +780,7 @@ func (s *catalogStore) handlePlacement(w http.ResponseWriter, r *http.Request) {
 // durationUnitForSKU returns the DurationUnit of the pricing rule that would
 // match a postpaid quote for this SKU, defaulting to HOUR (the phase-1 norm)
 // when no rule is found yet. The catalogue is the authority for billing
-// granularity: SCECI postpaid is per-SECOND (M-7.1, 09 §4.2), while every other
+// granularity: EUECI postpaid is per-SECOND (M-7.1, 09 §4.2), while every other
 // postpaid product is per-HOUR. Reading it from the rule means selectRule's
 // DurationUnit match (pricing.go) succeeds without the quote path hardcoding
 // the unit per product.
@@ -847,12 +847,12 @@ func skuToMap(sk sku) map[string]any {
 func accountIDFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.Header.Get(accountIDHeader)
 	if raw == "" {
-		writeErr(w, "Common.MissingAccountId", 403, "X-Sc-Account-Id header is required")
+		writeErr(w, "Common.MissingAccountId", 403, "X-Euler-Account-Id header is required")
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
@@ -869,20 +869,20 @@ func accountIDOptional(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Sc-Account-Id")
+		writeErr(w, "Common.InvalidParameter", 400, "malformed X-Euler-Account-Id")
 		return 0, false
 	}
 	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, code string, data any) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Data": data})
 }
 
 func writeErr(w http.ResponseWriter, code string, status int, msg string) {
-	rid := w.Header().Get("X-Sc-TraceId")
+	rid := w.Header().Get("X-Euler-TraceId")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"RequestId": rid, "Code": code, "Message": msg})
@@ -890,11 +890,11 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Sc-TraceId")
+		id := r.Header.Get("X-Euler-TraceId")
 		if id == "" {
 			id = fmt.Sprintf("catalog-%d", time.Now().UnixNano())
 		}
-		w.Header().Set("X-Sc-TraceId", id)
+		w.Header().Set("X-Euler-TraceId", id)
 		h.ServeHTTP(w, r)
 	})
 }

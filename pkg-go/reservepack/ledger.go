@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // commitAttempts bounds the optimistic-lock retry loop. A conflict means

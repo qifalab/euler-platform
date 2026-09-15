@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * console-storage — OSS Bucket list (SCOSS), the storage category sub-app (02§7.2).
- * Demonstrates the declarative ResourceTable pattern from @sc/console-kit with
+ * console-storage — OSS Bucket list (EUOSS), the storage category sub-app (02§7.2).
+ * Demonstrates the declarative ResourceTable pattern from @eu/console-kit with
  * unified StatusBadge, polling on transitional states, and empty-guide.
  *
  * Bucket creation runs the real 4-step chain (mirror of console-ecs BuyWizard):
- *  - GET  /api/v1/catalog/skus?productCode=scoss — storage-class SKUs (POSTPAID)
+ *  - GET  /api/v1/catalog/skus?productCode=euoss — storage-class SKUs (POSTPAID)
  *  - POST /api/v1/catalog/quote                  — 询价 (real pricing engine)
  *  - POST /api/v1/orders                         — create order (real orderId)
  *  - POST /api/v1/orders/{id}/pay                — mark PAID
@@ -16,15 +16,15 @@
  */
 import { ref, computed, h, onMounted, onUnmounted, watch } from "vue";
 import { ElButton, ElDialog, ElForm, ElFormItem, ElSelect, ElOption, ElMessage } from "element-plus";
-import { ResourceTable, useResourceTable, useCatalogMeta } from "@sc/console-kit";
-import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
+import { ResourceTable, useResourceTable, useCatalogMeta } from "@eu/console-kit";
+import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
 import { sdk } from "./sdk";
-import { yuanToMinor } from "@sc/sdk";
+import { yuanToMinor } from "@eu/sdk";
 import BucketDetail from "./views/BucketDetail.vue";
-import "@sc/tokens/style.css";
+import "@eu/tokens/style.css";
 
 // Internal hash routing (no vue-router instance in this sub-app, mirroring the
-// console-network reference 02§3.4). The list links to #/scoss/buckets/<id>;
+// console-network reference 02§3.4). The list links to #/euoss/buckets/<id>;
 // when the hash matches that shape the detail page takes over. Before this the
 // link only changed the URL — BucketDetail existed but was never rendered, so
 // every bucket link was a dead end.
@@ -33,14 +33,14 @@ function onHash() { hashRoute.value = location.hash; }
 onMounted(() => window.addEventListener("hashchange", onHash));
 onUnmounted(() => window.removeEventListener("hashchange", onHash));
 const detailBucketId = computed(() => {
-  const m = hashRoute.value.match(/scoss\/buckets\/([^/?#]+)/);
+  const m = hashRoute.value.match(/euoss\/buckets\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : null;
 });
 const showDetail = computed(() => detailBucketId.value !== null);
 
 type BucketRow = Record<string, unknown>;
 
-// Real fetcher: console-bff /console/resources, filtered to scoss. The BFF
+// Real fetcher: console-bff /console/resources, filtered to euoss. The BFF
 // returns the shared Resource shape (store.go); map to list columns. Fields
 // not surfaced by the resource list (objectCount/size/access) fall back to a
 // dash so the existing columns/template keep rendering.
@@ -48,7 +48,7 @@ const { rows, loading, columns, page, pageSize, total, setPage, refresh } = useR
   api: async () => {
     const res = await sdk.get<BucketRow[]>("/console/resources");
     const items = (res.data ?? [])
-      .filter((r) => r.ProductCode === "scoss")
+      .filter((r) => r.ProductCode === "euoss")
       .map((r) => ({
         bucketName: r.ResourceId,
         status: String(r.State ?? "").charAt(0).toUpperCase() + String(r.State ?? "").slice(1).toLowerCase(),
@@ -62,7 +62,7 @@ const { rows, loading, columns, page, pageSize, total, setPage, refresh } = useR
     return { items, total: items.length };
   },
   columns: [
-    { key: "bucketName", title: "存储桶名称", link: (r) => `#/scoss/buckets/${r.bucketName}` },
+    { key: "bucketName", title: "存储桶名称", link: (r) => `#/euoss/buckets/${r.bucketName}` },
     { key: "status", title: "状态" },
     { key: "storageClass", title: "存储类型" },
     { key: "region", title: "地域" },
@@ -94,11 +94,11 @@ function errMsg(e: unknown): string {
 
 // --- 创建存储桶弹窗 ---
 
-// scoss 目录元数据:地域来自 svc-catalog(无客户端硬编码地域表)。scoss 为
+// euoss 目录元数据:地域来自 svc-catalog(无客户端硬编码地域表)。euoss 为
 // REGIONAL 部署(placement.zoneRequired=false),无可用区选择。
-const { regions, load } = useCatalogMeta("scoss");
+const { regions, load } = useCatalogMeta("euoss");
 
-interface ScossSku {
+interface EuossSku {
   skuCode: string;
   productCode: string;
   chargeType: string; // PREPAID | POSTPAID
@@ -115,7 +115,7 @@ const form = ref({ region: "", sku: "" });
 onMounted(async () => {
   void load();
   try {
-    const res = await sdk.get<ScossSku[]>("/api/v1/catalog/skus?productCode=scoss");
+    const res = await sdk.get<EuossSku[]>("/api/v1/catalog/skus?productCode=euoss");
     skuOptions.value = (res.data ?? [])
       .filter((s) => s.status === "1")
       .map((s) => {
@@ -148,7 +148,7 @@ async function submitCreate() {
   try {
     // 1) 询价 — 后端定价权威,金额不本地拼算。
     const q = await sdk.post<{ payableAmount: string }>("/api/v1/catalog/quote", {
-      productCode: "scoss", specCode: form.value.sku, chargeType: "POSTPAID",
+      productCode: "euoss", specCode: form.value.sku, chargeType: "POSTPAID",
       quantity: 1, regionId: form.value.region,
     });
     // svc-order takes amountMinor in 分 (1 分 = 0.01 元) — same conversion as
@@ -157,7 +157,7 @@ async function submitCreate() {
 
     // 2) Create the order — svc-order issues the real orderId/orderNo.
     const created = await sdk.post<{ orderId: number; orderNo: string }>("/api/v1/orders", {
-      type: "NEW", productCode: "scoss", skuCode: form.value.sku,
+      type: "NEW", productCode: "euoss", skuCode: form.value.sku,
       regionId: form.value.region, quantity: 1, duration: 1, amountMinor,
     });
 
@@ -170,7 +170,7 @@ async function submitCreate() {
     // 4) Fulfill — saga opens the bucket; the ResourceId IS the bucket id.
     const fulfilled = await sdk.post<{ resourceId: string; state: string }>("/api/v1/orchestrator/fulfill", {
       orderId: created.data.orderId, orderNo: created.data.orderNo,
-      productCode: "scoss", region: form.value.region,
+      productCode: "euoss", region: form.value.region,
       specCode: form.value.sku, chargeType: "POSTPAID",
     });
 
@@ -185,10 +185,10 @@ async function submitCreate() {
 }
 
 // EmptyGuide renders its action as a plain <a href> with no click hook, and
-// the app has no /scoss/create route — intercept the click on the way in and
+// the app has no /euoss/create route — intercept the click on the way in and
 // open the create dialog instead of navigating to a dead route.
 function onGuideAction(e: MouseEvent) {
-  if ((e.target as HTMLElement | null)?.closest(".sc-empty-action")) {
+  if ((e.target as HTMLElement | null)?.closest(".eu-empty-action")) {
     e.preventDefault();
     openCreate();
   }
@@ -221,7 +221,7 @@ function onGuideAction(e: MouseEvent) {
         title="暂无存储桶"
         description="创建您的第一个存储桶,开始使用对象存储服务。"
         action-label="创建存储桶"
-        action-href="#/scoss/create"
+        action-href="#/euoss/create"
       />
     </div>
 
@@ -252,5 +252,5 @@ function onGuideAction(e: MouseEvent) {
 
 <style scoped>
 .oss-app { padding: 16px 24px; }
-.oss-create-hint { font-size: 12px; color: var(--sc-text-secondary); margin: 0; }
+.oss-create-hint { font-size: 12px; color: var(--eu-text-secondary); margin: 0; }
 </style>

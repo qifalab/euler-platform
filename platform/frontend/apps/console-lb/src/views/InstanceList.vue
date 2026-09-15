@@ -2,16 +2,16 @@
 /**
  * Instance list (02§7.2). The SLB sub-app's main view.
  * ResourceTable + StatusBadge + polling on transitional states. Filtered to
- * sclb — the same /console/resources endpoint the BFF serves for every
+ * eulb — the same /console/resources endpoint the BFF serves for every
  * product; the productCode distinguishes them.
  */
 import { computed, h } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
-import { ResourceTable, useResourceTable } from "@sc/console-kit";
-import { StatusBadge, EmptyGuide, PageHeader } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
-import "@sc/tokens/style.css";
+import { ResourceTable, useResourceTable } from "@eu/console-kit";
+import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
+import "@eu/tokens/style.css";
 
 type Row = Record<string, unknown>;
 const router = useRouter();
@@ -21,7 +21,7 @@ const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTa
   api: async () => {
     const res = await sdk.get<Row[]>("/console/resources");
     const items = (res.data ?? [])
-      .filter((r) => r.ProductCode === "sclb")
+      .filter((r) => r.ProductCode === "eulb")
       .map((r) => ({
         instanceId: r.ResourceId,
         instanceName: r.ResourceId,

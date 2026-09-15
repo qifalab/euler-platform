@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/starcloud/sc-platform/storage"
-	"github.com/starcloud/sc-platform/storage/sqltest"
+	"github.com/qifalab/euler-platform/storage"
+	"github.com/qifalab/euler-platform/storage/sqltest"
 )
 
 // TestSequenceIsUniqueAcrossRestarts is the property the services depend on: a

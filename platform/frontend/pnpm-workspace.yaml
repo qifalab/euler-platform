@@ -1,5 +1,5 @@
-# pnpm workspace for the StarCloud frontend.
-# Public shared packages live under packages/ (published as @sc/* from a
+# pnpm workspace for the Euler frontend.
+# Public shared packages live under packages/ (published as @eu/* from a
 # private registry in production; here they are workspace: protocol deps).
 # Each app under apps/ is an independent build target.
 packages:

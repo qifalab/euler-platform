@@ -1,10 +1,10 @@
 // Package provider wires the platform OpenAPI surface into Terraform.
 //
 // The provider is thin by design: its only job is to take provider config
-// (endpoint + AK/SK from env) into an *scsdk.Client, and to declare the product
+// (endpoint + AK/SK from env) into an *eusdk.Client, and to declare the product
 // resources. All product logic is "call the signed OpenAPI action" — the same
 // shape the console BFF and the SDKs use. There is deliberately no provider
-// secret-handling or retry logic beyond what scsdk already provides.
+// secret-handling or retry logic beyond what eusdk already provides.
 package provider
 
 import (
@@ -17,31 +17,31 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/starcloud/sc-platform/scsdk"
+	"github.com/qifalab/euler-platform/eusdk"
 )
 
-// scProvider is the provider implementation.
-type scProvider struct{}
+// euProvider is the provider implementation.
+type euProvider struct{}
 
 // New returns the provider factory (providerserver.Serve entry).
-func New() provider.Provider { return &scProvider{} }
+func New() provider.Provider { return &euProvider{} }
 
-// scProviderModel is the provider configuration surface.
-type scProviderModel struct {
+// euProviderModel is the provider configuration surface.
+type euProviderModel struct {
 	Endpoint types.String `tfsdk:"endpoint"`
 	Region   types.String `tfsdk:"region"`
 	// AK/SK are NOT configurable in HCL — they come from the environment
-	// (SC_ACCESS_KEY / SC_SECRET_KEY), matching the SDK convention. Secrets in
+	// (EULER_ACCESS_KEY / EULER_SECRET_KEY), matching the SDK convention. Secrets in
 	// HCL state would leak them; env vars keep them out of the plan file.
 }
 
 // Metadata names the provider.
-func (p *scProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "starcloud"
+func (p *euProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "euler"
 }
 
 // Schema declares the provider's configurable attributes.
-func (p *scProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+func (p *euProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
@@ -57,19 +57,19 @@ func (p *scProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 }
 
 // Configure builds the signed client from the provider config + env credentials.
-func (p *scProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var cfg scProviderModel
+func (p *euProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var cfg euProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	ak := os.Getenv("SC_ACCESS_KEY")
-	sk := os.Getenv("SC_SECRET_KEY")
+	ak := os.Getenv("EULER_ACCESS_KEY")
+	sk := os.Getenv("EULER_SECRET_KEY")
 	if ak == "" || sk == "" {
 		resp.Diagnostics.AddError(
 			"Missing credentials",
-			"SC_ACCESS_KEY and SC_SECRET_KEY must be set in the environment (the provider never stores secrets in state).",
+			"EULER_ACCESS_KEY and EULER_SECRET_KEY must be set in the environment (the provider never stores secrets in state).",
 		)
 		return
 	}
@@ -79,7 +79,7 @@ func (p *scProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		region = cfg.Region.ValueString()
 	}
 
-	client := scsdk.New(scsdk.Config{
+	client := eusdk.New(eusdk.Config{
 		AK:       ak,
 		SK:       sk,
 		Endpoint: cfg.Endpoint.ValueString(),
@@ -91,10 +91,10 @@ func (p *scProvider) Configure(ctx context.Context, req provider.ConfigureReques
 
 // DataSources declares the provider's data sources (phase-3 MVP: none yet —
 // the acceptance criterion is resource coverage; data sources are additive).
-func (p *scProvider) DataSources(_ context.Context) []func() datasource.DataSource { return nil }
+func (p *euProvider) DataSources(_ context.Context) []func() datasource.DataSource { return nil }
 
 // Resources declares the product resources (C3: 覆盖核心产品).
-func (p *scProvider) Resources(_ context.Context) []func() resource.Resource {
+func (p *euProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewScecsResource,
 		NewScossResource,

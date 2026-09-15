@@ -16,7 +16,7 @@ package settlement
 import (
 	"fmt"
 
-	"github.com/starcloud/sc-platform/pricing"
+	"github.com/qifalab/euler-platform/pricing"
 )
 
 // RateBasisPointsFull is the rate representing 100% (the platform or a single

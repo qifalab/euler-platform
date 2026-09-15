@@ -10,9 +10,9 @@ import { createPinia } from "pinia";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
 
-import "@sc/tokens/style.css";
-import "@sc/ui/style.css";
-import "@sc/console-kit/style.css";
+import "@eu/tokens/style.css";
+import "@eu/ui/style.css";
+import "@eu/console-kit/style.css";
 
 import App from "./App.vue";
 import { router } from "./router";

@@ -51,10 +51,10 @@ CREATE TABLE `t_product` (
 -- pipeline; this table is the commercial contract: what is measured, at what
 -- precision, and how it is collected.
 --
--- item_code format {productCode}.{metric}, e.g. scoss.storage_bytes (01§1.1).
+-- item_code format {productCode}.{metric}, e.g. euoss.storage_bytes (01§1.1).
 -- -----------------------------------------------------------------------------
 CREATE TABLE `t_metering_item` (
-  `item_code`      VARCHAR(64) NOT NULL COMMENT '计量项代号 {productCode}.{metric},如 scoss.storage_bytes',
+  `item_code`      VARCHAR(64) NOT NULL COMMENT '计量项代号 {productCode}.{metric},如 euoss.storage_bytes',
   `product_code`   VARCHAR(32) NOT NULL,
   `metric_name`    VARCHAR(64) NOT NULL COMMENT '指标名,如 cpu_seconds / storage_gb_hour',
   `unit`           VARCHAR(16) NOT NULL COMMENT '单位 second/gb_hour/count',
@@ -74,7 +74,7 @@ CREATE TABLE `t_metering_item` (
 -- t_sku — 售卖单元 = 产品 + 规格组合 + 计费形态
 -- -----------------------------------------------------------------------------
 CREATE TABLE `t_sku` (
-  `sku_code`     VARCHAR(64) NOT NULL COMMENT 'SKU 代号,如 scecs.s2.large.prepaid',
+  `sku_code`     VARCHAR(64) NOT NULL COMMENT 'SKU 代号,如 euecs.s2.large.prepaid',
   `product_code` VARCHAR(32) NOT NULL,
   `charge_type`  VARCHAR(16) NOT NULL COMMENT 'PREPAID 包年包月 / POSTPAID 按量;RESOURCE_PACK/SPOT 模型预留,一期不售(D6)',
   `spec_json`    JSON NOT NULL COMMENT '规格,如 {"cpu":2,"mem_gb":4}',

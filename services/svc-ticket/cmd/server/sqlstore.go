@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // sqlStore is the MySQL-backed Store over support_db's ticket + ticket_message
@@ -51,7 +51,7 @@ var _ Store = (*sqlStore)(nil)
 const statementTimeout = 10 * time.Second
 
 // newStore picks the backend. Persistence is opt-in (pkg-go/storage doc): with
-// SC_DB_DSN set the tickets live in support_db, so a restart keeps them and the
+// EULER_DB_DSN set the tickets live in support_db, so a restart keeps them and the
 // support channel stops losing in-flight threads; unset, the in-memory store
 // keeps the demo and `go test` dependency-free.
 //

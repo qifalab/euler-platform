@@ -2,7 +2,7 @@
 // the target of the APISIX forward-auth bypass (04§3.4).
 //
 // APISIX has no built-in cloud-vendor signature plugin, so the gateway's
-// sc-auth plugin forwards the request metadata here; this endpoint owns the
+// eu-auth plugin forwards the request metadata here; this endpoint owns the
 // CPS1-HMAC-SHA256 contract and the AK metadata cache. Endpoint budget is
 // P99 < 10ms (local signature computation + cached AK metadata), which is why
 // nothing on this path may touch the database synchronously.
@@ -17,8 +17,8 @@
 //	⑤ nonce dedup (Redis SET NX, TTL 16 min)
 //	⑥ inject identity context downstream
 //
-// On success the gateway injects X-Sc-Account-Id / X-Sc-Identity / X-Sc-TraceId
-// plus X-Sc-Ak-Id and X-Sc-Quota-Qps for per-AK rate limiting. Upstream
+// On success the gateway injects X-Euler-Account-Id / X-Euler-Identity / X-Euler-TraceId
+// plus X-Euler-Ak-Id and X-Euler-Quota-Qps for per-AK rate limiting. Upstream
 // services trust these headers only from gateway mTLS / internal CIDR;
 // anything else carrying them is rejected 403 (07§4.3).
 package verify
@@ -28,8 +28,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/starcloud/sc-platform/accesskey"
-	"github.com/starcloud/sc-platform/cps1"
+	"github.com/qifalab/euler-platform/accesskey"
+	"github.com/qifalab/euler-platform/cps1"
 )
 
 // NonceStore deduplicates replay nonces. The production implementation is
@@ -89,7 +89,7 @@ type Request struct {
 	Body    []byte
 
 	// Region and Service are resolved by the gateway from the routed product
-	// subdomain ({productCode}.api.starcloud.cn), never from client input —
+	// subdomain ({productCode}.api.euler.emoera.com), never from client input —
 	// otherwise a caller could sign for one scope and be verified in another.
 	Region  string
 	Service string

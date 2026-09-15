@@ -84,30 +84,30 @@ def test_python_signer_matches_golden_vectors(v: dict) -> None:
 
 def test_service_namespace_derivation() -> None:
     cases = {
-        "scecs": "ecs",
-        "scoss": "oss",
-        "scvpc": "vpc",
-        "scrds": "rds",
-        "scmon": "mon",
-        "sceip": "eip",
+        "euecs": "ecs",
+        "euoss": "oss",
+        "euvpc": "vpc",
+        "eurds": "rds",
+        "eumon": "mon",
+        "eueip": "eip",
     }
     for product, want in cases.items():
         assert service_namespace(product) == want
 
 
 def test_product_api_host_routing_subdomain() -> None:
-    assert product_api_host("scecs") == "scecs.api.starcloud.cn"
+    assert product_api_host("euecs") == "euecs.api.euler.emoera.com"
 
 
 def test_sign_rejects_missing_credentials() -> None:
     with pytest.raises(ValueError):
         sign(
             method="GET",
-            host="scecs.api.starcloud.cn",
+            host="euecs.api.euler.emoera.com",
             path="/",
             query={},
             headers={
-                "host": "scecs.api.starcloud.cn",
+                "host": "euecs.api.euler.emoera.com",
                 "x-cps-date": "20260804T093000Z",
                 "x-cps-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                 "x-cps-nonce": "n",

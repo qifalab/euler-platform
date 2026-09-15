@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/starcloud/sc-platform/audit"
+	"github.com/qifalab/euler-platform/audit"
 )
 
 // Concurrent appends must be safe and must mint distinct, gap-free event ids.
@@ -22,7 +22,7 @@ func TestConcurrentAppendIsSafeAndSequenced(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			body := `{"event_source":"scecs.api","event_name":"StopInstance","decision":"allow"}`
+			body := `{"event_source":"euecs.api","event_name":"StopInstance","decision":"allow"}`
 			req := httptest.NewRequest(http.MethodPost, "/internal/audit", strings.NewReader(body))
 			req.Header.Set(accountHeader, "100123")
 			rr := httptest.NewRecorder()

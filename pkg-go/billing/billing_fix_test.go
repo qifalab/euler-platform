@@ -15,7 +15,7 @@ func TestBillPeriodDerivedInUTC(t *testing.T) {
 	cst := time.FixedZone("CST", 8*3600)
 	u := usage("2", 100)
 	u.HourStart = time.Date(2026, 9, 1, 7, 0, 0, 0, cst) // == 2026-08-31 23:00 UTC
-	s, err := e.Settle(u, amt("0.25"), "scecs", "snap-1", nil)
+	s, err := e.Settle(u, amt("0.25"), "euecs", "snap-1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestBillPeriodDerivedInUTC(t *testing.T) {
 // once backfill completes — the shortfall is explained, not unexplained.
 func TestShortfallChargesStillReconcileInSummary(t *testing.T) {
 	e := newEngine()
-	s, err := e.Settle(usage("2", 100), amt("0.25"), "scecs", "snap-1", nil) // no pools → full shortfall
+	s, err := e.Settle(usage("2", 100), amt("0.25"), "euecs", "snap-1", nil) // no pools → full shortfall
 	if err != nil {
 		t.Fatal(err)
 	}

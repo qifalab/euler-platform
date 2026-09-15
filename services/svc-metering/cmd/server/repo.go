@@ -18,10 +18,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/starcloud/sc-platform/billing"
-	"github.com/starcloud/sc-platform/metering"
-	"github.com/starcloud/sc-platform/pricing"
-	"github.com/starcloud/sc-platform/storage"
+	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/metering"
+	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/storage"
 )
 
 // aggRepo persists hourly aggregates.
@@ -118,7 +118,7 @@ func (r *sqlAggRepo) LoadAll(ctx context.Context) ([]metering.HourlyUsage, error
 }
 
 // newAggRepo picks the backend. Persistence is opt-in (pkg-go/storage doc):
-// with SC_DB_DSN set the aggregate ledger lives in metering_db, so a restart
+// with EULER_DB_DSN set the aggregate ledger lives in metering_db, so a restart
 // keeps every settled hour; unset, the in-memory cache keeps the demo and
 // `go test` dependency-free.
 //

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/starcloud/sc-platform/workflow"
+	"github.com/qifalab/euler-platform/workflow"
 )
 
 // flowStore is the persistence boundary for flow instances. The SQL
@@ -48,7 +48,7 @@ func newApp(ctx context.Context) (*app, error) {
 }
 
 // newInMemoryApp builds the demo app. Handler tests construct it directly, so
-// they never depend on whether the developer's shell has SC_DB_DSN set.
+// they never depend on whether the developer's shell has EULER_DB_DSN set.
 func newInMemoryApp() *app {
 	var seq atomic.Int64
 	return &app{
@@ -198,7 +198,7 @@ var resourceCreateFlow = []workflow.Step{
 	{
 		Name: "create_resource",
 		Do: func(c *workflow.Context) error {
-			c.Set("resource_id", "scecs-cn-north-1-01-"+c.BizKey)
+			c.Set("resource_id", "euecs-cn-north-1-01-"+c.BizKey)
 			return nil
 		},
 		Undo: func(c *workflow.Context) error {

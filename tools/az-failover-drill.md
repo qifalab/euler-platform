@@ -48,7 +48,7 @@ done
 
 | 组件 | 期望 | 验证 |
 |---|---|---|
-| APISIX | 摘除 AZ 副本被剔除,剩余 AZ 继续服务 | `curl -s console.starcloud.cn/healthz` 200 |
+| APISIX | 摘除 AZ 副本被剔除,剩余 AZ 继续服务 | `curl -s console.euler.emoera.com/healthz` 200 |
 | svc-iam/order/billing/... | replicas 跨 AZ,topologySpreadConstraints 重新均衡 | `kubectl get deploy -A -o wide` (DrainAZ 侧 Pod Terminating→Pending 在存活 AZ 重建) |
 | console-bff | 请求 503 应为 0 | BFF 错误率看板 |
 

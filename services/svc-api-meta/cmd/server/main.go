@@ -15,7 +15,7 @@
 // The service name follows the全局标识规范: svc-{domain} (svc-api-meta).
 //
 // This is a stdlib-HTTP service (no Kratos/gRPC codegen — repo convention).
-// Account identity is injected by the APISIX gateway via the X-Sc-Account-Id
+// Account identity is injected by the APISIX gateway via the X-Euler-Account-Id
 // header; handlers reject requests that omit it with 403 (03§9.3).
 package main
 
@@ -127,5 +127,5 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	// TODO(scaffold): expose RED metrics via prometheus/client_golang.
 	// FORBIDDEN as labels: account_id, resource_id (high cardinality — 05§7.2).
-	_, _ = w.Write([]byte("# HELP sc_service_dummy 0\n# TYPE sc_service_dummy counter\nsc_service_dummy 0\n"))
+	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
 }

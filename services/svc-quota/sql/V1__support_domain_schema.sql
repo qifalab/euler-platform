@@ -17,7 +17,7 @@
 -- quota_definition — 配额定义(全局广播表)
 -- -----------------------------------------------------------------------------
 CREATE TABLE `quota_definition` (
-  `quota_code`    VARCHAR(64) NOT NULL COMMENT 'quota_scecs_instance 等',
+  `quota_code`    VARCHAR(64) NOT NULL COMMENT 'quota_euecs_instance 等',
   `product_code`  VARCHAR(32) NOT NULL,
   `default_value` INT NOT NULL COMMENT '账户默认上限',
   `scope`         VARCHAR(16) NOT NULL DEFAULT 'REGION' COMMENT 'GLOBAL 跨地域合计 / REGION 分地域独立',
@@ -236,7 +236,7 @@ CREATE TABLE `audit_chain_checkpoint` (
 --   user_agent      String,
 --   identity_type   LowCardinality(String),
 --   principal       String,
---   ak_id           String,          -- masked SC****3F, never full key material
+--   ak_id           String,          -- masked EU****3F, never full key material
 --   mfa_present     UInt8,
 --   resources       Array(String),
 --   decision        LowCardinality(String),  -- allow/deny; denials are audited too

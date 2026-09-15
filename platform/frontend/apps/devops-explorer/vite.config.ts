@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "node:path";
 
-// devops-explorer sub-app (M-5.1, 02§3.4). Externals share Vue/Element Plus/@sc/*
+// devops-explorer sub-app (M-5.1, 02§3.4). Externals share Vue/Element Plus/@eu/*
 // with the base in Wujie mode; standalone dev resolves its own. The Explorer
 // signs through svc-api-meta's /api/v1/apimeta/explorer (the SAME cps1 the SDK
 // uses), so this app never computes a signature itself — it posts params and
@@ -15,7 +15,7 @@ export default defineConfig({
     rollupOptions: {
       external: [
         "vue", "vue-router", "element-plus",
-        "@sc/tokens", "@sc/ui", "@sc/console-kit", "@sc/sdk", "@sc/wujie-bridge",
+        "@eu/tokens", "@eu/ui", "@eu/console-kit", "@eu/sdk", "@eu/wujie-bridge",
       ],
       output: {
         entryFileNames: "assets/index.js",
@@ -33,15 +33,15 @@ export default defineConfig({
         target: "http://localhost:9201",
         changeOrigin: true,
         configure: (p) => p.on("proxyReq", (r) => {
-          r.setHeader("X-Sc-Account-Id", "100123");
-          r.setHeader("X-Sc-TraceId", `explorer-${Date.now().toString(36)}`);
+          r.setHeader("X-Euler-Account-Id", "100123");
+          r.setHeader("X-Euler-TraceId", `explorer-${Date.now().toString(36)}`);
         }),
       },
       // Action metadata (the dropdown) reuses the internal list endpoint.
       "/internal/actions": {
         target: "http://localhost:9201",
         changeOrigin: true,
-        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Sc-Account-Id", "100123")),
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")),
       },
     },
   },

@@ -3,7 +3,7 @@
  * Buy wizard (02§7.4): step form + live price summary on the right.
  *
  * Wired to the real backend chain:
- *  - GET  /api/v1/catalog/skus?productCode=scecs — spec catalogue
+ *  - GET  /api/v1/catalog/skus?productCode=euecs — spec catalogue
  *  - POST /api/v1/catalog/quote                  — 询价 (real pricing engine)
  *  - POST /api/v1/orders                         — create order (real orderId)
  *  - POST /api/v1/orders/{id}/pay                — mark PAID
@@ -16,8 +16,8 @@ import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
 import { sdk } from "../sdk";
-import { yuanToMinor } from "@sc/sdk";
-import { useCatalogMeta } from "@sc/console-kit";
+import { yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta } from "@eu/console-kit";
 
 const router = useRouter();
 const submitting = ref(false);
@@ -32,7 +32,7 @@ const form = ref({
 });
 
 // --- region / zone / image metadata (catalogue-driven, no hardcoded lists) ---
-const { regions, images, placement, load, zonesOf } = useCatalogMeta("scecs", { withImages: true });
+const { regions, images, placement, load, zonesOf } = useCatalogMeta("euecs", { withImages: true });
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -87,7 +87,7 @@ function skuForCurrent(): string {
 
 onMounted(async () => {
   try {
-    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=scecs");
+    const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euecs");
     skus.value = res.data ?? [];
     // Default-select the first spec once the catalogue lands.
     if (specs.value.length && !form.value.spec) {
@@ -157,7 +157,7 @@ async function refreshQuote() {
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "scecs",
+      productCode: "euecs",
       specCode,
       chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
@@ -196,7 +196,7 @@ async function fulfill(order: { orderId: number; orderNo: string; specCode: stri
     "/api/v1/orchestrator/fulfill",
     {
       orderId: order.orderId, orderNo: order.orderNo,
-      productCode: "scecs", region: form.value.region,
+      productCode: "euecs", region: form.value.region,
       specCode: order.specCode, chargeType: form.value.chargeType.toUpperCase(),
       zone: form.value.zone, image: form.value.image,
       disk: form.value.disk, bandwidth: form.value.bandwidth,
@@ -231,7 +231,7 @@ async function submit() {
     // 1) Quote — the authoritative payable amount comes from the pricing
     // engine, already covering the full duration; the client never multiplies.
     const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "scecs", specCode,
+      productCode: "euecs", specCode,
       chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
       quantity: 1, regionId: form.value.region,
@@ -245,7 +245,7 @@ async function submit() {
     const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
       "/api/v1/orders",
       {
-        type: "NEW", productCode: "scecs", skuCode: specCode,
+        type: "NEW", productCode: "euecs", skuCode: specCode,
         regionId: form.value.region, quantity: 1,
         duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
         amountMinor,
@@ -351,36 +351,36 @@ async function submit() {
 .buy-layout { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
 .buy-steps { margin-bottom: 24px; }
 .buy-form, .buy-confirm {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 24px;
 }
 .buy-confirm h2 { font-size: 16px; margin: 0 0 16px; }
 .confirm-list { list-style: none; padding: 0; margin: 0 0 16px; }
-.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--sc-border); font-size: 13px; }
+.confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px; }
 .confirm-charge { margin-bottom: 16px; }
 .buy-nav { margin-top: 24px; display: flex; gap: 12px; }
 .buy-summary {
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 20px;
   height: fit-content;
   position: sticky;
-  top: var(--sc-spacing-6);
+  top: var(--eu-spacing-6);
 }
 .buy-summary h2 { font-size: 15px; margin: 0 0 16px; }
 .sum-list { margin: 0; }
-.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--sc-border); }
-.sum-list dt { color: var(--sc-text-secondary); }
+.sum-list div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-bottom: 1px solid var(--eu-border); }
+.sum-list dt { color: var(--eu-text-secondary); }
 .sum-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 16px; }
-.sum-total strong { font-size: 22px; color: var(--sc-color-danger); }
-.sum-hint { font-size: 12px; color: var(--sc-text-disabled); margin: 8px 0 0; }
+.sum-total strong { font-size: 22px; color: var(--eu-color-danger); }
+.sum-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 8px 0 0; }
 </style>

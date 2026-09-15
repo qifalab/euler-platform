@@ -6,8 +6,8 @@
  */
 import { ref } from "vue";
 import { ElButton, ElMessage } from "element-plus";
-import { PageHeader, StatusBadge } from "@sc/ui";
-import { createSDK } from "@sc/sdk";
+import { PageHeader, StatusBadge } from "@eu/ui";
+import { createSDK } from "@eu/sdk";
 
 const sdk = createSDK({ baseURL: "" });
 
@@ -84,39 +84,39 @@ function kindBadge(k: string): string {
 
 <style scoped>
 .anomaly { padding: 0; }
-.an-hint { color: var(--sc-text-secondary); font-size: 13px; margin: 0 0 12px; }
+.an-hint { color: var(--eu-text-secondary); font-size: 13px; margin: 0 0 12px; }
 .an-form-card {
   display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
   padding: 16px 20px;
 }
-.an-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--sc-text-secondary); }
+.an-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--eu-text-secondary); }
 .an-field input {
-  padding: 9px 12px; min-width: 220px; background: var(--sc-bg-container); border: 1px solid var(--sc-border);
-  border-radius: var(--sc-radius-md); font-size: 14px; color: var(--sc-text-primary); outline: none;
-  transition: border-color var(--sc-transition), box-shadow var(--sc-transition);
+  padding: 9px 12px; min-width: 220px; background: var(--eu-bg-container); border: 1px solid var(--eu-border);
+  border-radius: var(--eu-radius-md); font-size: 14px; color: var(--eu-text-primary); outline: none;
+  transition: border-color var(--eu-transition), box-shadow var(--eu-transition);
 }
-.an-field input:focus { border-color: var(--sc-color-brand); box-shadow: 0 0 0 3px var(--sc-color-brand-soft); }
+.an-field input:focus { border-color: var(--eu-color-brand); box-shadow: 0 0 0 3px var(--eu-color-brand-soft); }
 .an-result-card {
   margin-top: 16px; padding: 20px 24px;
-  background: var(--sc-glass-bg-soft);
-  -webkit-backdrop-filter: var(--sc-glass-blur-soft);
-  backdrop-filter: var(--sc-glass-blur-soft);
-  border: 1px solid var(--sc-glass-border);
-  border-radius: var(--sc-radius-lg);
-  box-shadow: var(--sc-shadow-sm);
+  background: var(--eu-glass-bg-soft);
+  -webkit-backdrop-filter: var(--eu-glass-blur-soft);
+  backdrop-filter: var(--eu-glass-blur-soft);
+  border: 1px solid var(--eu-glass-border);
+  border-radius: var(--eu-radius-lg);
+  box-shadow: var(--eu-shadow-sm);
 }
-.an-result-card.anomalous { border-color: var(--sc-color-danger); }
+.an-result-card.anomalous { border-color: var(--eu-color-danger); }
 .an-verdict { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.an-kind { font-size: 15px; font-weight: 500; color: var(--sc-text-primary); }
+.an-kind { font-size: 15px; font-weight: 500; color: var(--eu-text-primary); }
 .an-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 0; }
 .an-metrics > div { display: flex; flex-direction: column; gap: 2px; }
-.an-metrics dt { font-size: 12px; color: var(--sc-text-secondary); }
-.an-metrics dd { margin: 0; font-size: 14px; color: var(--sc-text-primary); }
-.an-error { color: var(--sc-color-danger); padding: 16px 0; font-size: 13px; }
+.an-metrics dt { font-size: 12px; color: var(--eu-text-secondary); }
+.an-metrics dd { margin: 0; font-size: 14px; color: var(--eu-text-primary); }
+.an-error { color: var(--eu-color-danger); padding: 16px 0; font-size: 13px; }
 </style>
