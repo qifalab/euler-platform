@@ -139,7 +139,8 @@ R5 产品可插拔:新增云产品 = 注册资源类型 + 实现资源控制器 
 - **链路**:全服务统一接入 OpenTelemetry Go SDK,trace_id 注入日志字段,可观测体系见《05-data-observability.md》;
 - **健康检查**:`/healthz` `/readyz` 统一被 K8s 探针使用;
 - **指标**:每服务暴露 `/metrics`(Prometheus 格式),RED 三指标(速率/错误/耗时)为交付门禁;
-- **脚手架**:统一 Kratos layout 模板,内含 trace、metrics、幂等、审计埋点中间件,新服务从模板生成。
+- **脚手架**:统一 Kratos layout 模板,内含 trace、metrics、幂等、审计埋点中间件,新服务从模板生成;
+- **跨切面 HTTP 中间件**:request-id(trace_id 注入,X-Euler-TraceId)/访问日志/panic 恢复(500 必带 request_id)/内部令牌守卫由 `pkg-go/httpmw` 单点提供(`httpmw.Chain`),服务侧只做接线、不再各自复制实现,修复只落一处。
 
 ---
 

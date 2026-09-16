@@ -154,7 +154,7 @@ flowchart LR
 | 在售产品 | 14 款 + RAM 子账号（15 售卖口径）；云市场生态另计 |
 | 地域 | `cn-north-1`（双 AZ，主）+ `cn-east-1`（异地冷备） |
 | 服务 | 18 个可运行 Go 服务（stdlib HTTP，端口 91xx/92xx；另含 1 个服务模板） |
-| 领域库 | `pkg-go` 38 个包、70 个测试文件、621 个测试函数（含资金双花、配额超卖、死锁回归） |
+| 领域库 | `pkg-go` 39 个包、70 个测试文件、621 个测试函数（含资金双花、配额超卖、死锁回归） |
 | 持久化 | `EULER_DB_DSN` 一键切换：真 MySQL（6 schema / 86 表 / 33 迁移）或零依赖内存模式 |
 | 合同 | `proto-hub` 18 个 proto 包 + 破坏性变更 CI 门 |
 | 前端 | Vue 3 + Wujie 微前端，20 个应用：6 站点 + 12 品类子应用 + 云市场 + 开发者 Explorer |
@@ -166,11 +166,12 @@ flowchart LR
 docs/architecture/     约束性架构规格（00–11 章）：产品目录、前端、服务、中间件、
                        数据可观测、K8s 产品化、安全、交付、路线图、调研与裁决
 proto-hub/             IDL 事实源；VERSIONING.md + 破坏性变更 CI 基线
-pkg-go/                领域库（38 包）：cps1/kms/accesskey/authz/totp/sts、
+pkg-go/                领域库（39 包）：cps1/kms/accesskey/authz/totp/sts、
                        pricing/order/ledger/settlement/reservepack/spot/invoice、
                        resource/workflow/provision/ipam/quota、metering/billing/
                        anomaly、notify/audit/alertcenter、identifier/topology/
-                       multiregion/event/errors/slo/chaos/release、trial、storage(SQL 适配层)
+                       multiregion/event/errors/slo/chaos/release、trial、
+                       httpmw(跨切面 HTTP 中间件)、storage(SQL 适配层)
 services/              18 个可运行服务（svc-* / console-bff / alert-center）
                        + rc-* 数据面控制器 CRD（按契约实现）+ _tmpl-go 服务模板
 sdk/python/            Python SDK（cps1 金样本回归）

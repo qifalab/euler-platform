@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/identifier"
 )
 
@@ -618,7 +619,7 @@ type apiResponse struct {
 // writeEnvelope writes the platform JSON envelope. RequestId rides along so
 // 客服/排障 can correlate (03§9.3). Used by the /api/v1 routes.
 func writeEnvelope(w http.ResponseWriter, r *http.Request, status int, code, msg string, data any) {
-	rid, _ := r.Context().Value(requestIDKey).(string)
+	rid := httpmw.RequestIDFromContext(r.Context())
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(apiResponse{
@@ -741,7 +742,7 @@ func main() {
 }
 
 // withMiddleware wraps the mux with the cross-cutting middleware chain every
-// service must apply (03§2.3.4).
+// service must apply (03§2.3.4; the chain itself lives in pkg-go/httpmw).
 func withMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(h)))
+	return httpmw.Chain(h)
 }

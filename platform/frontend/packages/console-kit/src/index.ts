@@ -6,10 +6,12 @@
 import ResourceTable from "./ResourceTable.vue";
 import RegionSelector from "./RegionSelector.vue";
 import AppErrorBoundary from "./AppErrorBoundary.vue";
+import InstanceListView from "./InstanceListView.vue";
 export { useResourceTable } from "./useResourceTable";
 export { useCatalogMeta, fetchRegions, fetchImages, fetchPlacement } from "./useCatalogMeta";
-export { ResourceTable, RegionSelector, AppErrorBoundary };
+export { ResourceTable, RegionSelector, AppErrorBoundary, InstanceListView };
 export type { Column, ResourceTableOptions } from "./useResourceTable";
+export type { InstanceListConfig } from "./InstanceListView.vue";
 export type {
   CatalogRegion,
   CatalogZone,
@@ -19,7 +21,7 @@ export type {
 } from "./useCatalogMeta";
 
 import type { App } from "vue";
-const components = { ResourceTable, RegionSelector, AppErrorBoundary };
+const components = { ResourceTable, RegionSelector, AppErrorBoundary, InstanceListView };
 export const ConsoleKit = {
   install(app: App) {
     for (const [name, comp] of Object.entries(components)) {

@@ -43,6 +43,7 @@ import (
 
 	"github.com/qifalab/euler-platform/cps1"
 	"github.com/qifalab/euler-platform/errors"
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/identifier"
 )
 
@@ -230,7 +231,7 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 // be present; we derive one rather than generate random bytes so the output is
 // reproducible in a debug session.
 func explorerNonce(r *http.Request) string {
-	if rid, ok := r.Context().Value(requestIDKey).(string); ok && rid != "" {
+	if rid := httpmw.RequestIDFromContext(r.Context()); rid != "" {
 		return "explorer-" + rid
 	}
 	return "explorer-" + r.RemoteAddr

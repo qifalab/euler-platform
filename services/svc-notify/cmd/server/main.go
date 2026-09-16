@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/notify"
 	"github.com/qifalab/euler-platform/storage"
 )
@@ -209,9 +210,9 @@ func seedAnnouncements() []announcement {
 }
 
 // withMiddleware wraps the mux with the cross-cutting middleware chain every
-// service must apply (03§2.3.4).
+// service must apply (03§2.3.4; the chain itself lives in pkg-go/httpmw).
 func withMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(h)))
+	return httpmw.Chain(h)
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
@@ -426,7 +427,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, status int, code, msg stri
 // writeJSON writes the platform JSON envelope. RequestId always rides along so
 // 客服/排障 can correlate (03§9.3).
 func writeJSON(w http.ResponseWriter, r *http.Request, status int, code, msg string, data interface{}) {
-	rid, _ := r.Context().Value(requestIDKey).(string)
+	rid := httpmw.RequestIDFromContext(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(apiResponse{

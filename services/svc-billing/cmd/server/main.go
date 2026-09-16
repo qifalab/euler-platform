@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/billing"
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/invoice"
 	"github.com/qifalab/euler-platform/ledger"
 	"github.com/qifalab/euler-platform/metering"
@@ -103,9 +104,10 @@ func main() {
 
 // withMiddleware wraps the mux with the cross-cutting middleware chain every
 // service must apply: request-id injection (→ trace_id), structured access
-// logging, and recover (03§2.3.4).
+// logging, and recover (03§2.3.4). The chain itself lives in pkg-go/httpmw so
+// the services cannot drift apart.
 func withMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(requestIDMiddleware(loggingMiddleware(h)))
+	return httpmw.Chain(h)
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
