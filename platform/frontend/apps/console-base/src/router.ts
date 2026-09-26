@@ -1,71 +1,55 @@
-/**
- * Router (02§5.3 route guard, §2.2 URL convention).
- * First path segment = productCode (e.g. /euecs/instances); the shell owns
- * first-level routing, sub-apps own level 2+ via Wujie URL sync.
- */
-import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
-import { ElMessage } from "element-plus";
-import { useRegistry } from "./registry";
-import { useAuthStore } from "./stores/auth";
-
-const Overview = () => import("./views/Overview.vue");
-const NotFound = () => import("./views/NotFound.vue");
-
-const routes: RouteRecordRaw[] = [
-  { path: "/", name: "overview", component: Overview, meta: { title: "总览" } },
-  // Catch-all: any /productCode/* is handed to a Wujie sub-app via the container.
-  { path: "/:productCode(.*)?", name: "sub-app", component: () => import("./views/SubAppHost.vue") },
-  { path: "/404", name: "not-found", component: NotFound },
-];
-
+import { createRouter, createWebHistory } from "vue-router";
 export const router = createRouter({
   history: createWebHistory(),
-  routes,
+  scrollBehavior: () => ({ top: 0 }),
+  routes: [
+    {
+      path: "/",
+      component: () => import("./cloud/OverviewPage.vue"),
+      meta: { title: "项目总览", project: true },
+    },
+    {
+      path: "/catalog",
+      component: () => import("./cloud/CatalogPage.vue"),
+      meta: { title: "应用目录" },
+    },
+    {
+      path: "/apps/:applicationId",
+      component: () => import("./cloud/AppWorkspace.vue"),
+      meta: { title: "应用详情", project: true },
+    },
+    {
+      path: "/members",
+      component: () => import("./cloud/MembersPage.vue"),
+      meta: { title: "成员与邀请" },
+    },
+    {
+      path: "/identity",
+      component: () => import("./cloud/IdentityPage.vue"),
+      meta: { title: "身份与认证", project: true },
+    },
+    {
+      path: "/permissions",
+      component: () => import("./cloud/PermissionsPage.vue"),
+      meta: { title: "应用权限", project: true },
+    },
+    {
+      path: "/audit",
+      component: () => import("./cloud/AuditPage.vue"),
+      meta: { title: "操作审计" },
+    },
+    {
+      path: "/join",
+      component: () => import("./cloud/JoinPage.vue"),
+      meta: { title: "接受团队邀请" },
+    },
+    {
+      path: "/:pathMatch(.*)*",
+      component: () => import("./cloud/NotFoundPage.vue"),
+      meta: { title: "页面不存在" },
+    },
+  ],
 });
-
-// Account center base URL (dev: local web-account; prod: account.euler.emoera.com).
-const ACCOUNT_BASE = "http://localhost:5175";
-
-// Three-level guard (02§5.3): whitelist → silent refresh → permission check.
-router.beforeEach(async (to) => {
-  document.title = (to.meta.title as string | undefined) ?? "辰云控制台";
-
-  const auth = useAuthStore();
-  const registry = useRegistry();
-
-  // 2) No token in memory → try silent refresh once (cookie may still be valid).
-  if (!auth.accessToken) {
-    const refreshed = await auth.silentRefresh();
-    if (!refreshed) {
-      // Not authenticated — do NOT let the navigation through. Bounce to the
-      // account login with a redirect back to the intended target (02§5.3).
-      window.location.href = `${ACCOUNT_BASE}/login?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
-      return false;
-    }
-  }
-
-  // 3) Real-name gate (01§4.5/07§2.3): opening/operating resources requires
-  // verified real name. Unverified accounts hitting a product route are bounced
-  // to the account center for 实名. The overview page stays accessible.
-  if (to.path !== "/" && !auth.isRealNameVerified && auth.isAuthenticated) {
-    const app = registry.resolve(to.path);
-    if (app && app.productCodes.length > 0) {
-      ElMessage.warning("请先完成实名认证后再访问产品控制台");
-      window.location.href = `${ACCOUNT_BASE}/realname?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
-      return false;
-    }
-  }
-
-  // 4) Permission check: first path segment → productCode → RAM action prefix.
-  if (to.path !== "/") {
-    const app = registry.resolve(to.path);
-    if (!app) return { name: "not-found" };
-    // UI gate only; resource-level authz stays backend-decided (02§5.3).
-    const productCode = registry.productCodeOf(to.path);
-    if (productCode && !auth.can(`${productCode}:Read`)) {
-      // Scaffold: no real IAM snapshot, so we don't hard-block. Real deploy
-      // returns { name: "no-permission", query: { app: productCode } }.
-    }
-  }
-  return true;
+router.afterEach((to) => {
+  document.title = `${to.meta.title ?? "控制台"} · 欧拉应用云`;
 });

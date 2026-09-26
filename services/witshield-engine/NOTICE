@@ -1,0 +1,6 @@
+Euler WitShield engine derives from WitShield AI, Copyright the WitShield AI contributors.
+Upstream: https://github.com/witkitlab/witshield
+Source revision: 17dd1f5f1a743fa8428668f15f2398df11d83e9d (2026-09-24).
+Licensed under Apache License 2.0; see LICENSE.
+Euler modifications: module import paths; in-process scoped management integration; project isolation and activity gates; notification credential destination binding and SMTP cancellation; Euler device service units and integration tests.
+The original upstream repository is not modified or deployed by Euler.

@@ -1,0 +1,26 @@
+// Euler derivative of WitShield (Apache-2.0); imports and integration may be modified. See module NOTICE.
+
+//go:build linux || darwin
+
+package action
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"syscall"
+)
+
+func configureProcessGroup(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+}

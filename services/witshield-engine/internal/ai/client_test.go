@@ -1,0 +1,356 @@
+// Euler derivative of WitShield (Apache-2.0); imports and integration may be modified. See module NOTICE.
+
+package ai
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/qifalab/euler-platform/services/witshield-engine/internal/domain"
+)
+
+func TestProtocols(t *testing.T) {
+	tests := []struct {
+		name       string
+		p          domain.AIProtocol
+		basePath   string
+		path, body string
+	}{
+		{"OpenAI Responses", domain.AIProtocolOpenAIResponses, "/v1", "/v1/responses", `{"output":[{"content":[{"text":"response ok"}]}]}`},
+		{"OpenAI Chat", domain.AIProtocolOpenAIChat, "/v1", "/v1/chat/completions", `{"choices":[{"message":{"content":"chat ok"}}]}`},
+		{"Anthropic explicit v1", domain.AIProtocolAnthropic, "/v1", "/v1/messages", `{"content":[{"type":"text","text":"anthropic ok"}]}`},
+		{"Anthropic origin Base URL", domain.AIProtocolAnthropic, "", "/v1/messages", `{"content":[{"type":"text","text":"anthropic root ok"}]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tt.path {
+					t.Errorf("path=%s", r.URL.Path)
+				}
+				if tt.p == domain.AIProtocolAnthropic {
+					if r.Header.Get("x-api-key") != "secret-key" {
+						t.Error("missing key")
+					}
+				} else if r.Header.Get("Authorization") != "Bearer secret-key" {
+					t.Error("missing auth")
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("decode body: %v", err)
+				}
+				if payload["model"] != "test" {
+					t.Errorf("model=%v", payload["model"])
+				}
+				if tt.p == domain.AIProtocolOpenAIResponses && payload["store"] != false {
+					t.Errorf("Responses store must be false: %v", payload)
+				}
+				field := "max_tokens"
+				if tt.p == domain.AIProtocolOpenAIResponses {
+					field = "max_output_tokens"
+				}
+				if payload[field] != float64(defaultOutputTokens) {
+					t.Errorf("%s=%v", field, payload[field])
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tt.body)
+			}))
+			defer srv.Close()
+			c, err := New(Config{Protocol: tt.p, BaseURL: srv.URL + tt.basePath, Model: "test", APIKey: "secret-key"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}})
+			if err != nil || !strings.Contains(got, "ok") {
+				t.Fatalf("%q %v", got, err)
+			}
+		})
+	}
+}
+
+func TestChatWithOutputLimitIsExplicitAndBounded(t *testing.T) {
+	var received float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		received, _ = payload["max_output_tokens"].(float64)
+		fmt.Fprint(w, `{"output_text":"ok"}`)
+	}))
+	defer srv.Close()
+	client, err := New(Config{Protocol: domain.AIProtocolOpenAIResponses, BaseURL: srv.URL, Model: "reasoner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.ChatWithOutputLimit(context.Background(), []Message{{Role: "user", Content: "investigate"}}, 8192); err != nil {
+		t.Fatal(err)
+	}
+	if received != 8192 {
+		t.Fatalf("max_output_tokens=%v", received)
+	}
+	for _, invalid := range []int{0, maxOutputTokens + 1} {
+		if _, err = client.ChatWithOutputLimit(context.Background(), []Message{{Role: "user", Content: "invalid"}}, invalid); err == nil {
+			t.Fatalf("invalid output limit accepted: %d", invalid)
+		}
+	}
+}
+
+func TestChatJSONUsesNativeProviderMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol domain.AIProtocol
+		assert   func(*testing.T, map[string]any)
+		response string
+	}{
+		{
+			name:     "Responses",
+			protocol: domain.AIProtocolOpenAIResponses,
+			assert: func(t *testing.T, payload map[string]any) {
+				text, ok := payload["text"].(map[string]any)
+				if !ok {
+					t.Fatalf("missing Responses text config: %#v", payload)
+				}
+				format, ok := text["format"].(map[string]any)
+				if !ok || format["type"] != "json_object" {
+					t.Fatalf("unexpected Responses JSON mode: %#v", text)
+				}
+			},
+			response: `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"ok\":true}"}]}]}`,
+		},
+		{
+			name:     "Chat Completions",
+			protocol: domain.AIProtocolOpenAIChat,
+			assert: func(t *testing.T, payload map[string]any) {
+				format, ok := payload["response_format"].(map[string]any)
+				if !ok || format["type"] != "json_object" {
+					t.Fatalf("unexpected Chat Completions JSON mode: %#v", payload)
+				}
+			},
+			response: `{"choices":[{"message":{"content":"{\"ok\":true}"}}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				tt.assert(t, payload)
+				fmt.Fprint(w, tt.response)
+			}))
+			defer srv.Close()
+			client, err := New(Config{Protocol: tt.protocol, BaseURL: srv.URL, Model: "reasoner"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := client.ChatJSONWithOutputLimit(context.Background(), []Message{{Role: "user", Content: "return JSON"}}, 8192)
+			if err != nil || got != `{"ok":true}` {
+				t.Fatalf("got=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestResponsesParserSelectsFinalOutputText(t *testing.T) {
+	data := []byte(`{
+		"status":"completed",
+		"output":[
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"internal analysis"}]},
+			{"type":"message","content":[{"type":"output_text","text":"{\"result\":\"final\"}"}]}
+		]
+	}`)
+	got, err := parseResponse(domain.AIProtocolOpenAIResponses, data)
+	if err != nil || got != `{"result":"final"}` {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func TestResponsesParserRejectsIncompleteAndNonFinalContent(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "incomplete output",
+			body: `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"partial"}]}]}`,
+		},
+		{
+			name: "reasoning only",
+			body: `{"status":"completed","output":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"not final"}]}]}`,
+		},
+		{
+			name: "refusal only",
+			body: `{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","text":"no"}]}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := parseResponse(domain.AIProtocolOpenAIResponses, []byte(tt.body)); err == nil {
+				t.Fatalf("unexpected result %q", got)
+			}
+		})
+	}
+}
+func TestKeyRedactedFromUpstreamError(t *testing.T) {
+	secret := "super-secret-key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500); fmt.Fprint(w, "oops "+secret) }))
+	defer srv.Close()
+	c, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: srv.URL, Model: "m", APIKey: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}})
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("secret leaked: %v", err)
+	}
+}
+func TestURLAndHeadersValidation(t *testing.T) {
+	if _, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: "file:///tmp/x", Model: "m"}); err == nil {
+		t.Fatal("file URL accepted")
+	}
+	for _, rawURL := range []string{
+		"https://example.com?",
+		"https://example.com:0/v1",
+		"https://example.com:65536/v1",
+		"http://8.8.8.8/v1",
+	} {
+		if _, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: rawURL, Model: "m"}); err == nil {
+			t.Fatalf("unsafe or malformed URL accepted: %s", rawURL)
+		}
+	}
+	if _, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: "https://example.com", Model: "m", CustomHeaders: domain.Headers{"Authorization": "bad"}}); err == nil {
+		t.Fatal("reserved header accepted")
+	}
+	if _, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: "https://example.com", Model: "m", CustomHeaders: domain.Headers{"Bad Header": "value"}}); err == nil {
+		t.Fatal("invalid header name accepted")
+	}
+	client, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: "https://example.com", Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.http.Transport.(*http.Transport).Proxy != nil {
+		t.Fatal("ambient proxy is enabled for secret-bearing AI requests")
+	}
+}
+
+func TestCredentialOriginBindsSchemeHostAndEffectivePort(t *testing.T) {
+	tests := []struct {
+		name       string
+		a, b       string
+		equivalent bool
+	}{
+		{"path may change", "https://AI.example/v1", "https://ai.example/chat", true},
+		{"default HTTPS port", "https://ai.example/v1", "https://ai.example:443/v2", true},
+		{"default HTTP port", "http://127.0.0.1/v1", "http://127.0.0.1:80/v2", true},
+		{"IPv6 spelling", "http://[0:0:0:0:0:0:0:1]/v1", "http://[::1]:80/v2", true},
+		{"scheme changes", "http://127.0.0.1/v1", "https://127.0.0.1/v1", false},
+		{"host changes", "https://ai.example/v1", "https://other.example/v1", false},
+		{"port changes", "https://ai.example/v1", "https://ai.example:8443/v1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SameCredentialOrigin(tt.a, tt.b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.equivalent {
+				t.Fatalf("equivalent=%v want=%v", got, tt.equivalent)
+			}
+		})
+	}
+}
+
+func TestSafeDialerRejectsEveryProhibitedAnswerAndPinsApprovedIP(t *testing.T) {
+	tests := []struct {
+		name      string
+		answers   []net.IP
+		wantError bool
+		wantDial  string
+	}{
+		{"metadata", []net.IP{net.ParseIP("169.254.169.254")}, true, ""},
+		{"mixed answer", []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("169.254.170.2")}, true, ""},
+		{"private provider", []net.IP{net.ParseIP("10.20.30.40")}, false, "10.20.30.40:443"},
+		{"public provider", []net.IP{net.ParseIP("203.0.113.10")}, false, "203.0.113.10:443"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var dialed string
+			dial := safeDialerWithResolver(func(context.Context, string, string) ([]net.IP, error) {
+				return tt.answers, nil
+			}, func(_ context.Context, _, address string) (net.Conn, error) {
+				dialed = address
+				return nil, io.EOF
+			})
+			_, err := dial(context.Background(), "tcp", "provider.example:443")
+			if tt.wantError {
+				if err == nil || dialed != "" {
+					t.Fatalf("err=%v dialed=%q", err, dialed)
+				}
+				return
+			}
+			if !errors.Is(err, io.EOF) || dialed != tt.wantDial {
+				t.Fatalf("err=%v dialed=%q want=%q", err, dialed, tt.wantDial)
+			}
+		})
+	}
+}
+
+func TestRedirectDoesNotForwardProviderCredential(t *testing.T) {
+	secret := "provider-secret"
+	received := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Get("Authorization")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"unexpected"}}]}`)
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+	client, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: redirector.URL, Model: "m", APIKey: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}); err == nil {
+		t.Fatal("redirect was followed")
+	}
+	select {
+	case got := <-received:
+		t.Fatalf("redirect target received credential %q", got)
+	default:
+	}
+}
+
+func TestCallerDeadlineRemainsDetectableAndCredentialIsRedacted(t *testing.T) {
+	secret := "deadline-secret-key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+	}))
+	defer srv.Close()
+	client, err := New(Config{Protocol: domain.AIProtocolOpenAIChat, BaseURL: srv.URL, Model: "m", APIKey: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = client.Chat(ctx, []Message{{Role: "user", Content: "hi"}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("caller deadline identity was lost: %v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("credential leaked from deadline error: %v", err)
+	}
+}

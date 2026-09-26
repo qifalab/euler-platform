@@ -1,0 +1,258 @@
+name: App cloud
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - services/app-cloud/**
+      - services/witshield-engine/**
+      - platform/frontend/**
+      - deploy/app-cloud/**
+      - tools/app-cloud/**
+      - .github/workflows/app-cloud.yml
+  pull_request:
+    paths:
+      - services/app-cloud/**
+      - services/witshield-engine/**
+      - platform/frontend/**
+      - deploy/app-cloud/**
+      - tools/app-cloud/**
+      - .github/workflows/app-cloud.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-cloud-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EULER_TEST_S3_ENDPOINT: '127.0.0.1:19000'
+      EULER_TEST_S3_SECURE: 'false'
+      EULER_TEST_S3_CORS_MODE: external
+    defaults:
+      run:
+        working-directory: services/app-cloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: services/app-cloud/go.sum
+      - name: Generate ephemeral test credentials
+        run: |
+          set -euo pipefail
+          MYSQL_ROOT_PASSWORD=$(openssl rand -hex 32)
+          POSTGRES_PASSWORD=$(openssl rand -hex 32)
+          EULER_TEST_S3_ACCESS_KEY=$(openssl rand -hex 10)
+          EULER_TEST_S3_SECRET_KEY=$(openssl rand -hex 32)
+          EULER_TEST_MYSQL_DSN="root:${MYSQL_ROOT_PASSWORD}@tcp(127.0.0.1:3306)/?parseTime=true"
+          EULER_TEST_POSTGRES_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:5432/postgres?sslmode=disable"
+          for variable in MYSQL_ROOT_PASSWORD POSTGRES_PASSWORD EULER_TEST_S3_ACCESS_KEY \
+            EULER_TEST_S3_SECRET_KEY EULER_TEST_MYSQL_DSN EULER_TEST_POSTGRES_DSN; do
+            printf '::add-mask::%s\n' "${!variable}"
+            printf '%s=%s\n' "$variable" "${!variable}" >> "$GITHUB_ENV"
+          done
+      - name: Start isolated database test services
+        run: |
+          set -euo pipefail
+          docker run --detach --name euler-ci-mysql \
+            --publish 127.0.0.1:3306:3306 \
+            --env MYSQL_ROOT_PASSWORD --env 'MYSQL_ROOT_HOST=%' \
+            --health-cmd='MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP -h 127.0.0.1 -u root --batch --skip-column-names -e "SELECT 1"' \
+            --health-interval=2s --health-timeout=5s --health-retries=60 \
+            mysql:8.4
+          docker run --detach --name euler-ci-postgres \
+            --publish 127.0.0.1:5432:5432 --env POSTGRES_PASSWORD \
+            --health-cmd='PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U postgres -d postgres -qAt -c "SELECT 1"' \
+            --health-interval=2s --health-timeout=5s --health-retries=60 \
+            postgres:17
+          for service in euler-ci-mysql euler-ci-postgres; do
+            ready=false
+            for attempt in $(seq 1 90); do
+              status=$(docker inspect --format '{{.State.Health.Status}}' "$service")
+              if [ "$status" = healthy ]; then
+                ready=true
+                break
+              fi
+              if [ "$status" = unhealthy ] || [ "$(docker inspect --format '{{.State.Running}}' "$service")" != true ]; then
+                break
+              fi
+              sleep 2
+            done
+            if [ "$ready" != true ]; then
+              docker logs --tail 200 "$service"
+              echo "::error::$service failed its authenticated SQL readiness check"
+              exit 1
+            fi
+          done
+      - name: Build pinned official MinIO test fixture
+        env:
+          MINIO_FIXTURE_TAG: RELEASE.2025-09-07T16-13-09Z
+          MINIO_FIXTURE_COMMIT: 07c3a429bfed433e49018cb0f78a52145d4bedeb
+        run: |
+          set -euo pipefail
+          MINIO_FIXTURE_DIR="$RUNNER_TEMP/euler-minio-fixture"
+          mkdir -p "$MINIO_FIXTURE_DIR"
+          # The release registry rejected anonymous pulls. Use public official
+          # source, and fail closed if its tag no longer resolves to this commit.
+          git clone --depth 1 --branch "$MINIO_FIXTURE_TAG" \
+            https://github.com/minio/minio.git "$MINIO_FIXTURE_DIR/source"
+          test "$(git -C "$MINIO_FIXTURE_DIR/source" rev-parse HEAD)" = "$MINIO_FIXTURE_COMMIT"
+          git -C "$MINIO_FIXTURE_DIR/source" show --no-patch --format=fuller HEAD
+          CGO_ENABLED=0 go -C "$MINIO_FIXTURE_DIR/source" build -trimpath \
+            -o "$MINIO_FIXTURE_DIR/minio" . 2>&1 | tee "$MINIO_FIXTURE_DIR/build.log"
+      - name: Start isolated S3 test service
+        env:
+          MINIO_API_CORS_ALLOW_ORIGIN: https://euler.example.test
+          MINIO_BROWSER: 'off'
+        run: |
+          set -euo pipefail
+          export MINIO_ROOT_USER="$EULER_TEST_S3_ACCESS_KEY"
+          export MINIO_ROOT_PASSWORD="$EULER_TEST_S3_SECRET_KEY"
+          MINIO_FIXTURE_DIR="$RUNNER_TEMP/euler-minio-fixture"
+          mkdir -p "$MINIO_FIXTURE_DIR/data"
+          nohup "$MINIO_FIXTURE_DIR/minio" server --address 127.0.0.1:19000 \
+            "$MINIO_FIXTURE_DIR/data" >"$MINIO_FIXTURE_DIR/server.log" 2>&1 &
+          MINIO_FIXTURE_PID=$!
+          echo "$MINIO_FIXTURE_PID" > "$MINIO_FIXTURE_DIR/server.pid"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:19000/minio/health/ready; then
+              exit 0
+            fi
+            if ! kill -0 "$MINIO_FIXTURE_PID" 2>/dev/null; then
+              cat "$MINIO_FIXTURE_DIR/server.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          cat "$MINIO_FIXTURE_DIR/server.log"
+          curl --fail --show-error --max-time 5 http://127.0.0.1:19000/minio/health/ready
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: CGO_ENABLED=0 go build -trimpath ./cmd/server
+      - name: Validate independently embedded device engine and Unix socket protocols
+        working-directory: services/witshield-engine
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+          CGO_ENABLED=0 go build -trimpath ./cmd/witshield-agent
+          CGO_ENABLED=0 go build -trimpath ./cmd/witshield-helper
+      - name: Report fixture failures and stop test services
+        if: always()
+        run: |
+          MINIO_FIXTURE_DIR="$RUNNER_TEMP/euler-minio-fixture"
+          if [ "${{ job.status }}" != success ]; then
+            for service in euler-ci-mysql euler-ci-postgres; do
+              echo "::group::$service fixture logs"
+              docker logs --tail 200 "$service" 2>&1 || true
+              echo "::endgroup::"
+            done
+            for log in build.log server.log; do
+              if [ -f "$MINIO_FIXTURE_DIR/$log" ]; then
+                echo "::group::MinIO fixture $log"
+                tail -n 200 "$MINIO_FIXTURE_DIR/$log"
+                echo "::endgroup::"
+              fi
+            done
+          fi
+          if [ -f "$MINIO_FIXTURE_DIR/server.pid" ]; then
+            kill "$(cat "$MINIO_FIXTURE_DIR/server.pid")" 2>/dev/null || true
+          fi
+          docker rm --force --volumes euler-ci-mysql euler-ci-postgres >/dev/null 2>&1 || true
+
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install --global pnpm@11.21.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter 'console-base^...' build
+      - run: pnpm --filter console-base typecheck
+      - run: pnpm exec vitest run apps/console-base/src/cloud/apps
+      - run: pnpm --filter console-base build
+      - run: pnpm --filter site build
+
+  deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      EULER_PUBLIC_URL: http://localhost:8080
+      EULER_ALLOW_INSECURE_LOOPBACK: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate ephemeral deployment test encryption key
+        run: |
+          set -euo pipefail
+          EULER_ENCRYPTION_KEY=$(openssl rand -base64 32)
+          printf '::add-mask::%s\n' "$EULER_ENCRYPTION_KEY"
+          printf 'EULER_ENCRYPTION_KEY=%s\n' "$EULER_ENCRYPTION_KEY" >> "$GITHUB_ENV"
+      - name: Test WAL backup and recoverable offline restore
+        run: python3 -m unittest discover -s tools/app-cloud -p 'test_*.py' -v
+      - name: Validate Compose without printing configuration
+        run: docker compose -f deploy/app-cloud/compose.yaml config --quiet
+      - name: Build production images
+        run: docker compose -f deploy/app-cloud/compose.yaml --profile maintenance build
+      - name: Start the real non-root services with a fresh data volume
+        run: docker compose -f deploy/app-cloud/compose.yaml up -d --no-build --wait --wait-timeout 90 app-cloud console
+      - name: Verify nginx syntax
+        run: docker compose -f deploy/app-cloud/compose.yaml run --rm --no-deps --entrypoint nginx console -t
+      - name: Check same-origin API and disabled unconfigured login
+        run: |
+          curl --fail --silent http://localhost:8080/readyz
+          curl --fail --silent -H 'X-Euler-Account-Id: forged' http://localhost:8080/api/v1/session \
+            | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["authenticated"] is False; assert s["loginAvailable"] is False'
+          curl --fail --silent http://localhost:8080/ | python3 -c 'import sys; assert "<html" in sys.stdin.read().lower()'
+      - name: Stop test services
+        if: always()
+        run: docker compose -f deploy/app-cloud/compose.yaml down --volumes --remove-orphans
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: services/app-cloud/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install --global pnpm@11.21.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter 'console-base^...' build
+      - name: Install browser, with an official Chrome for Testing fallback
+        run: |
+          if ! pnpm exec playwright install --with-deps chromium; then
+            pnpm exec playwright install-deps chromium
+            python3 ../../tools/app-cloud/install_chrome.py --destination "$RUNNER_TEMP/app-cloud-chrome" >> "$GITHUB_ENV"
+          fi
+      - name: Exercise real backend and SQLite with protocol test services
+        run: pnpm exec playwright test --config playwright.app-cloud.config.ts
+      - name: Save failed browser evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-cloud-browser-failure
+          path: |
+            platform/frontend/test-results/
+            platform/frontend/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 3
