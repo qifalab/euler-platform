@@ -1,0 +1,108 @@
+name: euler-app-cloud
+
+services:
+  app-cloud:
+    build:
+      context: ../..
+      dockerfile: deploy/app-cloud/Dockerfile
+      target: server
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: [/tmp]
+    volumes:
+      - app-cloud-data:/data
+    environment:
+      EULER_HTTP_ADDR: :8080
+      EULER_DATABASE_PATH: /data/app-cloud.db
+      EULER_ENCRYPTION_KEY: ${EULER_ENCRYPTION_KEY:?Set EULER_ENCRYPTION_KEY in .env}
+      EULER_PUBLIC_URL: ${EULER_PUBLIC_URL:-http://localhost:8080}
+      EULER_IDENTITY_MODE: ${EULER_IDENTITY_MODE:-oidc}
+      EULER_OIDC_ISSUER: ${EULER_OIDC_ISSUER:-}
+      EULER_OIDC_CLIENT_ID: ${EULER_OIDC_CLIENT_ID:-}
+      EULER_OIDC_CLIENT_SECRET: ${EULER_OIDC_CLIENT_SECRET:-}
+      EULER_OIDC_REDIRECT_URL: ${EULER_OIDC_REDIRECT_URL:-}
+      EULER_OIDC_TOKEN_AUTH_METHOD: ${EULER_OIDC_TOKEN_AUTH_METHOD:-client_secret_basic}
+      EULER_ALLOW_INSECURE_LOOPBACK: ${EULER_ALLOW_INSECURE_LOOPBACK:-false}
+      EULER_OAUTH2_AUTHORIZATION_ENDPOINT: ${EULER_OAUTH2_AUTHORIZATION_ENDPOINT:-}
+      EULER_OAUTH2_TOKEN_ENDPOINT: ${EULER_OAUTH2_TOKEN_ENDPOINT:-}
+      EULER_OAUTH2_USERINFO_ENDPOINT: ${EULER_OAUTH2_USERINFO_ENDPOINT:-}
+      EULER_OAUTH2_SUBJECT_CLAIM: ${EULER_OAUTH2_SUBJECT_CLAIM:-sub}
+      EULER_OAUTH2_USERINFO_ENVELOPE: ${EULER_OAUTH2_USERINFO_ENVELOPE:-}
+      EULER_PLATFORM_ADMIN_IDENTITIES: ${EULER_PLATFORM_ADMIN_IDENTITIES:-[]}
+      EULER_APP_DATA_DIR: /data/apps
+      EULER_EID_SMTP_ADDRESS: ${EULER_EID_SMTP_ADDRESS:-}
+      EULER_EID_SMTP_FROM: ${EULER_EID_SMTP_FROM:-}
+      EULER_EID_SMTP_USERNAME: ${EULER_EID_SMTP_USERNAME:-}
+      EULER_EID_SMTP_PASSWORD: ${EULER_EID_SMTP_PASSWORD:-}
+      EULER_EID_SMTP_IMPLICIT_TLS: ${EULER_EID_SMTP_IMPLICIT_TLS:-false}
+      EULER_EID_ALLOW_LOCAL_SMTP: ${EULER_EID_ALLOW_LOCAL_SMTP:-false}
+      EULER_EID_WECOM_URL: ${EULER_EID_WECOM_URL:-}
+      EULER_EID_FEISHU_URL: ${EULER_EID_FEISHU_URL:-}
+      EULER_NOTIFY_WECOM_URL: ${EULER_NOTIFY_WECOM_URL:-}
+      EULER_NOTIFY_FEISHU_URL: ${EULER_NOTIFY_FEISHU_URL:-}
+      EULER_WEAUTH_TRUSTED_PROXIES: ${EULER_WEAUTH_TRUSTED_PROXIES:-}
+      EULER_DATABASE_MYSQL_DSN: ${EULER_DATABASE_MYSQL_DSN:-}
+      EULER_DATABASE_POSTGRES_DSN: ${EULER_DATABASE_POSTGRES_DSN:-}
+      EULER_DATABASE_MYSQL_PUBLIC_HOST: ${EULER_DATABASE_MYSQL_PUBLIC_HOST:-}
+      EULER_DATABASE_MYSQL_PUBLIC_PORT: ${EULER_DATABASE_MYSQL_PUBLIC_PORT:-3306}
+      EULER_DATABASE_POSTGRES_PUBLIC_HOST: ${EULER_DATABASE_POSTGRES_PUBLIC_HOST:-}
+      EULER_DATABASE_POSTGRES_PUBLIC_PORT: ${EULER_DATABASE_POSTGRES_PUBLIC_PORT:-5432}
+      EULER_DATABASE_PHPMYADMIN_URL: ${EULER_DATABASE_PHPMYADMIN_URL:-}
+      EULER_DATABASE_ADMINER_URL: ${EULER_DATABASE_ADMINER_URL:-}
+      EULER_STORAGE_S3_ENDPOINT: ${EULER_STORAGE_S3_ENDPOINT:-}
+      EULER_STORAGE_S3_ACCESS_KEY: ${EULER_STORAGE_S3_ACCESS_KEY:-}
+      EULER_STORAGE_S3_SECRET_KEY: ${EULER_STORAGE_S3_SECRET_KEY:-}
+      EULER_STORAGE_S3_REGION: ${EULER_STORAGE_S3_REGION:-us-east-1}
+      EULER_STORAGE_S3_SECURE: ${EULER_STORAGE_S3_SECURE:-true}
+      EULER_STORAGE_S3_PUBLIC_ENDPOINT: ${EULER_STORAGE_S3_PUBLIC_ENDPOINT:-}
+      EULER_STORAGE_S3_CORS_MODE: ${EULER_STORAGE_S3_CORS_MODE:-bucket}
+      EULER_STORAGE_CORS_ORIGINS: ${EULER_STORAGE_CORS_ORIGINS:-}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/readyz]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  console:
+    build:
+      context: ../..
+      dockerfile: deploy/app-cloud/Dockerfile
+      target: console
+    depends_on:
+      app-cloud: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: [/tmp]
+    ports:
+      - "${EULER_BIND_ADDRESS:-127.0.0.1}:${EULER_PORT:-8080}:8080"
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/_health]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  maintenance:
+    profiles: [maintenance]
+    build:
+      context: ../..
+      dockerfile: deploy/app-cloud/Dockerfile
+      target: maintenance
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: [/tmp]
+    volumes:
+      - app-cloud-data:/data
+      - app-cloud-backups:/backups
+    command: [--help]
+
+volumes:
+  app-cloud-data:
+  app-cloud-backups:

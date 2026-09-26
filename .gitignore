@@ -47,6 +47,13 @@ test-results/
 playwright-report/
 .nyc_output/
 
+# Local application cloud credentials, database and backup files
+.env
+.env.local
+services/app-cloud/data/
+services/app-cloud/server
+deploy/app-cloud/backups/
+
 # OS
 .DS_Store
 Thumbs.db
