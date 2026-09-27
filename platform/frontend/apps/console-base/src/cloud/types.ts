@@ -14,6 +14,7 @@ export interface Tenant {
   createdAt: string;
 }
 export interface Project {
+  status?: "active" | "archived";
   id: string;
   tenantId: string;
   name: string;
@@ -33,6 +34,11 @@ export interface Invitation {
   createdAt?: string;
 }
 export interface Application {
+  version?: string;
+  apiVersion?: string;
+  schemaVersion?: number;
+  dependencies?: string[];
+  configuration?: string[];
   id: string;
   name: string;
   category: string;

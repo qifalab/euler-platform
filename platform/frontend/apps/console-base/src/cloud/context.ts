@@ -129,6 +129,7 @@ async function selectTenant(id: string) {
     const preferred = saved(`project:${state.tenantId}`);
     await selectProject(
       result.items.find((item) => item.id === preferred)?.id ??
+        result.items.find((item) => item.status !== "archived")?.id ??
         result.items[0]?.id ??
         "",
     );

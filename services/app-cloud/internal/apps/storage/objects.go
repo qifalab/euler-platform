@@ -152,9 +152,10 @@ func (m *Module) reserve(ctx context.Context, s appkit.Scope, b Bucket, key stri
 }
 func (m *Module) presignUpload(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
 	var input struct {
-		Key         string `json:"key"`
-		Size        int64  `json:"size"`
-		ContentType string `json:"contentType"`
+		Key          string `json:"key"`
+		Size         int64  `json:"size"`
+		ContentType  string `json:"contentType"`
+		ExpectedETag string `json:"expectedETag"`
 	}
 	if e := appkit.Decode(w, r, &input); e != nil {
 		return e
@@ -174,8 +175,24 @@ func (m *Module) presignUpload(w http.ResponseWriter, r *http.Request, s appkit.
 	if e != nil {
 		return e
 	}
+	if p, ok := m.plane.(AdvancedPlane); ok {
+		status, err := p.Versioning(r.Context(), b.Name)
+		if err != nil {
+			return appkit.Unavailable("无法读取版本策略")
+		}
+		if status != "Disabled" {
+			return appkit.Conflict("版本存储桶请使用分片上传")
+		}
+	}
+	etag, e := m.guardTarget(r.Context(), b, input.Key, input.ExpectedETag)
+	if e != nil {
+		return e
+	}
 	id, e := m.reserve(r.Context(), s, b, input.Key, input.Size, input.ContentType)
 	if e != nil {
+		return e
+	}
+	if e = m.recordGuard(r.Context(), id, etag); e != nil {
 		return e
 	}
 	signature, e := m.plane.UploadSignature(r.Context(), b.Name, "staging/"+id, input.Size, input.ContentType, 15*time.Minute)
@@ -204,12 +221,36 @@ func (m *Module) publish(ctx context.Context, s appkit.Scope, b Bucket, id strin
 	if state != "pending" || expiry <= appkit.Now() {
 		return Object{}, appkit.Conflict("上传许可已失效")
 	}
+	// A lost response after CopyObject is recoverable without another version.
+	if p, ok := m.plane.(interface {
+		Published(context.Context, string, string, string) (bool, error)
+	}); ok {
+		done, err := p.Published(ctx, b.Name, "files/"+key, id)
+		if err != nil {
+			return Object{}, appkit.Unavailable("无法核验已发布对象")
+		}
+		if done {
+			if e = m.syncProject(ctx, s); e != nil {
+				return Object{}, e
+			}
+			if _, e = m.rt.DB.ExecContext(ctx, "UPDATE storage_uploads SET state='completed' WHERE id=?", id); e != nil {
+				return Object{}, e
+			}
+			_ = m.purgeStaging(ctx, b.Name, id)
+			v, e := m.plane.Stat(ctx, b.Name, "files/"+key)
+			v.Key = key
+			return v, e
+		}
+	}
+	if e = m.checkGuard(ctx, b, id, key); e != nil {
+		return Object{}, e
+	}
 	source, e := m.plane.Stat(ctx, b.Name, "staging/"+id)
 	if e != nil {
 		return Object{}, appkit.Conflict("临时文件尚未上传成功")
 	}
 	if source.Size != expected {
-		_ = m.plane.Delete(ctx, b.Name, "staging/"+id)
+		_ = m.purgeStaging(ctx, b.Name, id)
 		_, _ = m.rt.DB.ExecContext(ctx, "UPDATE storage_uploads SET state='rejected' WHERE id=?", id)
 		return Object{}, appkit.Conflict("实际文件大小与上传许可不一致，临时文件已拒绝")
 	}
@@ -233,7 +274,19 @@ func (m *Module) publish(ctx context.Context, s appkit.Scope, b Bucket, id strin
 	if e = m.rt.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(used_bytes),0) FROM storage_buckets WHERE tenant_id=? AND project_id=? AND status<>'deleted'", s.TenantID, s.ProjectID).Scan(&used); e != nil {
 		return Object{}, e
 	}
-	if expected-oldSize > q.StorageBytes-used {
+	delta := expected - oldSize
+	if p, ok := m.plane.(AdvancedPlane); ok {
+		status, err := p.Versioning(ctx, b.Name)
+		if err != nil {
+			return Object{}, appkit.Unavailable("无法读取版本策略")
+		}
+		// Suspended buckets may retain a numbered old version too. Reserve the
+		// conservative full size, then reconcile exact totals after the write.
+		if status != "Disabled" {
+			delta = expected
+		}
+	}
+	if delta > q.StorageBytes-used {
 		return Object{}, appkit.Conflict("项目容量不足，文件尚未发布")
 	}
 	op, e := m.start(ctx, s, b.ID, "object.upload", key)
@@ -242,9 +295,13 @@ func (m *Module) publish(ctx context.Context, s appkit.Scope, b Bucket, id strin
 	}
 	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	defer cancel()
-	externalErr := m.plane.Copy(work, b.Name, "staging/"+id, "files/"+key, source.ETag)
-	if externalErr == nil {
-		_ = m.plane.Delete(work, b.Name, "staging/"+id)
+	var externalErr error
+	if p, ok := m.plane.(interface {
+		Publish(context.Context, string, string, string, string, string, string) error
+	}); ok {
+		externalErr = p.Publish(work, b.Name, "staging/"+id, "files/"+key, source.ETag, id, contentType)
+	} else {
+		externalErr = m.plane.Copy(work, b.Name, "staging/"+id, "files/"+key, source.ETag)
 	}
 	e = m.finish(s, op, b.ID, "object.upload", expected-oldSize, externalErr, func(ctx context.Context, tx *sql.Tx) error {
 		_, e := tx.ExecContext(ctx, "UPDATE storage_uploads SET state='completed' WHERE id=?", id)
@@ -260,6 +317,11 @@ func (m *Module) publish(ctx context.Context, s appkit.Scope, b Bucket, id strin
 	if externalErr != nil {
 		return Object{}, appkit.Unavailable("对象发布结果未确认，已保留操作记录")
 	}
+	if e = m.syncProject(work, s); e != nil {
+		return Object{}, e
+	}
+	// Delete staging after the durable completion record, never before it.
+	_ = m.purgeStaging(work, b.Name, id)
 	source.Key = key
 	source.ContentType = contentType
 	return source, nil
@@ -374,7 +436,7 @@ func (m *Module) removeObject(ctx context.Context, s appkit.Scope, b Bucket, key
 	if externalErr != nil {
 		return appkit.Unavailable("删除对象结果未确认")
 	}
-	return nil
+	return m.syncProject(ctx, s)
 }
 func (m *Module) deleteObject(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
 	key := r.URL.Query().Get("key")

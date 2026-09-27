@@ -8,6 +8,7 @@ import {
   watch,
 } from "vue";
 import { useApp } from "../shared";
+import AnalyticsPanel from "./AnalyticsPanel.vue";
 
 type Site = {
   id: string;
@@ -285,18 +286,24 @@ onBeforeUnmount(() => clearInterval(timer));
         >
           接入与计数器
         </button>
+        <button
+          :class="{ active: tab === 'analytics' }"
+          @click="tab = 'analytics'"
+        >
+          趋势、事件与漏斗
+        </button>
       </nav>
       <template v-if="tab === 'overview'">
         <div class="metric-grid">
           <article class="metric violet">
-            <span>累计访问量 · PV</span
+            <span>留存期访问量 · PV</span
             ><strong>{{ number(report?.pageViews) }}</strong
             ><small>每次页面浏览计为一次访问</small>
           </article>
           <article class="metric teal">
             <span>独立访客 · UV</span
             ><strong>{{ number(report?.uniqueVisitors) }}</strong
-            ><small>按当前站点的访客标识去重</small>
+            ><small>按当前站点留存数据的访客标识去重</small>
           </article>
           <article class="metric amber">
             <span>覆盖页面</span
@@ -375,6 +382,11 @@ onBeforeUnmount(() => clearInterval(timer));
           </div>
         </div>
       </template>
+      <AnalyticsPanel
+        v-else-if="tab === 'analytics'"
+        :key="selectedID"
+        :site-id="selectedID"
+      />
       <div v-else-if="integration" class="integration-grid">
         <article class="panel">
           <div class="step">01 · 页面采集</div>

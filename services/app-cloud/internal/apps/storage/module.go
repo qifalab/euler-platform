@@ -75,6 +75,9 @@ CREATE INDEX IF NOT EXISTS storage_logs_scope ON storage_logs(tenant_id,project_
 	if e != nil {
 		return e
 	}
+	if e = m.advancedMigrate(ctx); e != nil {
+		return e
+	}
 	if e = m.ledger.migrate(ctx); e != nil {
 		return e
 	}
@@ -125,6 +128,7 @@ func (m *Module) Handler() http.Handler {
 	appkit.Handle(mux, "PUT /keys/{id}", "manage", m.toggleKey)
 	appkit.Handle(mux, "DELETE /keys/{id}", "manage", m.deleteKey)
 	appkit.Handle(mux, "GET /admin/accounts", "admin", m.overview)
+	m.advancedRoutes(mux)
 	m.ledger.register(mux)
 	return mux
 }
@@ -260,7 +264,7 @@ func (m *Module) overview(w http.ResponseWriter, r *http.Request, s appkit.Scope
 	if e = m.rt.DB.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(expected_bytes),0) FROM storage_uploads WHERE tenant_id=? AND project_id=? AND state='pending' AND expires_at>?", s.TenantID, s.ProjectID, appkit.Now()).Scan(&reserved); e != nil {
 		return e
 	}
-	appkit.JSON(w, 200, map[string]any{"items": items, "quota": q, "usedBytes": used, "objectCount": count, "bucketCount": len(items), "reservedBytes": reserved, "configured": m.plane != nil, "corsMode": m.corsMode()})
+	appkit.JSON(w, 200, map[string]any{"items": items, "quota": q, "usedBytes": used, "objectCount": count, "bucketCount": len(items), "reservedBytes": reserved, "configured": m.plane != nil, "corsMode": m.corsMode(), "advanced": func() bool { _, ok := m.plane.(AdvancedPlane); return ok }()})
 	return nil
 }
 func (m *Module) start(ctx context.Context, s appkit.Scope, bucket, action, key string) (string, error) {
@@ -474,6 +478,9 @@ func (m *Module) deleteBucket(w http.ResponseWriter, r *http.Request, s appkit.S
 	return nil
 }
 func (m *Module) measure(ctx context.Context, b Bucket) (int64, int64, error) {
+	if p, ok := m.plane.(AdvancedPlane); ok {
+		return p.MeasureVersions(ctx, b.Name)
+	}
 	var size, count int64
 	after := ""
 	for {
@@ -606,32 +613,49 @@ func (m *Module) logs(w http.ResponseWriter, r *http.Request, s appkit.Scope) er
 	appkit.JSON(w, 200, map[string]any{"items": out, "offset": offset, "limit": limit})
 	return nil
 }
+func (m *Module) purgeStaging(ctx context.Context, bucket, id string) error {
+	if p, ok := m.plane.(AdvancedPlane); ok {
+		return p.PurgeKey(ctx, bucket, "staging/"+id)
+	}
+	return m.plane.Delete(ctx, bucket, "staging/"+id)
+}
 func (m *Module) cleanup(ctx context.Context) {
 	if m.plane == nil {
 		return
 	}
-	rows, e := m.rt.DB.QueryContext(ctx, "SELECT u.id,b.name,b.tenant_id,b.project_id,b.installation_id FROM storage_uploads u JOIN storage_buckets b ON b.id=u.bucket_id WHERE u.expires_at<? AND u.state<>'expired'", appkit.Now())
+	rows, e := m.rt.DB.QueryContext(ctx, `SELECT u.id,b.name,b.tenant_id,b.project_id,b.installation_id,COALESCE(mp.remote_id,'') FROM storage_uploads u JOIN storage_buckets b ON b.id=u.bucket_id LEFT JOIN storage_multipart mp ON mp.upload_id=u.id WHERE u.expires_at<? AND u.state<>'expired' AND NOT EXISTS (SELECT 1 FROM storage_upload_cleanup c WHERE c.upload_id=u.id)`, appkit.Now())
 	if e != nil {
 		return
 	}
-	type pair struct {
-		id, b string
-		scope appkit.Scope
+	type item struct {
+		id, b, remote string
+		scope         appkit.Scope
 	}
-	var items []pair
+	items := []item{}
 	for rows.Next() {
-		var v pair
-		if rows.Scan(&v.id, &v.b, &v.scope.TenantID, &v.scope.ProjectID, &v.scope.InstallationID) == nil {
+		var v item
+		if rows.Scan(&v.id, &v.b, &v.scope.TenantID, &v.scope.ProjectID, &v.scope.InstallationID, &v.remote) == nil {
 			items = append(items, v)
 		}
 	}
 	rows.Close()
 	for _, v := range items {
-		job, cancel := context.WithTimeout(ctx, 20*time.Second)
-		e = m.plane.Delete(job, v.b, "staging/"+v.id)
+		unlock := m.lock(v.scope)
+		job, cancel := context.WithTimeout(ctx, 30*time.Second)
+		e = nil
+		if v.remote != "" {
+			if p, ok := m.plane.(AdvancedPlane); ok {
+				e = p.AbortMultipart(job, v.b, "staging/"+v.id, v.remote)
+			}
+		}
+		if e == nil || absent(e) {
+			e = m.purgeStaging(job, v.b, v.id)
+		}
 		cancel()
 		if e == nil || absent(e) {
-			_, _ = m.rt.DB.ExecContext(ctx, "UPDATE storage_uploads SET state='expired' WHERE id=?", v.id)
+			_, _ = m.rt.DB.ExecContext(ctx, "UPDATE storage_uploads SET state=CASE WHEN state='completed' THEN state ELSE 'expired' END WHERE id=?", v.id)
+			_, _ = m.rt.DB.ExecContext(ctx, "INSERT OR IGNORE INTO storage_upload_cleanup VALUES(?)", v.id)
 		}
+		unlock()
 	}
 }

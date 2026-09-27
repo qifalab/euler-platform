@@ -44,5 +44,6 @@ RUN addgroup -g 10001 app \
     && adduser -D -H -u 10001 -G app app \
     && mkdir /data /backups && chown 10001:10001 /data /backups
 COPY tools/app-cloud/sqlite_snapshot.py /usr/local/bin/sqlite_snapshot.py
+COPY tools/app-cloud/platform_backup.py tools/app-cloud/deployment_check.py tools/app-cloud/recovery_drill.py /usr/local/bin/
 USER 10001:10001
-ENTRYPOINT ["python3", "/usr/local/bin/sqlite_snapshot.py"]
+ENTRYPOINT ["python3", "/usr/local/bin/platform_backup.py"]

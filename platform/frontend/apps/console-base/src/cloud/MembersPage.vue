@@ -15,6 +15,7 @@ const {
   tenantPath,
   projectPath,
   notify,
+  refreshTenants,
 } = useCloud();
 const members = ref<Member[]>([]);
 const projectMembers = ref<Member[]>([]);
@@ -31,6 +32,8 @@ const grantUser = ref("");
 const grantRole = ref<Role>("member");
 const invitationLink = ref("");
 const invitationExpiry = ref("");
+const deleteTeamOpen = ref(false),
+  deleteTeamName = ref("");
 const confirmation = ref<{
   title: string;
   description: string;
@@ -151,6 +154,24 @@ async function confirm() {
     confirmation.value = null;
     notify("变更已保存。");
     await load();
+  } catch (err) {
+    actionError.value = errorMessage(err);
+  } finally {
+    busy.value = false;
+  }
+}
+async function deleteTeam() {
+  if (!tenant.value || deleteTeamName.value !== tenant.value.name) return;
+  busy.value = true;
+  actionError.value = "";
+  try {
+    await api(tenantPath(), {
+      method: "DELETE",
+      body: { confirmation: deleteTeamName.value },
+    });
+    deleteTeamOpen.value = false;
+    await refreshTenants();
+    notify("空团队已删除。");
   } catch (err) {
     actionError.value = errorMessage(err);
   } finally {
@@ -413,6 +434,51 @@ onBeforeUnmount(() => {
         description="创建限时邀请链接后，自行分享给你信任的成员。"
     /></template>
   </section>
+  <section
+    v-if="tenant?.role === 'owner'"
+    class="panel"
+    style="padding: 24px; margin-top: 24px"
+  >
+    <h2>删除空团队</h2>
+    <p class="muted">
+      团队必须不包含任何项目。含业务资源的项目请继续归档保留，删除空团队会一并移除成员、邀请和团队内普通审计，并保留最终删除记录。
+    </p>
+    <button
+      class="button danger-text"
+      :disabled="busy || state.projects.length > 0"
+      @click="
+        deleteTeamName = '';
+        actionError = '';
+        deleteTeamOpen = true;
+      "
+    >
+      删除空团队
+    </button>
+  </section>
+  <CloudModal v-model="deleteTeamOpen" title="删除空团队">
+    <form class="stack" @submit.prevent="deleteTeam">
+      <p>
+        请输入团队名称
+        <strong>{{ tenant?.name }}</strong> 确认删除，此操作无法恢复。
+      </p>
+      <label class="field"
+        >团队名称<input v-model="deleteTeamName" required autocomplete="off"
+      /></label>
+      <p v-if="actionError" class="form-error" role="alert">
+        {{ actionError }}
+      </p>
+      <div class="modal-actions">
+        <button class="button" type="button" @click="deleteTeamOpen = false">
+          取消</button
+        ><button
+          class="button button-primary"
+          :disabled="busy || deleteTeamName !== tenant?.name"
+        >
+          确认删除团队
+        </button>
+      </div>
+    </form>
+  </CloudModal>
   <CloudModal
     v-model="inviteOpen"
     title="邀请新的协作者"
@@ -423,7 +489,7 @@ onBeforeUnmount(() => {
       @submit.prevent="createInvitation"
     >
       <label class="field"
-        >团队角色<select v-model="inviteRole">
+        >团队角色<select v-model="inviteRole" aria-label="团队角色">
           <option v-for="role in roleOptions" :key="role" :value="role">
             {{ roleLabels[role] }}
           </option>
@@ -468,7 +534,7 @@ onBeforeUnmount(() => {
     :description="`授权仅适用于 ${project?.name ?? '当前项目'}，不会改变团队角色。`"
     ><form class="stack" @submit.prevent="grant">
       <label class="field"
-        >团队成员<select v-model="grantUser" required>
+        >团队成员<select v-model="grantUser" aria-label="团队成员" required>
           <option value="" disabled>选择一名团队成员</option>
           <option
             v-for="member in members"
@@ -479,7 +545,7 @@ onBeforeUnmount(() => {
           </option>
         </select></label
       ><label class="field"
-        >项目角色<select v-model="grantRole">
+        >项目角色<select v-model="grantRole" aria-label="项目角色">
           <option v-for="role in roleOptions" :key="role" :value="role">
             {{ roleLabels[role] }}
           </option>

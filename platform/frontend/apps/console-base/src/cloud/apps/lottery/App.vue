@@ -8,6 +8,13 @@ import {
   ref,
 } from "vue";
 import { useApp } from "../shared";
+import { useRoute } from "vue-router";
+import SignupForm from "./SignupForm.vue";
+import SignupPolicy from "./SignupPolicy.vue";
+const route = useRoute();
+const signupRoom = computed(() =>
+  typeof route.query.signup === "string" ? route.query.signup : "",
+);
 
 type Room = {
   id: string;
@@ -528,7 +535,8 @@ onBeforeUnmount(() => clearInterval(timer));
 </script>
 
 <template>
-  <section class="native-app lottery-app" aria-label="活动抽奖">
+  <SignupForm v-if="signupRoom" :room-id="signupRoom" />
+  <section v-else class="native-app lottery-app" aria-label="活动抽奖">
     <nav class="app-tabs" aria-label="抽奖导航">
       <button :class="{ active: view === 'rooms' }" @click="listView">
         活动房间</button
@@ -1061,6 +1069,11 @@ onBeforeUnmount(() => clearInterval(timer));
             默认每人只能中奖一次</label
           ><button class="button primary" :disabled="busy">保存设置</button>
         </form>
+        <SignupPolicy
+          v-if="app.can('manage')"
+          :key="selectedID"
+          :room-id="selectedID"
+        />
         <article v-if="app.can('manage')" class="panel reset-panel">
           <h3>开启新的抽奖周期</h3>
           <p class="muted">

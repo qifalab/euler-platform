@@ -1,79 +1,77 @@
-> 当前实现进入欧拉独立原生应用阶段。以 [NATIVE-APPS.md](NATIVE-APPS.md) 和各产品功能矩阵为准；以下连接器基线说明保留作为前阶段记录，生产入口已切换到 `/apps/{applicationID}` 原生业务 API。
-
 # 欧拉应用云 · Euler Application Cloud
 
-围绕现有开源产品的统一应用控制台。一个账号可以加入多个团队，在项目中连接身份认证、应用安全、数据库、对象存储和运营工具，并统一管理协作者与操作记录。
+欧拉将 E时代现有开源产品的业务能力整合为独立应用平台。用户通过欧拉登录，在团队和项目中使用八个原生应用，并统一管理成员、服务账号、权限、应用联动和操作记录。
 
-本仓库正在由 IaaS Alpha 转向应用云，完整范围与验收条件见 [实施计划](PLAN.md)。新的应用云是默认开发主线，历史计算、网络与计费实现保留供后续演进；它们不代表已经上线的可售公有云服务。
+**业务代码、页面、数据与授权由欧拉独立维护。八个原项目继续独立运行，无需改造原项目或接入其生产数据库。** 当前主线提供可部署的应用云；仓库实现与测试通过不等于已经完成生产部署或真实外部服务验收。
 
-## 产品与职责
+## 八个原生应用
 
-| 能力 | 产品 | 接入范围 |
+| 应用 | 欧拉内的业务能力 | 功能文档 |
 | --- | --- | --- |
-| 登录身份 | E时代通行证或可配置身份源 | 独立 OAuth/OIDC 客户端及 Euler 会话 |
-| 成员资格 | [EID](https://github.com/miaojilab/emoera-eid) | 当前用户资格摘要、原站办理；旧鉴权保持 |
-| 认证结果 | [Trust](https://github.com/miaojilab/trust-center) | 按认证方案查询状态，不汇集 KYC 材料 |
-| 站点验证 | [WeAuth](https://github.com/ctipscn/weauth) | 真实站点列表、创建和删除，连接外部用户账号 |
-| 数据库 | [ECloud Database](https://github.com/ctipscn/ecloud-database) | 已有数据库摘要与列表，不返回数据库密码 |
-| 对象存储 | [ECloud Storage](https://github.com/ctipscn/ecloud-storage) | 存储用量及桶列表，保留原生数据面 |
-| 运营工具 | [Statistics](https://github.com/ctipscn/ecloud-statistics)、[Lottery](https://github.com/miaojilab/emoera-lottery-system) | 连接项目独立实例及原生控制台 |
-| 服务器安全 | [WitShield](https://github.com/witkitlab/witshield) | 连接独立 Controller，保留原有登录和审批 |
+| EID | 个人资料、身份申请与审核、身份卡、社团报名、面试、录取通知及本人接受 Offer | [EID / Trust](EID-TRUST.md) |
+| Trust | 动态认证方案、材料上传、申请与重提、审核改判、历史、受限外部验证 API | [Trust](TRUST.md) |
+| WeAuth | 站点与域名、密钥、工作量证明、IP 风控、统计、验证组件与集成预览 | [WeAuth](WEAUTH.md) |
+| Database | 实际 MySQL / PostgreSQL 建库、独立凭据、密码轮换、配额、只读限额、资源包及兑换码 | [数据应用](DATA-APPS.md) |
+| Storage | 桶与文件、目录、上传下载、受控分片续传、对象版本、恢复、复制/移动、生命周期、配额与资源包 | [数据应用](DATA-APPS.md)、[存储高级能力](STORAGE-ADVANCED.md) |
+| Statistics | 页面采集、PV/UV、日期趋势、来源和设备、自定义事件、有序漏斗、CSV 与数据留存 | [统计分析](ANALYTICS.md) |
+| Lottery | 活动、公开或资格报名、防刷、参与者、抽奖展示、轮次历史、中奖通知与权益联动 | [活动应用](ACTIVITY-APPS.md)、[应用联动](AUTOMATION.md) |
+| WitShield | 设备、扫描与报告、AI 调查、能力和防御策略、修复准备/审批/回滚、审计、通知和计划 | [WitShield](WITSHIELD.md) |
 
-“连接应用”不会自动部署外部产品，也不会为缺少相应接口的产品提供虚假的单点登录。平台会明确展示未配置、不可用和不支持的能力。各产品继续拥有独立仓库、数据库和部署方式。
+应用在欧拉控制台内办理业务，原生 API 位于 `/api/v1/tenants/{tenantID}/projects/{projectID}/apps/{applicationID}/…`。功能来源、固定上游提交、许可与各模块边界见 [原生应用架构](NATIVE-APPS.md) 及模块中的 `SOURCE.md` / `NOTICE`。
 
-## 平台行为
+## 平台能力
 
-- 团队与项目：同一用户可加入不同团队；项目资源和应用连接有明确归属。
-- 权限：团队 owner/admin 管理全部项目；其他成员按项目角色访问。移除成员后，已有会话的权限立即重新检查。
-- 身份：通行证账号、EID 成员资格、Trust 认证状态和 Euler 管理权限分开处理，不根据邮箱自动合并账号。
-- 会话：服务端会话、HttpOnly Cookie、CSRF、短期一次性登录事务，生产不提供假登录回退。
-- 连接：凭据加密存储，仅调用部署者允许的外部来源；API 响应不包含原始凭据、KYC 表单或数据库密码。
-- 持久化：SQLite 事务与迁移提供单实例部署基线，不把 SQLite 配置成多个写入副本。
-- 审计：团队、项目、权限和应用变更保留操作记录。
+- **统一身份与范围授权。** 欧拉以独立 OIDC 客户端接入通行证，使用自己的服务端会话与 CSRF 校验。团队、项目角色和应用审核/运营权限分别检查，支持应用授权到期。身份源故障自动重试；已有有效会话与新登录的可用性分开处理。
+- **服务账号与开发接入。** 项目服务账号有明确应用、操作范围、到期时间、轮换和撤销。机器 API 采用独立入口和路由白名单；提供当前应用云的 [Python SDK / CLI](../../sdk/app-cloud-python/README.md)。不向机器账号开放个人认证审核、平台运营或 WitShield 人工审批。
+- **应用联动。** Trust 资格、EID 成员状态和活动中奖事件可触发明确配置的站内通知或 Database / Storage 资源包。事件和业务变更同事务落库，执行有持久队列、租约、幂等与失败重试；每次执行重查当前授权和应用状态。资源包为每人每条规则一次性奖励，按模板到期，资格撤销可终止对应权益，不自动延长或重新赠送。
+- **项目生命周期。** 项目可改名、归档、恢复和导出配置清单。归档停止欧拉业务入口并保留数据；删除只允许已归档且不含应用/服务账号记录的空项目，避免隐式删除外部资源。
+- **运行与扩展。** 提供受保护诊断/指标、请求关联 ID、依赖状态、后台维护和审计。可信应用通过代码注册清单声明版本、能力与依赖；启动先检查版本兼容，再迁移并记录。当前没有任意用户上传执行代码的应用市场。
 
-## 开发与部署
+权限与接口细节见 [访问与生命周期](ACCESS-LIFECYCLE.md)，规则和一次性奖励语义见 [应用联动](AUTOMATION.md)。用户的认证资格不会自动转化为项目管理员或产品运营权限。
 
-新的控制服务位于 `services/app-cloud`，默认控制台位于 `platform/frontend/apps/console-base`。
+## 数据与部署边界
 
-生产与本机配置、同源反向代理、卷持久化及维护窗口备份，请按 `deploy/app-cloud/README.md` 操作。真实登录需要创建独立身份源客户端并配置回调；产品连接需要对应产品部署和由用户授权的凭据。
+欧拉核心采用**单后端进程、本机 SQLite 与持久应用目录**。主数据库保存平台及应用业务元数据，每个项目的 WitShield 引擎拥有独立数据目录与派生密钥；个人材料和敏感配置按模块加密保存。当前不支持多个控制面写入副本。
 
-```bash
-# 前端工作区
+MySQL / PostgreSQL 模块在部署者提供的欧拉专用基础引擎内创建业务数据库，不提供自动创建集群、伸缩或故障切换。Storage 使用部署者自己的 S3 兼容服务；欧拉机器接口为 REST，不是通用 S3 SigV4 网关。邮件、通知和 AI 也需要实际可用的外部服务配置，未配置时不得以演示资源代替。
+
+项目归档或服务账号撤销不能撤回已建立的数据库连接、已发出的对象签名或公开文件地址。需要完整隔离时，须在外部数据面同步处理。公开健康检查仅表示进程/核心存储状态；全部业务健康还需检查受保护诊断和实际业务流程。
+
+完整恢复点必须包含欧拉整个应用目录、同一维护窗口内的外部 SQL / S3 数据与配置，以及独立保管的原加密密钥。项目清单导出、单个 SQLite 快照和仅复制当前对象均不能代替全平台备份。以 [RECOVERY.md](RECOVERY.md) 为完整备份/恢复操作指南，以 [发布与回退](../../deploy/app-cloud/RELEASE.md) 管理版本切换。
+
+## 开发与验证
+
+控制服务位于 `services/app-cloud`，WitShield 引擎位于 `services/witshield-engine`，控制台位于 `platform/frontend/apps/console-base`。部署及环境变量见 [部署指南](../../deploy/app-cloud/README.md)。
+
+```sh
+# Node.js 24、pnpm 11.21.0；先按部署说明配置独立环境变量。
 cd platform/frontend
 pnpm install --frozen-lockfile
 pnpm --filter 'console-base^...' build
 pnpm --filter console-base dev
 
-# 后端（另一个终端，先按部署说明配置环境变量）
+# Go 1.27.1，另一个终端，从仓库根目录执行。
 cd services/app-cloud
 go run ./cmd/server
 ```
 
-API 与字段契约见 [API.md](API.md)。浏览器测试使用独立测试身份源和产品协议测试服务，执行真实的登录交换、签名校验、服务端授权、SQLite 持久化与 HTTP 请求；这不构成生产上游的上线验收。
+验收范围包括 Go race 测试、真实本地 HTTP / SQLite 浏览器流程、前端类型及构建、SDK、SQL / S3 集成、设备协议和完整备份恢复测试。具体命令与结果记录见 [VALIDATION.md](VALIDATION.md) 和 [部署指南](../../deploy/app-cloud/README.md)。测试身份源、隔离数据和自动化故障模拟不能替代真实通行证、邮件入箱、AI 效果、容量和生产恢复演练。
 
-## 验证
+## 文档入口
 
-```bash
-cd services/app-cloud
-go test -race ./...
-go vet ./...
+| 主题 | 文档 |
+| --- | --- |
+| 架构与功能来源 | [NATIVE-APPS.md](NATIVE-APPS.md) |
+| 跨应用规则与执行 | [AUTOMATION.md](AUTOMATION.md) |
+| 授权、服务账号、项目归档 | [ACCESS-LIFECYCLE.md](ACCESS-LIFECYCLE.md) |
+| 访问分析、事件、漏斗、留存 | [ANALYTICS.md](ANALYTICS.md) |
+| 分片、版本、生命周期、配额 | [STORAGE-ADVANCED.md](STORAGE-ADVANCED.md) |
+| 身份恢复、探针、诊断、指标 | [OPERATIONS.md](OPERATIONS.md) |
+| 完整备份与恢复 | [RECOVERY.md](RECOVERY.md) |
+| 预发布、发布与回退 | [RELEASE.md](../../deploy/app-cloud/RELEASE.md) |
+| 当前 Python SDK / CLI | [sdk/app-cloud-python](../../sdk/app-cloud-python/README.md) |
+| 验收记录与阶段目标 | [VALIDATION.md](VALIDATION.md)、[COMPLETION-GOAL.md](COMPLETION-GOAL.md) |
 
-cd ../../platform/frontend
-pnpm --filter 'console-base^...' build
-pnpm --filter console-base typecheck
-pnpm --filter console-base build
-pnpm exec playwright test --config playwright.app-cloud.config.ts
-```
+## 历史资料
 
-测试环境需 Go、Node.js、pnpm 和 Playwright Chromium。配置 `PLAYWRIGHT_EXECUTABLE_PATH` 可使用本机已安装的兼容 Chromium，避免依赖个人机器绝对路径。
-
-## 文档与历史
-
-- [总体计划、里程碑与完成标准](PLAN.md)
-- [接口与模块契约](API.md)
-- [验收结果与部署边界](VALIDATION.md)
-- `deploy/app-cloud/README.md`：运行、配置、备份、恢复与故障诊断
-- `docs/archive/iaas-alpha-readme.md`：历史 IaaS 产品设想，不能作为当前能力清单
-- `docs/architecture/`：历史架构资料，冲突处以应用云计划与实现为准
-
-本次集成不改变各接入产品的许可证或其独立部署边界。
+[PLAN.md](PLAN.md)、[早期 API / 连接器契约](API.md) 和 [连接器说明](../../services/app-cloud/internal/connectors/README.md) 保留早期设计记录。其中外部账号连接、跳转原产品办理和连接器资源摘要的描述，不代表当前原生业务模式。历史 [IaaS Alpha 说明](../archive/iaas-alpha-readme.md)、`docs/architecture/`、`sdk/python` 与 `sdk/terraform` 也不作为当前应用云能力承诺；以本页、原生模块文档和当前实现为准。

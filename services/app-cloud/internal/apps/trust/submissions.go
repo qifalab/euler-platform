@@ -464,6 +464,9 @@ func (m *Module) review(w http.ResponseWriter, r *http.Request, s appkit.Scope) 
 		if e = m.enqueue(r.Context(), tx, s, id, v.SchemeName, action, b.Status); e != nil {
 			return e
 		}
+		if e = appkit.Emit(r.Context(), tx, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "trust.status", SubjectID: v.ActorID, ResourceID: id, FilterID: v.SchemeID, Status: b.Status, Version: strconv.Itoa(v.Version + 1)}); e != nil {
+			return e
+		}
 		return m.rt.Audit(r.Context(), tx, s, "review."+action, id, "更新认证审核结果")
 	})
 	if e != nil {

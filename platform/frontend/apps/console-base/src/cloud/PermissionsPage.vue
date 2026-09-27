@@ -11,6 +11,7 @@ interface Grant {
   displayName: string;
   permission: string;
   createdAt: number;
+  expiresAt?: number;
 }
 const { state, tenantPath, projectPath, notify } = useCloud();
 const grants = ref<Grant[]>([]),
@@ -21,6 +22,7 @@ const loading = ref(true),
 const applicationId = ref("trust"),
   userId = ref(""),
   permission = ref("review");
+const expiryDays = ref(30);
 const controller = new AbortController();
 async function load() {
   if (!state.session?.platformAdmin) {
@@ -62,6 +64,9 @@ async function grant() {
         applicationId: applicationId.value,
         userId: userId.value,
         permission: permission.value,
+        expiresAt: expiryDays.value
+          ? Date.now() + expiryDays.value * 86400000
+          : 0,
       },
     });
     await load();
@@ -130,6 +135,13 @@ onBeforeUnmount(() => controller.abort());
             <option value="review">认证审核</option>
             <option value="admin">产品运营</option>
           </select></label
+        ><label class="field"
+          >有效期<select v-model="expiryDays" aria-label="授权有效期">
+            <option :value="7">7 天</option>
+            <option :value="30">30 天</option>
+            <option :value="90">90 天</option>
+            <option :value="0">长期有效</option>
+          </select></label
         ><button class="button button-primary" :disabled="busy || !userId">
           授予权限
         </button>
@@ -155,6 +167,13 @@ onBeforeUnmount(() => controller.abort());
             <small class="muted">{{
               formatDate(new Date(g.createdAt).toISOString())
             }}</small>
+            <p class="muted">
+              {{
+                g.expiresAt
+                  ? `到期 ${formatDate(new Date(g.expiresAt).toISOString())}${g.expiresAt <= Date.now() ? " · 已失效" : ""}`
+                  : "长期有效"
+              }}
+            </p>
           </div>
           <button class="button" :disabled="busy" @click="revoke(g)">
             撤销授权
@@ -176,7 +195,7 @@ onBeforeUnmount(() => controller.abort());
 }
 .permission-fields {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
+  grid-template-columns: repeat(4, 1fr) auto;
   gap: 16px;
   align-items: end;
   margin: 22px 0;

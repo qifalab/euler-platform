@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/apps/trust"
@@ -249,6 +250,9 @@ func (m *Module) changeClub(ctx context.Context, s appkit.Scope, a ClubApplicati
 		if n != 1 {
 			return appkit.Conflict("记录已更新，请刷新")
 		}
+		if err := appkit.Emit(ctx, tx, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "eid.status", SubjectID: a.ActorID, ResourceID: a.ID, FilterID: "club", Status: status, Version: strconv.FormatInt(a.Version+1, 10)}); err != nil {
+			return err
+		}
 		return m.event(ctx, tx, s, a.ID, action, a.Status, status)
 	})
 }
@@ -296,6 +300,9 @@ func (m *Module) deleteClub(w http.ResponseWriter, r *http.Request, s appkit.Sco
 		_, e := tx.ExecContext(r.Context(), "DELETE FROM eid_club WHERE "+scoped+" AND id=?", append(scopeArgs(s), a.ID)...)
 		if e != nil {
 			return e
+		}
+		if err := appkit.Emit(r.Context(), tx, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "eid.status", SubjectID: a.ActorID, ResourceID: a.ID, FilterID: "club", Status: "deleted", Version: strconv.FormatInt(a.Version+1, 10)}); err != nil {
+			return err
 		}
 		return m.event(r.Context(), tx, s, a.ID, "club.delete", a.Status, "deleted")
 	})

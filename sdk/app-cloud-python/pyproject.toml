@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "euler-app-cloud"
+version = "0.2.0"
+description = "Project-scoped service-account SDK and CLI for Euler Application Cloud"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+euler-cloud = "euler_cloud.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -47,6 +47,11 @@ type Application struct {
 	Capabilities   []string `json:"capabilities"`
 	ConnectionMode string   `json:"connectionMode"`
 	Limitations    []string `json:"limitations"`
+	Version        string   `json:"version,omitempty"`
+	APIVersion     string   `json:"apiVersion,omitempty"`
+	SchemaVersion  int      `json:"schemaVersion,omitempty"`
+	Dependencies   []string `json:"dependencies,omitempty"`
+	Configuration  []string `json:"configuration,omitempty"`
 }
 
 type Metric struct {

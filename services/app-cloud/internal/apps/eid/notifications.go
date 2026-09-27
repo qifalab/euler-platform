@@ -14,6 +14,7 @@ import (
 	"net/smtp"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -222,6 +223,9 @@ func (m *Module) sendClubNotification(w http.ResponseWriter, r *http.Request, s 
 		_, e = tx.ExecContext(finish, "UPDATE eid_notifications SET state='sent',completed_at=? WHERE id=? AND "+scoped, append([]any{appkit.Now(), id}, scopeArgs(s)...)...)
 		if e != nil {
 			return e
+		}
+		if err := appkit.Emit(finish, tx, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "eid.status", SubjectID: a.ActorID, ResourceID: a.ID, FilterID: "club", Status: next, Version: strconv.FormatInt(a.Version+1, 10)}); err != nil {
+			return err
 		}
 		return m.event(finish, tx, s, a.ID, "club."+kind, a.Status, next)
 	})

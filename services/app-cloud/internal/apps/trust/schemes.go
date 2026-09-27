@@ -237,6 +237,32 @@ func (m *Module) updateScheme(w http.ResponseWriter, r *http.Request, s appkit.S
 		if e != nil {
 			return e
 		}
+		if old.Status != v.Status {
+			rows, err := tx.QueryContext(r.Context(), "SELECT id,actor_id FROM trust_submissions WHERE tenant_id=? AND project_id=? AND scheme_id=?", s.TenantID, s.ProjectID, id)
+			if err != nil {
+				return err
+			}
+			type subject struct{ id, actor string }
+			subjects := []subject{}
+			for rows.Next() {
+				var item subject
+				if err = rows.Scan(&item.id, &item.actor); err != nil {
+					rows.Close()
+					return err
+				}
+				subjects = append(subjects, item)
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return err
+			}
+			for _, item := range subjects {
+				if err = appkit.Emit(r.Context(), tx, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "trust.status", SubjectID: item.actor, ResourceID: item.id, FilterID: id, Status: v.Status, Version: "scheme:" + v.UpdatedAt}); err != nil {
+					return err
+				}
+			}
+		}
 		return m.rt.Audit(r.Context(), tx, s, "scheme.update", id, "更新认证方案")
 	})
 	if e == nil {

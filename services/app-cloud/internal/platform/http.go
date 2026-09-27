@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
+	"github.com/qifalab/euler-platform/services/app-cloud/internal/automation"
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/connectors"
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/identity"
 )
@@ -23,6 +24,7 @@ type Authenticator interface {
 }
 type Handler struct {
 	store          *Store
+	automation     *automation.Engine
 	auth           Authenticator
 	connectors     *connectors.Manager
 	mux            *http.ServeMux
@@ -38,6 +40,9 @@ func NewHandler(store *Store, auth Authenticator, products *connectors.Manager, 
 	}
 	h.routes()
 	h.nativeRoutes()
+	h.automationRoutes()
+	h.accessRoutes()
+	h.lifecycleRoutes()
 	return h
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +57,10 @@ func (h *Handler) route(pattern string, fn endpoint) {
 	h.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		if h.auth == nil {
 			writeError(w, "unauthenticated", "Sign in is required", 401)
+			return
+		}
+		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer euler_sa_") {
+			writeError(w, "machine_endpoint_required", "Service accounts must use the machine API", 401)
 			return
 		}
 		p, session, e := h.auth.Authenticate(r)
@@ -142,7 +151,11 @@ func (h *Handler) routes() {
 		}
 		p, s, e := h.auth.Authenticate(r)
 		if e != nil {
-			writeJSON(w, 200, map[string]any{"authenticated": false, "loginAvailable": true})
+			available := true
+			if status, ok := h.auth.(interface{ LoginAvailable() bool }); ok {
+				available = status.LoginAvailable()
+			}
+			writeJSON(w, 200, map[string]any{"authenticated": false, "loginAvailable": available})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"authenticated": true, "loginAvailable": true, "platformAdmin": h.isPlatformAdmin(p), "csrfToken": s.CSRFToken, "user": map[string]string{"id": p.ID, "displayName": p.Name, "provider": p.Provider, "subject": p.Subject}})
@@ -323,7 +336,7 @@ func (h *Handler) routes() {
 			return e
 		}
 		found := false
-		for _, a := range h.connectors.Catalog() {
+		for _, a := range h.catalog() {
 			if a.ID == b.ApplicationID {
 				found = true
 			}

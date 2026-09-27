@@ -1,15 +1,24 @@
 package trust
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type materialPrivate struct {
@@ -131,6 +140,12 @@ func (m *Module) uploadMaterial(w http.ResponseWriter, r *http.Request, s appkit
 	if e != nil {
 		return e
 	}
+	// Store only ciphertext in the dedicated private S3 bucket. The encrypted
+	// database reference carries no capability to bypass Trust authorization.
+	enc, e = m.storeMaterialBody(r.Context(), id, enc)
+	if e != nil {
+		return e
+	}
 	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
 		current, err := getScheme(r.Context(), tx, s, schemeID)
 		if err != nil {
@@ -151,6 +166,9 @@ func (m *Module) uploadMaterial(w http.ResponseWriter, r *http.Request, s appkit
 		}
 		return m.rt.Audit(r.Context(), tx, s, "material.upload", id, "上传认证材料")
 	})
+	if e != nil {
+		m.cleanupMaterialAfterFailure(id)
+	}
 	if e == nil {
 		appkit.JSON(w, 201, v)
 	}
@@ -181,7 +199,7 @@ func (m *Module) serveMaterial(w http.ResponseWriter, r *http.Request, s appkit.
 	return m.writeMaterial(w, r, s, v, p)
 }
 func (m *Module) writeMaterial(w http.ResponseWriter, r *http.Request, s appkit.Scope, v Material, p materialPrivate) error {
-	plain, e := m.rt.Decrypt(p.Body, "trust:material-body:"+v.ID)
+	plain, e := m.readMaterialBody(r.Context(), v.ID, p.Body)
 	if e != nil {
 		return e
 	}
@@ -225,7 +243,206 @@ func (m *Module) deleteMaterial(w http.ResponseWriter, r *http.Request, s appkit
 		return m.rt.Audit(r.Context(), tx, s, "material.delete", id, "删除未提交材料")
 	})
 	if e == nil {
+		// Logical deletion is committed first. A failed physical deletion is
+		// retained in the object ledger and retried by hourly maintenance.
+		_ = m.cleanupMaterialObject(r.Context(), id)
 		appkit.JSON(w, 204, nil)
 	}
 	return e
+}
+
+// Material storage deliberately uses a bucket outside storage_buckets. A
+// project Storage administrator never gains Trust material access through it.
+const materialObjectPrefix = "euler-private-material-v1:"
+
+type materialObjectRef struct {
+	Bucket string `json:"bucket"`
+	Key    string `json:"key"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+func (m *Module) materialObjectTables(ctx context.Context) error {
+	_, e := m.rt.DB.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS trust_material_objects(material_id TEXT PRIMARY KEY,bucket TEXT NOT NULL,object_key TEXT NOT NULL,created_at TEXT NOT NULL)`)
+	return e
+}
+func materialEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return os.Getenv(fallback)
+}
+func (m *Module) materialS3(ctx context.Context, bucket string) (*minio.Client, error) {
+	dedicatedEndpoint := os.Getenv("EULER_TRUST_MATERIAL_S3_ENDPOINT")
+	dedicatedAccess, dedicatedSecret := os.Getenv("EULER_TRUST_MATERIAL_S3_ACCESS_KEY"), os.Getenv("EULER_TRUST_MATERIAL_S3_SECRET_KEY")
+	if (dedicatedAccess == "") != (dedicatedSecret == "") {
+		return nil, appkit.Unavailable("认证材料对象存储凭据必须成对配置")
+	}
+	if dedicatedEndpoint != "" && dedicatedEndpoint != os.Getenv("EULER_STORAGE_S3_ENDPOINT") && (dedicatedAccess == "" || dedicatedSecret == "") {
+		return nil, appkit.Unavailable("独立认证材料存储端点必须配置独立凭据")
+	}
+	endpoint := materialEnv("EULER_TRUST_MATERIAL_S3_ENDPOINT", "EULER_STORAGE_S3_ENDPOINT")
+	access := materialEnv("EULER_TRUST_MATERIAL_S3_ACCESS_KEY", "EULER_STORAGE_S3_ACCESS_KEY")
+	secret := materialEnv("EULER_TRUST_MATERIAL_S3_SECRET_KEY", "EULER_STORAGE_S3_SECRET_KEY")
+	if endpoint == "" || access == "" || secret == "" || bucket == "" {
+		return nil, appkit.Unavailable("认证材料私有对象存储尚未配置")
+	}
+	p, e := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(access, secret, ""), Secure: materialEnv("EULER_TRUST_MATERIAL_S3_SECURE", "EULER_STORAGE_S3_SECURE") != "false", Region: materialEnv("EULER_TRUST_MATERIAL_S3_REGION", "EULER_STORAGE_S3_REGION")})
+	if e != nil {
+		return nil, appkit.Unavailable("认证材料对象存储配置无效")
+	}
+	// Refuse accidental reuse of a project-visible bucket even if it currently
+	// has private ACL: project administrators can change that ACL later.
+	var hasTable int
+	if e = m.rt.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='storage_buckets'").Scan(&hasTable); e != nil {
+		return nil, e
+	}
+	if hasTable > 0 {
+		var shared int
+		if e = m.rt.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM storage_buckets WHERE name=?", bucket).Scan(&shared); e != nil {
+			return nil, e
+		}
+		if shared > 0 {
+			return nil, appkit.Unavailable("认证材料必须使用独立私有桶")
+		}
+	}
+	policy, e := p.GetBucketPolicy(ctx, bucket)
+	if e != nil && minio.ToErrorResponse(e).Code != "NoSuchBucketPolicy" {
+		return nil, appkit.Unavailable("无法确认认证材料桶的私有策略")
+	}
+	if strings.TrimSpace(policy) != "" {
+		return nil, appkit.Unavailable("认证材料桶不能配置公开访问策略")
+	}
+	return p, nil
+}
+func (m *Module) storeMaterialBody(ctx context.Context, id string, cipher []byte) ([]byte, error) {
+	bucket := os.Getenv("EULER_TRUST_MATERIAL_S3_BUCKET")
+	if bucket == "" {
+		return cipher, nil
+	}
+	if e := m.materialObjectTables(ctx); e != nil {
+		return nil, e
+	}
+	p, e := m.materialS3(ctx, bucket)
+	if e != nil {
+		return nil, e
+	}
+	digest := sha256.Sum256(cipher)
+	ref := materialObjectRef{Bucket: bucket, Key: "materials/" + id + "/" + appkit.NewID("blob_"), SHA256: hex.EncodeToString(digest[:]), Size: int64(len(cipher))}
+	// A durable ledger precedes the external write. Orphans remain discoverable
+	// after a crash or a later scheme/transaction deletion.
+	if _, e = m.rt.DB.ExecContext(ctx, "INSERT INTO trust_material_objects VALUES(?,?,?,?)", id, ref.Bucket, ref.Key, appkit.Now()); e != nil {
+		return nil, e
+	}
+	if _, e = p.PutObject(ctx, bucket, ref.Key, bytes.NewReader(cipher), int64(len(cipher)), minio.PutObjectOptions{ContentType: "application/octet-stream"}); e != nil {
+		m.cleanupMaterialAfterFailure(id)
+		return nil, appkit.Unavailable("认证材料密文写入未确认")
+	}
+	raw, e := json.Marshal(ref)
+	if e != nil {
+		return nil, e
+	}
+	return m.rt.Encrypt(materialObjectPrefix+string(raw), "trust:material-body:"+id)
+}
+func (m *Module) readMaterialBody(ctx context.Context, id string, cipher []byte) (string, error) {
+	plain, e := m.rt.Decrypt(cipher, "trust:material-body:"+id)
+	if e != nil {
+		return "", e
+	}
+	if !strings.HasPrefix(plain, materialObjectPrefix) {
+		return plain, nil
+	}
+	var ref materialObjectRef
+	if e = json.Unmarshal([]byte(strings.TrimPrefix(plain, materialObjectPrefix)), &ref); e != nil || ref.Size < 1 || ref.Size > 16<<20 || !strings.HasPrefix(ref.Key, "materials/"+id+"/") {
+		return "", appkit.Unavailable("认证材料引用无效")
+	}
+	p, e := m.materialS3(ctx, ref.Bucket)
+	if e != nil {
+		return "", e
+	}
+	object, e := p.GetObject(ctx, ref.Bucket, ref.Key, minio.GetObjectOptions{})
+	if e != nil {
+		return "", appkit.Unavailable("无法读取认证材料密文")
+	}
+	defer object.Close()
+	data, e := io.ReadAll(io.LimitReader(object, ref.Size+1))
+	if e != nil || int64(len(data)) != ref.Size {
+		return "", appkit.Unavailable("认证材料密文不完整")
+	}
+	digest := sha256.Sum256(data)
+	if hex.EncodeToString(digest[:]) != ref.SHA256 {
+		return "", appkit.Unavailable("认证材料完整性校验失败")
+	}
+	return m.rt.Decrypt(data, "trust:material-body:"+id)
+}
+func (m *Module) cleanupMaterialObject(ctx context.Context, id string) error {
+	var ref materialObjectRef
+	e := m.rt.DB.QueryRowContext(ctx, "SELECT bucket,object_key FROM trust_material_objects WHERE material_id=?", id).Scan(&ref.Bucket, &ref.Key)
+	if e == sql.ErrNoRows {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	p, e := m.materialS3(ctx, ref.Bucket)
+	if e != nil {
+		return e
+	}
+	// Remove every version. Normal S3 deletion could retain a hidden ciphertext
+	// version indefinitely when the operator enables versioning on the bucket.
+	for v := range p.ListObjects(ctx, ref.Bucket, minio.ListObjectsOptions{Prefix: ref.Key, Recursive: true, WithVersions: true}) {
+		if v.Err != nil {
+			return appkit.Unavailable("认证材料清理未确认")
+		}
+		if v.Key != ref.Key {
+			continue
+		}
+		if e = p.RemoveObject(ctx, ref.Bucket, ref.Key, minio.RemoveObjectOptions{VersionID: v.VersionID}); e != nil {
+			return appkit.Unavailable("认证材料清理未确认")
+		}
+	}
+	_, e = m.rt.DB.ExecContext(ctx, "DELETE FROM trust_material_objects WHERE material_id=?", id)
+	return e
+}
+
+// Maintain is called immediately after startup and hourly by the app-cloud
+// maintenance loop. Its grace period avoids deleting an in-flight upload.
+func (m *Module) Maintain(ctx context.Context) error { return m.CleanupMaterialObjects(ctx) }
+func (m *Module) CleanupMaterialObjects(ctx context.Context) error {
+	if e := m.materialObjectTables(ctx); e != nil {
+		return e
+	}
+	rows, e := m.rt.DB.QueryContext(ctx, `SELECT o.material_id FROM trust_material_objects o LEFT JOIN trust_materials m ON m.id=o.material_id WHERE m.id IS NULL AND o.created_at<? LIMIT 100`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano))
+	if e != nil {
+		return e
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return e
+		}
+		ids = append(ids, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	var failures []error
+	for _, id := range ids {
+		if e = m.cleanupMaterialObject(ctx, id); e != nil {
+			failures = append(failures, e)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// Compensation must not outlive a failed request indefinitely. The durable
+// ledger remains for hourly retries if the data plane is unavailable.
+func (m *Module) cleanupMaterialAfterFailure(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = m.cleanupMaterialObject(ctx, id)
 }

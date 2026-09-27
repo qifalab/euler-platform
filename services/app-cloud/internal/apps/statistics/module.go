@@ -38,7 +38,10 @@ CREATE INDEX IF NOT EXISTS statistics_views_site_time ON statistics_views(site_i
 CREATE INDEX IF NOT EXISTS statistics_views_site_url ON statistics_views(site_id,url);
 CREATE INDEX IF NOT EXISTS statistics_views_rate ON statistics_views(site_id,ip_hash,visited_at);
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	return m.migrateAnalytics(ctx)
 }
 
 type site struct {
@@ -76,6 +79,12 @@ func (m *Module) Handler() http.Handler {
 	appkit.Handle(x, "PATCH /sites/{id}", "manage", m.update)
 	appkit.Handle(x, "GET /sites/{id}/report", "read", m.report)
 	appkit.Handle(x, "GET /sites/{id}/integration", "read", m.integration)
+	appkit.Handle(x, "GET /sites/{id}/analytics", "read", m.analytics)
+	appkit.Handle(x, "GET /sites/{id}/export.csv", "read", m.exportCSV)
+	appkit.Handle(x, "GET /sites/{id}/settings", "read", m.settings)
+	appkit.Handle(x, "PUT /sites/{id}/settings", "manage", m.saveSettings)
+	appkit.Handle(x, "POST /sites/{id}/cleanup", "manage", m.cleanup)
+	appkit.Handle(x, "POST /sites/{id}/funnel", "read", m.funnel)
 	return x
 }
 func (m *Module) list(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
@@ -215,8 +224,12 @@ func (m *Module) report(w http.ResponseWriter, r *http.Request, s appkit.Scope) 
 	}
 	page := pageParam(r.URL.Query().Get("page"), 1, 1000000)
 	size := pageParam(r.URL.Query().Get("pageSize"), 20, 100)
+	period, e := m.readPeriod(r, v.ID, false)
+	if e != nil {
+		return e
+	}
 	var pv, uv, total int
-	e = m.rt.DB.QueryRowContext(r.Context(), "SELECT COUNT(*),COUNT(DISTINCT visitor_hash),COUNT(DISTINCT url) FROM statistics_views WHERE site_id=?", v.ID).Scan(&pv, &uv, &total)
+	e = m.rt.DB.QueryRowContext(r.Context(), "SELECT COUNT(*),COUNT(DISTINCT visitor_hash),COUNT(DISTINCT url) FROM statistics_views WHERE site_id=? AND visited_at>=? AND visited_at<?", v.ID, period.Start, period.End).Scan(&pv, &uv, &total)
 	if e != nil {
 		return e
 	}
@@ -224,7 +237,7 @@ func (m *Module) report(w http.ResponseWriter, r *http.Request, s appkit.Scope) 
 	if pages > 0 && page > pages {
 		page = pages
 	}
-	rows, e := m.rt.DB.QueryContext(r.Context(), "SELECT url,COUNT(*),COUNT(DISTINCT visitor_hash),MAX(visited_at) FROM statistics_views WHERE site_id=? GROUP BY url ORDER BY COUNT(*) DESC,url ASC LIMIT ? OFFSET ?", v.ID, size, (page-1)*size)
+	rows, e := m.rt.DB.QueryContext(r.Context(), "SELECT url,COUNT(*),COUNT(DISTINCT visitor_hash),MAX(visited_at) FROM statistics_views WHERE site_id=? AND visited_at>=? AND visited_at<? GROUP BY url ORDER BY COUNT(*) DESC,url ASC LIMIT ? OFFSET ?", v.ID, period.Start, period.End, size, (page-1)*size)
 	if e != nil {
 		return e
 	}
@@ -246,7 +259,7 @@ func (m *Module) report(w http.ResponseWriter, r *http.Request, s appkit.Scope) 
 	if e = rows.Err(); e != nil {
 		return e
 	}
-	appkit.JSON(w, 200, map[string]any{"pageViews": pv, "uniqueVisitors": uv, "topPages": ranks, "pagination": map[string]int{"currentPage": page, "pageSize": size, "total": total, "totalPages": pages}, "refreshedAt": appkit.Now()})
+	appkit.JSON(w, 200, map[string]any{"pageViews": pv, "uniqueVisitors": uv, "topPages": ranks, "pagination": map[string]int{"currentPage": page, "pageSize": size, "total": total, "totalPages": pages}, "period": period, "refreshedAt": appkit.Now()})
 	return nil
 }
 func (m *Module) publicBase() string {
@@ -258,7 +271,7 @@ func (m *Module) integration(w http.ResponseWriter, r *http.Request, s appkit.Sc
 		return e
 	}
 	base := m.publicBase() + "/sites/" + v.PublicID
-	appkit.JSON(w, 200, map[string]string{"trackerURL": base + "/tracker.js", "widgetURL": base + "/widget.js", "helperURL": base + "/helper.js", "collectURL": base + "/collect", "pageViewsURL": base + "/page-views", "note": "仅配置域名可上报；URL 查询参数和片段会移除，访客与 IP 仅保存站点隔离的 HMAC 摘要。"})
+	appkit.JSON(w, 200, map[string]string{"trackerURL": base + "/tracker.js", "widgetURL": base + "/widget.js", "helperURL": base + "/helper.js", "collectURL": base + "/collect", "eventURL": base + "/events", "pageViewsURL": base + "/page-views", "note": "仅配置域名可上报；URL 查询参数和片段会移除，访客与 IP 仅保存站点隔离的 HMAC 摘要。"})
 	return nil
 }
 func (m *Module) PublicHandler() http.Handler {
@@ -275,6 +288,16 @@ func (m *Module) PublicHandler() http.Handler {
 		}
 	}
 	x.HandleFunc("POST /sites/{publicID}/collect", wrap(m.collect))
+	x.HandleFunc("POST /sites/{publicID}/events", wrap(m.collectEvent))
+	x.HandleFunc("OPTIONS /sites/{publicID}/events", wrap(func(w http.ResponseWriter, r *http.Request, s site) error {
+		if e := origin(w, r, s, true); e != nil {
+			return e
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(204)
+		return nil
+	}))
 	x.HandleFunc("OPTIONS /sites/{publicID}/collect", wrap(func(w http.ResponseWriter, r *http.Request, s site) error {
 		if e := origin(w, r, s, true); e != nil {
 			return e
@@ -370,20 +393,10 @@ func (m *Module) collect(w http.ResponseWriter, r *http.Request, s site) error {
 	}
 	ipHash := m.digest(s.ID+"/ip", ip)
 	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
-		var enabled, rate int
-		if e := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM statistics_sites s JOIN installations i ON i.id=s.installation_id WHERE s.id=? AND s.enabled=1 AND i.status='enabled'", s.ID).Scan(&enabled); e != nil {
+		if e := m.acceptCollection(r.Context(), tx, s.ID, ipHash); e != nil {
 			return e
 		}
-		if enabled == 0 {
-			return appkit.NotFound()
-		}
-		if e := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM statistics_views WHERE site_id=? AND ip_hash=? AND visited_at>?", s.ID, ipHash, time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)).Scan(&rate); e != nil {
-			return e
-		}
-		if rate >= 120 {
-			return &appkit.Error{Status: 429, Code: "rate_limited", Message: "上报过于频繁，请稍后重试"}
-		}
-		_, e := tx.ExecContext(r.Context(), "INSERT INTO statistics_views(site_id,visitor_hash,ip_hash,url,referrer,title,resolution,language,user_agent,visited_at) VALUES(?,?,?,?,?,?,?,?,?,?)", s.ID, m.digest(s.ID+"/visitor", in.VisitorID), ipHash, clean, ref, in.Title, in.Resolution, in.Language, truncate(r.UserAgent(), 512), appkit.Now())
+		_, e := tx.ExecContext(r.Context(), "INSERT INTO statistics_views(site_id,visitor_hash,ip_hash,url,referrer,title,resolution,language,user_agent,visited_at) VALUES(?,?,?,?,?,?,?,?,?,?)", s.ID, m.digest(s.ID+"/visitor", in.VisitorID), ipHash, clean, ref, in.Title, in.Resolution, in.Language, truncate(r.UserAgent(), 512), time.Now().UTC().Format(storedTimeLayout))
 		return e
 	})
 	if e != nil {
@@ -410,8 +423,13 @@ func (m *Module) pageViews(w http.ResponseWriter, r *http.Request, s site) error
 	if !matches(s, u.Host) {
 		return appkit.Forbidden("页面不属于此站点")
 	}
+	settings, e := m.getSettings(r.Context(), s.ID)
+	if e != nil {
+		return e
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -settings.RetentionDays).Format(storedTimeLayout)
 	var count int
-	e = m.rt.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM statistics_views WHERE site_id=? AND url=?", s.ID, clean).Scan(&count)
+	e = m.rt.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM statistics_views WHERE site_id=? AND url=? AND visited_at>=?", s.ID, clean, cutoff).Scan(&count)
 	if e != nil {
 		return e
 	}
@@ -425,7 +443,7 @@ func javascript(w http.ResponseWriter, code string) {
 	fmt.Fprint(w, code)
 }
 func (m *Module) tracker(w http.ResponseWriter, r *http.Request, s site) error {
-	javascript(w, `(()=>{'use strict';const script=document.currentScript,base=new URL('.',script.src).href,key='euler-statistics-`+s.PublicID+`';let visitor;try{visitor=localStorage.getItem(key);if(!visitor){visitor=crypto.randomUUID();localStorage.setItem(key,visitor)}}catch(_){visitor=crypto.randomUUID()}const clean=v=>{try{const u=new URL(v);u.search='';u.hash='';return u.href}catch(_){return ''}};const collect=async(attempt=0)=>{try{const response=await fetch(base+'collect',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),referrer:clean(document.referrer),page_title:document.title.slice(0,250),screen_resolution:screen.width+'x'+screen.height,browser_language:navigator.language})});if(!response.ok&&response.status>=500)throw Error('temporary')}catch(_){if(attempt<3)setTimeout(()=>collect(attempt+1),1000*(attempt+1))}};if(document.readyState==='complete')collect();else addEventListener('load',()=>collect(),{once:true});window.eulerTrackPage=()=>collect()})();`)
+	javascript(w, `(()=>{'use strict';const script=document.currentScript,base=new URL('.',script.src).href,key='euler-statistics-`+s.PublicID+`';let visitor;try{visitor=localStorage.getItem(key);if(!visitor){visitor=crypto.randomUUID();localStorage.setItem(key,visitor)}}catch(_){visitor=crypto.randomUUID()}const clean=v=>{try{const u=new URL(v);u.search='';u.hash='';return u.href}catch(_){return ''}};const collect=async(attempt=0)=>{try{const response=await fetch(base+'collect',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),referrer:clean(document.referrer),page_title:document.title.slice(0,250),screen_resolution:screen.width+'x'+screen.height,browser_language:navigator.language})});if(!response.ok&&response.status>=500)throw Error('temporary')}catch(_){if(attempt<3)setTimeout(()=>collect(attempt+1),1000*(attempt+1))}};if(document.readyState==='complete')collect();else addEventListener('load',()=>collect(),{once:true});window.eulerTrackPage=()=>collect();window.eulerTrackEvent=async name=>{const response=await fetch(base+'events',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),name})});if(!response.ok)throw Error('Event collection rejected: '+response.status);return true}})();`)
 	return nil
 }
 func (m *Module) widget(w http.ResponseWriter, r *http.Request, s site) error {

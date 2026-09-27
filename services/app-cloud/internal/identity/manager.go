@@ -39,7 +39,9 @@ type Manager struct {
 	now            func() time.Time
 }
 
-func New(ctx context.Context, config Config, store SessionStore) (*Manager, error) {
+// newSessionManager has no network dependency. Existing Euler sessions can be
+// checked even while the upstream identity source is recovering.
+func newSessionManager(config Config, store SessionStore) (*Manager, error) {
 	c, err := config.validate()
 	if err != nil {
 		return nil, err
@@ -65,6 +67,15 @@ func New(ctx context.Context, config Config, store SessionStore) (*Manager, erro
 	if m.secure {
 		m.cookieName, m.flowCookieName = "__Host-euler_session", "__Host-euler_oidc_state"
 	}
+	return m, nil
+}
+
+func New(ctx context.Context, config Config, store SessionStore) (*Manager, error) {
+	m, err := newSessionManager(config, store)
+	if err != nil {
+		return nil, err
+	}
+	c, client := m.config, m.client
 	endpoint := oauth2.Endpoint{AuthURL: c.AuthorizationEndpoint, TokenURL: c.TokenEndpoint}
 	m.userinfo = c.UserInfoEndpoint
 	if c.Mode == "oidc" {

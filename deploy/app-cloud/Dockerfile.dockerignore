@@ -14,6 +14,9 @@
 !tools/
 !tools/app-cloud/
 !tools/app-cloud/sqlite_snapshot.py
+!tools/app-cloud/platform_backup.py
+!tools/app-cloud/deployment_check.py
+!tools/app-cloud/recovery_drill.py
 **/node_modules
 **/.pnpm-store
 **/dist
