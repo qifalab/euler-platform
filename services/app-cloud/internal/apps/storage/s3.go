@@ -88,11 +88,19 @@ func (p *s3Plane) CreateBucket(ctx context.Context, b string) error {
 }
 func (p *s3Plane) DeleteBucket(ctx context.Context, b string, force bool) error {
 	if force {
-		for obj := range p.client.ListObjects(ctx, b, minio.ListObjectsOptions{Recursive: true}) {
+		for upload := range p.client.ListIncompleteUploads(ctx, b, "", true) {
+			if upload.Err != nil {
+				return upload.Err
+			}
+			if e := (minio.Core{Client: p.client}).AbortMultipartUpload(ctx, b, upload.Key, upload.UploadID); e != nil {
+				return e
+			}
+		}
+		for obj := range p.client.ListObjects(ctx, b, minio.ListObjectsOptions{Recursive: true, WithVersions: true}) {
 			if obj.Err != nil {
 				return obj.Err
 			}
-			if e := p.client.RemoveObject(ctx, b, obj.Key, minio.RemoveObjectOptions{}); e != nil {
+			if e := p.client.RemoveObject(ctx, b, obj.Key, minio.RemoveObjectOptions{VersionID: obj.VersionID}); e != nil {
 				return e
 			}
 		}
@@ -149,7 +157,7 @@ func (p *s3Plane) Delete(ctx context.Context, b, k string) error {
 	return p.client.RemoveObject(ctx, b, k, minio.RemoveObjectOptions{})
 }
 func (p *s3Plane) Copy(ctx context.Context, b, source, target, etag string) error {
-	_, e := p.client.CopyObject(ctx, minio.CopyDestOptions{Bucket: b, Object: target}, minio.CopySrcOptions{Bucket: b, Object: source, MatchETag: etag})
+	_, e := p.client.ComposeObject(ctx, minio.CopyDestOptions{Bucket: b, Object: target}, minio.CopySrcOptions{Bucket: b, Object: source, MatchETag: etag})
 	return e
 }
 func (p *s3Plane) UploadSignature(ctx context.Context, b, k string, size int64, contentType string, ttl time.Duration) (Signature, error) {

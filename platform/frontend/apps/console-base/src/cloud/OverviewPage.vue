@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, watch, onBeforeUnmount, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { api, errorMessage, formatDate, roleLabels } from "./api";
 import { useCloud } from "./context";
@@ -10,14 +10,17 @@ const { state, tenant, project, tenantPath, refreshInstallations } = useCloud();
 const events = ref<AuditEvent[]>([]);
 const auditError = ref("");
 const auditLoading = ref(true);
-const controller = new AbortController();
+let controller = new AbortController();
+let auditSequence = 0;
 const enabled = computed(() =>
   state.installations.filter((item) => item.status === "enabled"),
 );
-const connected = computed(() =>
-  state.installations.filter((item) => item.status === "enabled"),
-);
 async function loadAudit() {
+  const sequence = ++auditSequence;
+  controller.abort();
+  controller = new AbortController();
+  const signal = controller.signal;
+  events.value = [];
   if (!state.projectId) {
     auditLoading.value = false;
     return;
@@ -25,21 +28,23 @@ async function loadAudit() {
   auditLoading.value = true;
   auditError.value = "";
   try {
-    events.value = (
+    const result = (
       await api<List<AuditEvent>>(
         tenantPath(
           `/audit?projectId=${encodeURIComponent(state.projectId)}&limit=5`,
         ),
-        { signal: controller.signal },
+        { signal },
       )
     ).items;
+    if (sequence === auditSequence) events.value = result;
   } catch (error) {
-    if (!controller.signal.aborted) auditError.value = errorMessage(error);
+    if (sequence === auditSequence && !signal.aborted)
+      auditError.value = errorMessage(error);
   } finally {
-    auditLoading.value = false;
+    if (sequence === auditSequence) auditLoading.value = false;
   }
 }
-onMounted(loadAudit);
+watch(() => [state.tenantId, state.projectId], loadAudit, { immediate: true });
 onBeforeUnmount(() => controller.abort());
 </script>
 <template>
@@ -102,10 +107,10 @@ onBeforeUnmount(() => controller.abort());
         >{{
           state.installationError || state.installationsLoading
             ? "—"
-            : connected.length
+            : state.catalog.length
         }}<small>个</small></strong
       ><CloudIcon name="link" />
-      <p>在欧拉内进入应用工作台</p>
+      <p>按需启用，独立配置服务依赖</p>
     </article>
     <article class="metric-card">
       <span>可访问项目</span
@@ -113,6 +118,38 @@ onBeforeUnmount(() => controller.abort());
       ><CloudIcon name="folder" />
     </article>
   </div>
+  <section class="panel getting-started">
+    <div>
+      <h2>让项目开始运转</h2>
+      <p class="muted">从启用应用到联动业务，每一步都有明确入口。</p>
+    </div>
+    <div class="start-links">
+      <RouterLink to="/catalog"
+        ><b>01</b
+        ><span
+          >选择应用<small>{{
+            enabled.length
+              ? `已启用 ${enabled.length} 个应用`
+              : "为项目启用第一个应用"
+          }}</small></span
+        ></RouterLink
+      >
+      <RouterLink to="/services"
+        ><b>02</b
+        ><span>检查资源<small>查看配额与服务配置</small></span></RouterLink
+      >
+      <RouterLink to="/members"
+        ><b>03</b
+        ><span>邀请协作者<small>安排团队与项目权限</small></span></RouterLink
+      >
+      <RouterLink to="/automation"
+        ><b>04</b
+        ><span
+          >连接业务流程<small>审核结果、资源权益与通知</small></span
+        ></RouterLink
+      >
+    </div>
+  </section>
   <div class="overview-columns">
     <section class="panel">
       <div class="panel-heading">
@@ -152,11 +189,11 @@ onBeforeUnmount(() => controller.abort());
             ><span>{{
               item.status === "disabled"
                 ? "已停用"
-                : item.connection?.configured
-                  ? "已保存连接"
-                  : state.catalog.find((app) => app.id === item.applicationId)
-                        ?.connectionMode === "identity"
-                    ? "使用当前账号身份"
+                : state.catalog.find((app) => app.id === item.applicationId)
+                      ?.connectionMode === "native"
+                  ? "已启用 · 进入应用工作台"
+                  : item.connection?.configured
+                    ? "已保存连接"
                     : "等待配置连接"
             }}</span>
           </div>
@@ -209,3 +246,42 @@ onBeforeUnmount(() => controller.abort());
     </section>
   </div>
 </template>
+
+<style scoped>
+.getting-started {
+  padding: 24px;
+  margin-bottom: 24px;
+}
+.start-links {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.start-links a {
+  display: flex;
+  gap: 12px;
+  border: 1px solid var(--cloud-border);
+  border-radius: 10px;
+  padding: 16px;
+  line-height: 1.7;
+}
+.start-links b {
+  color: var(--cloud-blue);
+}
+.start-links small {
+  display: block;
+  color: var(--cloud-muted);
+  font-size: 12px;
+}
+@media (max-width: 1050px) {
+  .start-links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .start-links {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

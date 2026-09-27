@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS lottery_winners (
  draw_id TEXT NOT NULL REFERENCES lottery_draws(id) ON DELETE CASCADE,participant_id TEXT NOT NULL REFERENCES lottery_participants(id),
  name TEXT NOT NULL,department TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(draw_id,participant_id));
 CREATE INDEX IF NOT EXISTS lottery_winners_participant ON lottery_winners(participant_id);
+CREATE TABLE IF NOT EXISTS lottery_signup_policies(room_id TEXT PRIMARY KEY REFERENCES lottery_rooms(id) ON DELETE CASCADE,require_login INTEGER NOT NULL DEFAULT 0,trust_scheme_id TEXT NOT NULL DEFAULT '',require_eid INTEGER NOT NULL DEFAULT 0,weauth_site_id TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS lottery_identities(participant_id TEXT PRIMARY KEY REFERENCES lottery_participants(id),room_id TEXT NOT NULL,actor_id TEXT NOT NULL,UNIQUE(room_id,actor_id));
 `)
 	return e
 }
@@ -102,6 +104,9 @@ func (m *Module) Handler() http.Handler {
 	appkit.Handle(x, "GET /rooms/{id}/draws", "read", m.history)
 	appkit.Handle(x, "GET /history", "read", m.history)
 	appkit.Handle(x, "POST /rooms/{id}/reset", "manage", m.reset)
+	appkit.Handle(x, "GET /rooms/{id}/signup-policy", "read", m.getSignupPolicy)
+	appkit.Handle(x, "PUT /rooms/{id}/signup-policy", "manage", m.saveSignupPolicy)
+	appkit.Handle(x, "POST /rooms/{id}/signup", "read", m.authenticatedSignup)
 	return x
 }
 func hash(value string) string {
@@ -597,6 +602,16 @@ func (m *Module) draw(w http.ResponseWriter, r *http.Request, s appkit.Scope) er
 		for i, p := range result.Winners {
 			if _, e = tx.ExecContext(r.Context(), "INSERT INTO lottery_winners VALUES(?,?,?,?,?)", result.ID, p.ID, p.Name, p.Department, i); e != nil {
 				return e
+			}
+			var actor string
+			e = tx.QueryRowContext(r.Context(), "SELECT actor_id FROM lottery_identities WHERE participant_id=? AND room_id=?", p.ID, v.ID).Scan(&actor)
+			if e != nil && !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+			if actor != "" {
+				if e = appkit.Emit(r.Context(), tx, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "lottery.won", SubjectID: actor, ResourceID: p.ID, FilterID: v.ID, Status: "won", Version: result.ID}); e != nil {
+					return e
+				}
 			}
 		}
 		if _, e = tx.ExecContext(r.Context(), "UPDATE lottery_rooms SET next_round=next_round+1,prevent_duplicates=? WHERE id=?", prevent, v.ID); e != nil {

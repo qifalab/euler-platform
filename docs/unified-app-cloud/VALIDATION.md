@@ -1,4 +1,39 @@
-# 独立原生应用平台验收
+# 应用云完整交付验收 · 2026-09-27
+
+本轮从 `b4e0321` 继续完成 [COMPLETION-GOAL.md](COMPLETION-GOAL.md)，只修改 `qifalab/euler-platform`。下方保留 9 月 26 日的基线记录，旧 CI 不充当本轮证据。
+
+## 本轮本地结果
+
+| 范围 | 结果与证据 |
+| --- | --- |
+| 平台与八应用 | Go 1.27.1 `go vet ./...`、`go test -race -count=1 ./...` 通过；覆盖版本注册、动态身份源恢复、运维权限、服务账号、授权到期、归档、跨项目隔离、持久流程及业务回归 |
+| 真实对象服务 | 官方 MinIO 固定提交的本地测试构建；Storage/Trust 全包 race 与 `TestRealS3`、`TestRealS3Advanced`、`TestRealS3PrivateMaterialCompatibilityAndIsolation` 实际通过，未将 SKIP 算通过 |
+| 控制台与产品站 | 类型检查、16 项 Vue 交互测试、console-base 与 site 生产构建通过 |
+| 真实浏览器 | 13 场景使用真实 Go、SQLite、签名测试 OIDC 与 Vue 页面；完整一次运行通过，见 `platform/frontend/e2e/app-cloud` |
+| Python SDK/CLI | 6 项客户端测试通过；Go 集成测试启动真实 WeAuth 模块，由 Python SDK 经 TCP 创建/读取站点，验证范围、轮换、撤销与机器审计 |
+| 备份/恢复/发布 | 32 项测试通过，包含多 SQLite/WAL/实际文件恢复、主密钥与清单校验、路径攻击、忙写入、定时失败恢复、Trust 专用材料桶遗漏拒绝及恢复再核对 |
+
+浏览器在原 8 个业务场景上增加：服务账号与归档恢复；空项目/空团队删除；真实双访客事件、日期图表、漏斗与 CSV；审核发放权益、受限报名、开奖与站内通知；统一资源用量页桌面、移动和暗色状态。所有这些业务请求直接进入真实后端，未用路由拦截伪造成功。
+
+本地 MinIO 为受限容器适配了网卡枚举失败时的 loopback 回退，只修改仓库外临时测试源码；S3 协议实现不变，不进入发布镜像。CI 从官方固定提交构建正常 MinIO，详细复现方法见 [STORAGE-ADVANCED.md](STORAGE-ADVANCED.md)。
+
+## 本轮合并门槛
+
+[App cloud 工作流](../../.github/workflows/app-cloud.yml) 必须在本 PR 最新提交通过四个任务：backend（真实 MySQL 8.4、PostgreSQL 17、S3、完整设备引擎）、console、browser（13 场景）、deployment（非 root / 只读容器、停服、三库和文件备份、验证、新目录恢复及实际内容读回）。SDK 与全部 Python 工具测试已纳入门槛。实际运行、审查和合并状态以 GitHub PR Checks 为准，不用先前提交的绿色状态代替。
+
+本地没有 Docker 与独立 SQL 服务，因此这些完整容器/SQL 测试交由 CI 实际执行。本轮不部署生产，也不改原八个仓库。
+
+## 上线边界
+
+已交付可部署、可扩展的单实例应用平台及运维工具。生产独立 OIDC 客户端、HTTPS、主密钥、SQL/S3、邮件/机器人、AI 与设备环境需要部署者提供，再执行 [上线检查](../../deploy/app-cloud/RELEASE.md) 和 [恢复演练](RECOVERY.md)。这些真实环境验收仍属于上线输入，测试 IdP、SMTP 协议服务和 CI 数据面不能替代生产验收。
+
+项目归档与撤权立即阻止新的欧拉业务请求；已建立的外部 SQL 连接及已签发链接仍受数据面控制。跨应用资格不会授予审核/运营权限；自动资源包为每人每规则一次，撤销后终止对应权益而不删除已有资源。通知目前是站内通知。
+
+收费支付、多副本/跨区高可用、底层数据库集群调度与任意第三方代码托管没有被虚构为已完成。它们的实施前提见 [APP-DEVELOPMENT.md](APP-DEVELOPMENT.md)。
+
+---
+
+# 基线历史记录 · 独立原生应用平台验收
 
 日期：2026-09-26。范围：[PLAN.md](PLAN.md)、[NATIVE-APPS.md](NATIVE-APPS.md) 的八个原生应用。交付 [PR #3](https://github.com/qifalab/euler-platform/pull/3)。本记录取代此前外部连接器基线的验收；旧提交的绿色 CI 不作为本次实现的证据。
 

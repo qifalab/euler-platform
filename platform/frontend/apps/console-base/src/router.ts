@@ -34,6 +34,26 @@ export const router = createRouter({
       meta: { title: "应用权限", project: true },
     },
     {
+      path: "/automation",
+      component: () => import("./cloud/AutomationPage.vue"),
+      meta: { title: "流程与通知", project: true },
+    },
+    {
+      path: "/services",
+      component: () => import("./cloud/ProjectServicesPage.vue"),
+      meta: { title: "资源与用量", project: true },
+    },
+    {
+      path: "/service-accounts",
+      component: () => import("./cloud/ServiceAccountsPage.vue"),
+      meta: { title: "服务账号", project: true },
+    },
+    {
+      path: "/project-settings",
+      component: () => import("./cloud/ProjectSettingsPage.vue"),
+      meta: { title: "项目设置", project: true },
+    },
+    {
       path: "/audit",
       component: () => import("./cloud/AuditPage.vue"),
       meta: { title: "操作审计" },

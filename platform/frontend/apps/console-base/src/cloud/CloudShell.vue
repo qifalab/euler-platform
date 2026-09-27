@@ -13,6 +13,7 @@ const {
   tenant,
   project,
   canManageTeam,
+  canManageProject,
   bootstrap,
   selectTenant,
   selectProject,
@@ -70,10 +71,18 @@ const loginURL = computed(
 const navigation = computed(() => [
   { to: "/", name: "项目总览", icon: "home" },
   { to: "/catalog", name: "应用目录", icon: "grid" },
+  { to: "/services", name: "资源与用量", icon: "database" },
+  { to: "/automation", name: "流程与通知", icon: "layers" },
   { to: "/members", name: "成员与邀请", icon: "users" },
   { to: "/identity", name: "身份与认证", icon: "shield" },
   ...(state.session?.platformAdmin
     ? [{ to: "/permissions", name: "应用权限", icon: "key" }]
+    : []),
+  ...(canManageProject.value
+    ? [
+        { to: "/service-accounts", name: "服务账号", icon: "key" },
+        { to: "/project-settings", name: "项目设置", icon: "folder" },
+      ]
     : []),
   { to: "/audit", name: "操作审计", icon: "clock" },
 ]);
@@ -453,10 +462,21 @@ onMounted(async () => {
           >查看团队成员</RouterLink
         ></CloudState
       >
-      <RouterView
-        v-else
-        :key="`${state.tenantId}:${state.projectId}:${route.path}`"
-      />
+      <template v-else>
+        <div
+          v-if="project?.status === 'archived'"
+          class="archive-banner"
+          role="status"
+        >
+          <strong>当前项目已归档</strong> · 应用与自动任务已暂停，数据继续保留。
+          <RouterLink v-if="canManageProject" to="/project-settings"
+            >前往项目设置恢复</RouterLink
+          >
+        </div>
+        <RouterView
+          :key="`${state.tenantId}:${state.projectId}:${route.path}`"
+        />
+      </template>
       <footer
         v-if="state.session?.authenticated && !state.loading"
         class="content-footer"
@@ -527,3 +547,18 @@ onMounted(async () => {
     >
   </div>
 </template>
+
+<style scoped>
+.archive-banner {
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  border: 1px solid #d6a73c66;
+  background: #d6a73c12;
+  border-radius: 12px;
+  line-height: 1.8;
+}
+.archive-banner a {
+  margin-left: 12px;
+  text-decoration: underline;
+}
+</style>

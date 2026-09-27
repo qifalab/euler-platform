@@ -9,6 +9,7 @@ on:
       - platform/frontend/**
       - deploy/app-cloud/**
       - tools/app-cloud/**
+      - sdk/app-cloud-python/**
       - .github/workflows/app-cloud.yml
   pull_request:
     paths:
@@ -17,6 +18,7 @@ on:
       - platform/frontend/**
       - deploy/app-cloud/**
       - tools/app-cloud/**
+      - sdk/app-cloud-python/**
       - .github/workflows/app-cloud.yml
   workflow_dispatch:
 
@@ -202,6 +204,8 @@ jobs:
           printf 'EULER_ENCRYPTION_KEY=%s\n' "$EULER_ENCRYPTION_KEY" >> "$GITHUB_ENV"
       - name: Test WAL backup and recoverable offline restore
         run: python3 -m unittest discover -s tools/app-cloud -p 'test_*.py' -v
+      - name: Validate service client and CLI
+        run: PYTHONPATH=sdk/app-cloud-python/src python3 -m unittest discover -s sdk/app-cloud-python/tests -v
       - name: Validate Compose without printing configuration
         run: docker compose -f deploy/app-cloud/compose.yaml config --quiet
       - name: Build production images
@@ -216,6 +220,74 @@ jobs:
           curl --fail --silent -H 'X-Euler-Account-Id: forged' http://localhost:8080/api/v1/session \
             | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["authenticated"] is False; assert s["loginAvailable"] is False'
           curl --fail --silent http://localhost:8080/ | python3 -c 'import sys; assert "<html" in sys.stdin.read().lower()'
+      - name: Stop all platform writers and prepare recovery records
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/app-cloud/compose.yaml stop app-cloud console
+          if [ -n "$(docker compose -f deploy/app-cloud/compose.yaml ps --status running -q app-cloud)" ]; then
+            echo "::error::app-cloud is still running; refusing offline recovery test"
+            exit 1
+          fi
+          # Only this fresh CI volume is seeded. The main DB was migrated by the
+          # real server; additional files exercise independent application DBs.
+          docker compose -f deploy/app-cloud/compose.yaml --profile maintenance run \
+            --rm --no-deps -T --entrypoint python3 maintenance - <<'PY'
+          from contextlib import closing
+          from pathlib import Path
+          import sqlite3
+          root = Path('/data')
+          paths = ['app-cloud.db', 'apps/recovery-ci/one.db', 'apps/recovery-ci/two.db']
+          for index, relative in enumerate(paths):
+              path = root / relative
+              path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+              with closing(sqlite3.connect(path)) as db:
+                  db.execute('CREATE TABLE recovery_ci_proof(id INTEGER PRIMARY KEY, value TEXT NOT NULL)')
+                  db.execute('INSERT INTO recovery_ci_proof VALUES(1, ?)', (f'persisted-record-{index}',))
+                  db.commit()
+          (root / 'apps/recovery-ci/material.bin').write_bytes(b'actual application file\x00\xff')
+          print('Prepared persisted records in three SQLite databases and one application file')
+          PY
+      - name: Verify maintenance image backup and new-directory restore
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/app-cloud/compose.yaml --profile maintenance run \
+            --rm --no-deps -T maintenance backup \
+            --data-dir /data --output /backups/ci-recovery.zip \
+            --service-stopped --release "$GITHUB_SHA"
+          docker compose -f deploy/app-cloud/compose.yaml --profile maintenance run \
+            --rm --no-deps -T maintenance verify /backups/ci-recovery.zip
+          docker compose -f deploy/app-cloud/compose.yaml --profile maintenance run \
+            --rm --no-deps -T maintenance restore \
+            /backups/ci-recovery.zip /backups/ci-recovered --service-stopped
+      - name: Read restored SQLite content and confirm original data is untouched
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/app-cloud/compose.yaml --profile maintenance run \
+            --rm --no-deps -T --entrypoint python3 maintenance - <<'PY'
+          from contextlib import closing
+          from pathlib import Path
+          import json
+          import sqlite3
+          original = Path('/data')
+          restored = Path('/backups/ci-recovered/data')
+          paths = ['app-cloud.db', 'apps/recovery-ci/one.db', 'apps/recovery-ci/two.db']
+          for index, relative in enumerate(paths):
+              for root in (original, restored):
+                  with closing(sqlite3.connect((root / relative).as_uri() + '?mode=ro', uri=True)) as db:
+                      assert db.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+                      assert db.execute('SELECT value FROM recovery_ci_proof WHERE id=1').fetchone() == (f'persisted-record-{index}',)
+              assert not (original / relative).samefile(restored / relative)
+          assert (restored / 'apps/recovery-ci/material.bin').read_bytes() == b'actual application file\x00\xff'
+          manifest = json.loads(Path('/backups/ci-recovered/manifest.json').read_text())
+          assert sum(entry['kind'] == 'sqlite' for entry in manifest['files']) >= 3
+          assert manifest['externalResources'] == []  # No external data-plane backup is claimed by this CI fixture.
+          assert not list(restored.rglob('*-wal'))
+          print('Verified distinct restored files, actual records, SQLite integrity and application bytes')
+          PY
+          if [ -n "$(docker compose -f deploy/app-cloud/compose.yaml ps --status running -q app-cloud)" ]; then
+            echo "::error::app-cloud unexpectedly resumed during recovery test"
+            exit 1
+          fi
       - name: Stop test services
         if: always()
         run: docker compose -f deploy/app-cloud/compose.yaml down --volumes --remove-orphans

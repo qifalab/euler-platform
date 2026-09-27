@@ -219,9 +219,9 @@ func (s *Store) Projects(ctx context.Context, user, tenant string) ([]Project, e
 	}
 	var rows *sql.Rows
 	if admin(r) {
-		rows, e = s.db.QueryContext(ctx, "SELECT id,tenant_id,name,'admin',created_at FROM projects WHERE tenant_id=? ORDER BY created_at,id", tenant)
+		rows, e = s.db.QueryContext(ctx, "SELECT p.id,p.tenant_id,p.name,'admin',p.created_at,COALESCE(l.status,'active') FROM projects p LEFT JOIN project_lifecycle l ON l.project_id=p.id WHERE p.tenant_id=? ORDER BY p.created_at,p.id", tenant)
 	} else {
-		rows, e = s.db.QueryContext(ctx, "SELECT p.id,p.tenant_id,p.name,CASE WHEN ?='viewer' THEN 'viewer' ELSE m.role END,p.created_at FROM projects p JOIN project_members m ON p.id=m.project_id WHERE p.tenant_id=? AND m.user_id=? ORDER BY p.created_at,p.id", r, tenant, user)
+		rows, e = s.db.QueryContext(ctx, "SELECT p.id,p.tenant_id,p.name,CASE WHEN ?='viewer' THEN 'viewer' ELSE m.role END,p.created_at,COALESCE(l.status,'active') FROM projects p LEFT JOIN project_lifecycle l ON l.project_id=p.id JOIN project_members m ON p.id=m.project_id WHERE p.tenant_id=? AND m.user_id=? ORDER BY p.created_at,p.id", r, tenant, user)
 	}
 	if e != nil {
 		return nil, e
@@ -231,7 +231,7 @@ func (s *Store) Projects(ctx context.Context, user, tenant string) ([]Project, e
 	for rows.Next() {
 		var p Project
 		var n int64
-		if e = rows.Scan(&p.ID, &p.TenantID, &p.Name, &p.Role, &n); e != nil {
+		if e = rows.Scan(&p.ID, &p.TenantID, &p.Name, &p.Role, &n, &p.Status); e != nil {
 			return nil, e
 		}
 		p.CreatedAt = fromStamp(n)
@@ -244,7 +244,7 @@ func (s *Store) CreateProject(ctx context.Context, user, tenant, name string) (P
 	if e != nil {
 		return Project{}, e
 	}
-	p := Project{ID: newID("prj_"), TenantID: tenant, Name: name, Role: "admin", CreatedAt: time.Now().UTC()}
+	p := Project{Status: "active", ID: newID("prj_"), TenantID: tenant, Name: name, Role: "admin", CreatedAt: time.Now().UTC()}
 	e = s.write(ctx, func(tx *sql.Tx) error {
 		r, e := tenantRole(ctx, tx, user, tenant)
 		if e != nil {

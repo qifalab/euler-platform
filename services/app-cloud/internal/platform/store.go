@@ -136,6 +136,9 @@ PRAGMA user_version=1;`)
 	if e != nil {
 		return e
 	}
+	if e = migrateAccess(tx); e != nil {
+		return e
+	}
 	return tx.Commit()
 }
 func (s *Store) checkKey() error {
@@ -250,6 +253,11 @@ func requireProject(ctx context.Context, q queryer, user, tenant, project, level
 	r, e := projectRole(ctx, q, user, tenant, project)
 	if e != nil {
 		return e
+	}
+	if level != "read" {
+		if e = requireActiveProject(ctx, q, tenant, project); e != nil {
+			return e
+		}
 	}
 	if level == "admin" && r != "admin" || level == "write" && r == "viewer" {
 		return ErrForbidden

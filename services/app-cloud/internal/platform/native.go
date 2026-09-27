@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
@@ -49,7 +50,7 @@ func (s *Store) ApplicationRuntime(dataDir, publicURL string) *appkit.Runtime {
 
 func (s *Store) ApplicationEnabled(ctx context.Context, tenant, project, app string) (bool, error) {
 	var enabled bool
-	err := s.db.QueryRowContext(ctx, `SELECT status='enabled' FROM installations WHERE tenant_id=? AND project_id=? AND application_id=?`, tenant, project, app).Scan(&enabled)
+	err := s.db.QueryRowContext(ctx, `SELECT i.status='enabled' AND COALESCE(l.status,'active')='active' FROM installations i LEFT JOIN project_lifecycle l ON l.project_id=i.project_id WHERE i.tenant_id=? AND i.project_id=? AND i.application_id=?`, tenant, project, app).Scan(&enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -61,6 +62,9 @@ func (s *Store) nativeScope(ctx context.Context, p identity.Principal, tenant, p
 	role, err := projectRole(ctx, s.db, p.ID, tenant, project)
 	if err != nil {
 		return v, err
+	}
+	if err := requireActiveProject(ctx, s.db, tenant, project); err != nil {
+		return appkit.Scope{}, err
 	}
 	var status string
 	err = s.db.QueryRowContext(ctx, `SELECT id,status FROM installations WHERE tenant_id=? AND project_id=? AND application_id=?`, tenant, project, app).Scan(&v.InstallationID, &status)
@@ -79,7 +83,7 @@ func (s *Store) nativeScope(ctx context.Context, p identity.Principal, tenant, p
 	if admin(role) {
 		v.Permissions = append(v.Permissions, "manage", "secrets")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT permission FROM app_grants WHERE tenant_id=? AND project_id=? AND application_id=? AND user_id=? ORDER BY permission`, tenant, project, app, p.ID)
+	rows, err := s.db.QueryContext(ctx, `SELECT g.permission FROM app_grants g LEFT JOIN app_grant_expiry e ON e.grant_id=g.id WHERE g.tenant_id=? AND g.project_id=? AND g.application_id=? AND g.user_id=? AND (e.expires_at IS NULL OR e.expires_at>?) ORDER BY g.permission`, tenant, project, app, p.ID, stamp())
 	if err != nil {
 		return v, err
 	}
@@ -104,26 +108,30 @@ func (h *Handler) isPlatformAdmin(p identity.Principal) bool {
 }
 
 func (h *Handler) catalog() []connectors.Application {
-	apps := h.connectors.Catalog()
-	descriptions := map[string]string{
-		"eid":        "身份申请、成员资格、社团报名与录取，在欧拉内完成。",
-		"trust":      "管理认证方案、提交材料和审核申请，联动成员资格。",
-		"weauth":     "为网站配置人机验证、域名策略与访问风控。",
-		"database":   "创建和管理 MySQL、PostgreSQL 数据库及项目配额。",
-		"storage":    "管理存储桶、文件、访问密钥和资源包。",
-		"statistics": "采集网站访问，查看 PV、UV 与页面排行。",
-		"lottery":    "创建活动、收集报名、现场抽奖并保留完整记录。",
-		"witshield":  "接入设备，扫描风险、调查事件并审批修复。",
+	legacy := h.connectors.Catalog()
+	if len(h.modules) == 0 {
+		return legacy
 	}
-	for i := range apps {
-		if _, ok := h.modules[apps[i].ID]; ok {
-			apps[i].ConnectionMode = "native"
-			apps[i].Description = descriptions[apps[i].ID]
-			apps[i].Capabilities = []string{"native:workspace"}
-			apps[i].Limitations = []string{}
+	byID := map[string]connectors.Application{}
+	for _, item := range legacy {
+		byID[item.ID] = item
+	}
+	out := make([]connectors.Application, 0, len(h.modules))
+	for id, module := range h.modules {
+		item := byID[id]
+		item.ID, item.ConnectionMode = id, "native"
+		item.Capabilities, item.Limitations = []string{"native:workspace"}, []string{}
+		if described, ok := module.(appkit.DescribedModule); ok {
+			m := described.Manifest()
+			item.Name, item.Category, item.Description, item.Color = m.Name, m.Category, m.Description, m.Color
+			item.Repository, item.Homepage = m.Repository, "/apps/"+id
+			item.Version, item.APIVersion, item.SchemaVersion = m.Version, m.APIVersion, m.SchemaVersion
+			item.Capabilities, item.Dependencies, item.Configuration = m.Capabilities, m.Dependencies, m.Configuration
 		}
+		out = append(out, item)
 	}
-	return apps
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 func (h *Handler) nativeRoutes() {
@@ -177,6 +185,7 @@ type AppGrant struct {
 	Permission    string `json:"permission"`
 	GrantedBy     string `json:"grantedBy"`
 	CreatedAt     int64  `json:"createdAt"`
+	ExpiresAt     int64  `json:"expiresAt,omitempty"`
 }
 
 func (h *Handler) grantRoutes() {
@@ -188,7 +197,7 @@ func (h *Handler) grantRoutes() {
 		if tenant == "" || project == "" {
 			return ErrInvalid
 		}
-		rows, err := h.store.db.QueryContext(r.Context(), `SELECT g.id,g.tenant_id,g.project_id,g.application_id,g.user_id,u.display_name,g.permission,g.granted_by,g.created_at FROM app_grants g JOIN users u ON u.id=g.user_id WHERE g.tenant_id=? AND g.project_id=? ORDER BY g.created_at DESC,g.id`, tenant, project)
+		rows, err := h.store.db.QueryContext(r.Context(), `SELECT g.id,g.tenant_id,g.project_id,g.application_id,g.user_id,u.display_name,g.permission,g.granted_by,g.created_at,COALESCE(e.expires_at,0) FROM app_grants g LEFT JOIN app_grant_expiry e ON e.grant_id=g.id JOIN users u ON u.id=g.user_id WHERE g.tenant_id=? AND g.project_id=? ORDER BY g.created_at DESC,g.id`, tenant, project)
 		if err != nil {
 			return err
 		}
@@ -196,7 +205,7 @@ func (h *Handler) grantRoutes() {
 		out := []AppGrant{}
 		for rows.Next() {
 			var g AppGrant
-			if err = rows.Scan(&g.ID, &g.TenantID, &g.ProjectID, &g.ApplicationID, &g.UserID, &g.DisplayName, &g.Permission, &g.GrantedBy, &g.CreatedAt); err != nil {
+			if err = rows.Scan(&g.ID, &g.TenantID, &g.ProjectID, &g.ApplicationID, &g.UserID, &g.DisplayName, &g.Permission, &g.GrantedBy, &g.CreatedAt, &g.ExpiresAt); err != nil {
 				return err
 			}
 			out = append(out, g)
@@ -217,6 +226,7 @@ func (h *Handler) grantRoutes() {
 			ApplicationID string `json:"applicationId"`
 			UserID        string `json:"userId"`
 			Permission    string `json:"permission"`
+			ExpiresAt     int64  `json:"expiresAt"`
 		}
 		if err := decode(w, r, &b); err != nil {
 			return err
@@ -225,6 +235,9 @@ func (h *Handler) grantRoutes() {
 			return ErrInvalid
 		}
 		if b.Permission != "review" && b.Permission != "admin" {
+			return ErrInvalid
+		}
+		if b.ExpiresAt != 0 && b.ExpiresAt <= stamp() {
 			return ErrInvalid
 		}
 		id := newID("grant_")
@@ -243,6 +256,11 @@ func (h *Handler) grantRoutes() {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO app_grants(id,tenant_id,project_id,application_id,user_id,permission,granted_by,created_at) VALUES(?,?,?,?,?,?,?,?)`, id, b.TenantID, b.ProjectID, b.ApplicationID, b.UserID, b.Permission, p.ID, stamp())
 			if err != nil {
 				return err
+			}
+			if b.ExpiresAt != 0 {
+				if _, err = tx.ExecContext(r.Context(), `INSERT INTO app_grant_expiry VALUES(?,?)`, id, b.ExpiresAt); err != nil {
+					return err
+				}
 			}
 			return audit(r.Context(), tx, p.ID, b.TenantID, b.ProjectID, "application.permission_granted", id, b.ApplicationID+" "+b.Permission+" granted to "+b.UserID)
 		})

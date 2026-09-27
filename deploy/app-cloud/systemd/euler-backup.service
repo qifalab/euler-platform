@@ -1,0 +1,16 @@
+[Unit]
+Description=Euler coordinated offline backup
+ConditionPathExists=/opt/euler-platform/deploy/app-cloud/.env
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/euler-platform
+# Define EULER_BACKUP_RELEASE as the actual deployed commit or image digest.
+# For external SQL/S3, customize ExecStart with all freeze/capture/thaw hooks.
+EnvironmentFile=/etc/euler/backup.env
+ExecStart=/usr/bin/python3 /opt/euler-platform/tools/app-cloud/scheduled_backup.py --compose-dir /opt/euler-platform/deploy/app-cloud --release ${EULER_BACKUP_RELEASE}
+UMask=0077
+TimeoutStartSec=1h
+TimeoutStopSec=5min
+KillMode=mixed
+# Docker access is an operator privilege; do not grant it to application users.

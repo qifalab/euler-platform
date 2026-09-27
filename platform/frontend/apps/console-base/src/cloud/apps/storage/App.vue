@@ -2,6 +2,7 @@
 import { onMounted, onBeforeUnmount, ref, reactive } from "vue";
 import { useApp } from "../shared";
 import PackagesPanel from "../database/PackagesPanel.vue";
+import AdvancedPanel from "./AdvancedPanel.vue";
 const app = useApp();
 type Bucket = {
   id: string;
@@ -45,6 +46,7 @@ type Overview = {
   bucketCount: number;
   reservedBytes: number;
   configured: boolean;
+  advanced: boolean;
   corsMode: "bucket" | "external";
 };
 type Log = {
@@ -235,7 +237,7 @@ async function saveBucket() {
   }, "存储桶已保存");
 }
 async function removeBucket(b: Bucket) {
-  const force = b.objectCount > 0;
+  const force = b.objectCount > 0 || b.usedBytes > 0;
   if (
     !confirm(
       `删除存储桶“${b.displayName}”${force ? "并永久删除其中全部文件" : ""}？`,
@@ -340,6 +342,12 @@ async function upload(event: Event) {
   await act(async () => {
     for (const file of files) {
       uploadProgress.value = `${file.name} · 准备上传`;
+      let expectedETag = "";
+      try {
+        const old = await app.request<FileObject>(`/buckets/${targetBucketID}/objects/info?key=${encodeURIComponent(targetPrefix + file.name)}`);
+        if (!confirm(`“${targetPrefix + file.name}”已存在，确认替换？启用版本管理后会保留旧版本。`)) continue;
+        expectedETag = old.etag;
+      } catch (e) { if ((e as { status?: number }).status !== 404) throw e; }
       const reserved = await app.request<{
         uploadId: string;
         signature: Signature;
@@ -349,6 +357,7 @@ async function upload(event: Event) {
           key: targetPrefix + file.name,
           size: file.size,
           contentType: file.type || "application/octet-stream",
+          expectedETag,
         },
       });
       await new Promise<void>((resolve, reject) => {
@@ -605,6 +614,7 @@ onMounted(load);
         此桶允许公开读取和写入。公开写入使用 Euler
         文件入口，仍受当前项目配额限制。
       </p>
+      <AdvancedPanel v-if="overview?.advanced" :key="bucket.id" :bucket-id="bucket.id" :prefix="prefix" @changed="load" />
       <div class="breadcrumb">
         <button :disabled="busy" @click="navigate('')">根目录</button
         ><template

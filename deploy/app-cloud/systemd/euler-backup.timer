@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Euler maintenance backup window
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+Unit=euler-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -350,6 +350,50 @@ func (m *Module) consume(ctx context.Context, site Site, token, remoteIP string,
 	})
 	return result, e
 }
+
+// ConsumeForApplication is the internal application boundary, never a public
+// bypass of siteverify. The caller owns the signup transaction, so a failed
+// registration does not burn a token. Site, installation, origin, action and IP
+// are bound to this exact activity; a token from another form cannot be reused.
+func ConsumeForApplication(ctx context.Context, tx *sql.Tx, rt *appkit.Runtime, r *http.Request, tenant, project, siteID, action, token string) error {
+	if token == "" || len(token) > 128 {
+		return appkit.Invalid("请先完成人机验证")
+	}
+	site, err := loadSite(ctx, tx, "id=? AND tenant_id=? AND project_id=?", siteID, tenant, project)
+	if err != nil {
+		return appkit.Forbidden("活动人机验证站点不可用")
+	}
+	if !site.Enabled {
+		return appkit.Forbidden("活动人机验证站点已停用")
+	}
+	var enabled bool
+	if err = tx.QueryRowContext(ctx, "SELECT status='enabled' FROM installations WHERE id=? AND tenant_id=? AND project_id=? AND application_id='weauth'", site.InstallationID, tenant, project).Scan(&enabled); err != nil || !enabled {
+		return appkit.Forbidden("人机验证应用未启用")
+	}
+	var id, raw string
+	var solved, used int64
+	if err = tx.QueryRowContext(ctx, "SELECT id,body,solved_at,token_used FROM weauth_challenges WHERE site_id=? AND token_hash=?", siteID, digest(token)).Scan(&id, &raw, &solved, &used); err != nil {
+		return appkit.Invalid("人机验证凭据无效")
+	}
+	var c challenge
+	if err = json.Unmarshal([]byte(raw), &c); err != nil {
+		return err
+	}
+	expected, pe := url.Parse(rt.PublicURL)
+	origin, oe := url.Parse(c.Origin)
+	if used != 0 || solved == 0 || time.Now().Unix() >= solved+int64(site.TokenTimeout) || c.Action != action || c.IP != New(rt).clientIP(r) || pe != nil || oe != nil || expected.Scheme != origin.Scheme || !strings.EqualFold(expected.Host, origin.Host) {
+		return appkit.Invalid("人机验证已失效，或不属于本次报名")
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE weauth_challenges SET token_used=1 WHERE id=? AND token_used=0", id)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return appkit.Conflict("人机验证凭据已使用")
+	}
+	return nil
+}
 func (m *Module) siteverify(w http.ResponseWriter, r *http.Request) error {
 	var input struct {
 		Secret   string `json:"secret"`

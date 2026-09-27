@@ -26,6 +26,7 @@ type Member struct {
 	JoinedAt    time.Time `json:"joinedAt"`
 }
 type Project struct {
+	Status    string    `json:"status"`
 	ID        string    `json:"id"`
 	TenantID  string    `json:"tenantId"`
 	Name      string    `json:"name"`
