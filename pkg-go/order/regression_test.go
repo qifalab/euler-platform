@@ -40,3 +40,24 @@ func TestCreateRejectsExpiredSnapshotWithZeroAt(t *testing.T) {
 		t.Fatalf("err = %v, want ErrSnapshotExpired for a pinned stale At", err)
 	}
 }
+
+// A negative UsedPeriods used to make remaining > total, refunding more than
+// the customer paid. Malformed proration input must never refund at all.
+func TestRefundAmountRejectsNegativeUsedPeriods(t *testing.T) {
+	paid := pricing.MustParseAmount("1200")
+	for _, used := range []int64{-1, -12, -1 << 40} {
+		b := ProrationBasis{SnapshotAmount: paid, TotalPeriods: 12, UsedPeriods: used}
+		if got := b.RefundAmount(); !got.IsZero() {
+			t.Fatalf("UsedPeriods=%d refunds %s, want 0 (never more than paid)", used, got)
+		}
+	}
+	neg := ProrationBasis{SnapshotAmount: pricing.MustParseAmount("-10"), TotalPeriods: 12, UsedPeriods: 1}
+	if got := neg.RefundAmount(); !got.IsZero() {
+		t.Fatalf("negative snapshot refunds %s, want 0", got)
+	}
+	// Valid input is unchanged: 11 of 12 periods unused.
+	ok := ProrationBasis{SnapshotAmount: paid, TotalPeriods: 12, UsedPeriods: 1}
+	if got := ok.RefundAmount().String(); got != "1100" {
+		t.Fatalf("refund = %s, want 1100", got)
+	}
+}

@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -123,58 +124,59 @@ func MaskAK(ak string) string {
 // before hashing. Without that, the same event would hash differently on each
 // run and every chain would appear broken — the verification would be useless
 // precisely because it reported constant failure.
+//
+// Every field is LENGTH-PREFIXED (<len>:<bytes>) and every list carries its
+// element count, so the encoding is injective: with bare separators, a value
+// containing the separator ("a,b" as one resource vs "a" and "b";
+// {"k":"v;x=y"} vs {"k":"v","x":"y"}) produced the same payload — two
+// different records with one hash, i.e. an edit the chain cannot see.
 func (e Event) canonicalPayload() string {
 	var b strings.Builder
-	b.WriteString(e.EventID)
-	b.WriteByte('|')
-	b.WriteString(fmt.Sprintf("%d", e.EventTime.UTC().UnixNano()))
-	b.WriteByte('|')
-	b.WriteString(e.EventSource)
-	b.WriteByte('|')
-	b.WriteString(e.EventName)
-	b.WriteByte('|')
-	b.WriteString(e.SourceIP)
-	b.WriteByte('|')
-	b.WriteString(fmt.Sprintf("%d", e.Identity.AccountID))
-	b.WriteByte('|')
-	b.WriteString(e.Identity.Principal)
-	b.WriteByte('|')
+	field := func(s string) {
+		b.WriteString(strconv.Itoa(len(s)))
+		b.WriteByte(':')
+		b.WriteString(s)
+	}
+	field(e.EventID)
+	field(strconv.FormatInt(e.EventTime.UTC().UnixNano(), 10))
+	field(e.EventSource)
+	field(e.EventName)
+	field(e.SourceIP)
+	field(strconv.FormatInt(e.Identity.AccountID, 10))
+	field(e.Identity.Principal)
 	// Identity.Type and MFAPresent are part of the hash: whether the caller was
 	// a root account, a RAM user or an assumed role, and whether MFA was
 	// present, are exactly the facts an investigator cites. Leaving them out
 	// would let them be rewritten without breaking the chain.
-	b.WriteString(e.Identity.Type)
-	b.WriteByte('|')
-	b.WriteString(fmt.Sprintf("%t", e.Identity.MFAPresent))
-	b.WriteByte('|')
-	b.WriteString(e.Identity.AKID)
-	b.WriteByte('|')
+	field(e.Identity.Type)
+	field(strconv.FormatBool(e.Identity.MFAPresent))
+	field(e.Identity.AKID)
 	// UserAgent is hashed too — it is the tool fingerprint, and a forger's
 	// first instinct is to rewrite it.
-	b.WriteString(e.UserAgent)
-	b.WriteByte('|')
-	b.WriteString(string(e.Decision))
-	b.WriteByte('|')
-	b.WriteString(e.DecisionNumber)
-	b.WriteByte('|')
+	field(e.UserAgent)
+	field(string(e.Decision))
+	field(e.DecisionNumber)
 
 	res := append([]string(nil), e.Resources...)
 	sort.Strings(res)
-	b.WriteString(strings.Join(res, ","))
-	b.WriteByte('|')
+	field(strconv.Itoa(len(res)))
+	for _, r := range res {
+		field(r)
+	}
 
 	keys := make([]string, 0, len(e.RequestParams))
 	for k := range e.RequestParams {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	field(strconv.Itoa(len(keys)))
 	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(e.RequestParams[k])
-		b.WriteByte(';')
+		field(k)
+		field(e.RequestParams[k])
 	}
-	b.WriteString(fmt.Sprintf("|%d|%s|%d", e.ResponseCode, e.TraceID, e.Sequence))
+	field(strconv.Itoa(e.ResponseCode))
+	field(e.TraceID)
+	field(strconv.FormatInt(e.Sequence, 10))
 	return b.String()
 }
 
@@ -289,13 +291,29 @@ type VerifyResult struct {
 //   - removing a record (the next record's PrevHash points at nothing present)
 //   - reordering records (sequence numbers no longer ascend)
 func Verify(events []Event) VerifyResult {
+	return VerifyFrom(events, GenesisHash, 1)
+}
+
+// VerifyFrom verifies a chain segment that starts after a known, trusted
+// point: prevHash is the head the first event must link to and startSeq its
+// expected sequence. A chain resumed from a checkpoint (ResumeChain) does not
+// start at genesis — its first event links to the checkpointed head — so
+// verifying it from genesis reports every resumed chain as broken. Verify is
+// VerifyFrom(events, GenesisHash, 1).
+func VerifyFrom(events []Event, prevHash string, startSeq int64) VerifyResult {
 	if len(events) == 0 {
 		return VerifyResult{Intact: false, Reason: ErrEmptyChain.Error()}
 	}
+	if prevHash == "" {
+		prevHash = GenesisHash
+	}
+	if startSeq < 1 {
+		startSeq = 1
+	}
 
 	accountID := events[0].Identity.AccountID
-	prev := GenesisHash
-	var expectedSeq int64 = 1
+	prev := prevHash
+	expectedSeq := startSeq
 
 	for _, e := range events {
 		if e.Sequence != expectedSeq {
@@ -310,14 +328,14 @@ func Verify(events []Event) VerifyResult {
 			return VerifyResult{
 				AccountID: accountID, EventCount: len(events), Intact: false,
 				BrokenAt: e.Sequence,
-				Reason:    fmt.Sprintf("%v: predecessor link mismatch at sequence %d", ErrChainBroken, e.Sequence),
+				Reason:   fmt.Sprintf("%v: predecessor link mismatch at sequence %d", ErrChainBroken, e.Sequence),
 			}
 		}
 		if got := computeHash(e); got != e.ChainHash {
 			return VerifyResult{
 				AccountID: accountID, EventCount: len(events), Intact: false,
 				BrokenAt: e.Sequence,
-				Reason:    fmt.Sprintf("%v: content hash mismatch at sequence %d (record was edited)", ErrChainBroken, e.Sequence),
+				Reason:   fmt.Sprintf("%v: content hash mismatch at sequence %d (record was edited)", ErrChainBroken, e.Sequence),
 			}
 		}
 		prev = e.ChainHash
@@ -327,40 +345,56 @@ func Verify(events []Event) VerifyResult {
 	return VerifyResult{AccountID: accountID, EventCount: len(events), Intact: true}
 }
 
+// eventJSON is the wire form of an Event (07§6.1 schema).
+type eventJSON struct {
+	EventID        string            `json:"event_id"`
+	EventTime      string            `json:"event_time"`
+	EventSource    string            `json:"event_source"`
+	EventName      string            `json:"event_name"`
+	SourceIP       string            `json:"source_ip"`
+	UserAgent      string            `json:"user_agent,omitempty"`
+	Identity       eventIdentityJSON `json:"identity"`
+	Resource       []string          `json:"resource"`
+	Decision       string            `json:"decision"`
+	DecisionNumber string            `json:"decision_number,omitempty"`
+	RequestParams  map[string]string `json:"request_params,omitempty"`
+	ResponseCode   int               `json:"response_code"`
+	TraceID        string            `json:"trace_id"`
+	ChainHash      string            `json:"chain_hash"`
+	PrevHash       string            `json:"prev_hash"`
+	Sequence       int64             `json:"sequence"`
+}
+
+// eventIdentityJSON is the wire form of an Identity. account_id is a string
+// (64-bit ids do not survive JavaScript number parsing).
+type eventIdentityJSON struct {
+	Type       string `json:"type"`
+	AccountID  string `json:"account_id"`
+	Principal  string `json:"principal"`
+	AKID       string `json:"ak_id"`
+	MFAPresent bool   `json:"mfa_present"`
+}
+
 // MarshalJSON renders the event for the Kafka envelope
 // (cloud.sys.audit.action, partitioned by account_id).
+//
+// event_time carries NANOSECOND precision (RFC3339Nano): the chain hash covers
+// EventTime.UnixNano, so a second-precision export could never be re-verified
+// — every exported record would read as edited.
 func (e Event) MarshalJSON() ([]byte, error) {
-	type alias struct {
-		EventID        string            `json:"event_id"`
-		EventTime      string            `json:"event_time"`
-		EventSource    string            `json:"event_source"`
-		EventName      string            `json:"event_name"`
-		SourceIP       string            `json:"source_ip"`
-		UserAgent      string            `json:"user_agent,omitempty"`
-		Identity       map[string]any    `json:"identity"`
-		Resource       []string          `json:"resource"`
-		Decision       string            `json:"decision"`
-		DecisionNumber string            `json:"decision_number,omitempty"`
-		RequestParams  map[string]string `json:"request_params,omitempty"`
-		ResponseCode   int               `json:"response_code"`
-		TraceID        string            `json:"trace_id"`
-		ChainHash      string            `json:"chain_hash"`
-		PrevHash       string            `json:"prev_hash"`
-		Sequence       int64             `json:"sequence"`
-	}
-	return json.Marshal(alias{
+	return json.Marshal(eventJSON{
 		EventID:     e.EventID,
-		EventTime:   e.EventTime.UTC().Format(time.RFC3339),
+		EventTime:   e.EventTime.UTC().Format(time.RFC3339Nano),
 		EventSource: e.EventSource,
 		EventName:   e.EventName,
 		SourceIP:    e.SourceIP,
 		UserAgent:   e.UserAgent,
-		Identity: map[string]any{
-			"type":        e.Identity.Type,
-			"account_id":  fmt.Sprintf("%d", e.Identity.AccountID),
-			"principal":   e.Identity.Principal,
-			"ak_id":       e.Identity.AKID,
-			"mfa_present": e.Identity.MFAPresent,
+		Identity: eventIdentityJSON{
+			Type:       e.Identity.Type,
+			AccountID:  strconv.FormatInt(e.Identity.AccountID, 10),
+			Principal:  e.Identity.Principal,
+			AKID:       e.Identity.AKID,
+			MFAPresent: e.Identity.MFAPresent,
 		},
 		Resource:       e.Resources,
 		Decision:       string(e.Decision),
@@ -372,6 +406,54 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		PrevHash:       e.PrevHash,
 		Sequence:       e.Sequence,
 	})
+}
+
+// UnmarshalJSON reads the MarshalJSON form back, so an exported trail can be
+// re-verified with Verify/VerifyFrom.
+func (e *Event) UnmarshalJSON(data []byte) error {
+	var w eventJSON
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	var t time.Time
+	if w.EventTime != "" {
+		var err error
+		if t, err = time.Parse(time.RFC3339Nano, w.EventTime); err != nil {
+			return fmt.Errorf("audit: event_time: %w", err)
+		}
+	}
+	var acct int64
+	if w.Identity.AccountID != "" {
+		var err error
+		if acct, err = strconv.ParseInt(w.Identity.AccountID, 10, 64); err != nil {
+			return fmt.Errorf("audit: identity.account_id: %w", err)
+		}
+	}
+	*e = Event{
+		EventID:     w.EventID,
+		EventTime:   t,
+		EventSource: w.EventSource,
+		EventName:   w.EventName,
+		SourceIP:    w.SourceIP,
+		UserAgent:   w.UserAgent,
+		Identity: Identity{
+			Type:       w.Identity.Type,
+			AccountID:  acct,
+			Principal:  w.Identity.Principal,
+			AKID:       w.Identity.AKID,
+			MFAPresent: w.Identity.MFAPresent,
+		},
+		Resources:      w.Resource,
+		Decision:       Decision(w.Decision),
+		DecisionNumber: w.DecisionNumber,
+		RequestParams:  w.RequestParams,
+		ResponseCode:   w.ResponseCode,
+		TraceID:        w.TraceID,
+		ChainHash:      w.ChainHash,
+		PrevHash:       w.PrevHash,
+		Sequence:       w.Sequence,
+	}
+	return nil
 }
 
 // EventID builds the platform event identifier: ev-YYYYMMDD-NNNNNN (07§6.1).

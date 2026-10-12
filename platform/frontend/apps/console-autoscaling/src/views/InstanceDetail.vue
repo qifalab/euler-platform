@@ -8,11 +8,18 @@
  * is the authoritative source of state, spec, billing start, etc. EUAS carries
  * chargeType=POSTPAID (按量, the per-hour management fee); currentReplicas is
  * shown when present (the executor's last reported live count).
+ *
+ * The scaling policy (attributes minSize / maxSize / desiredCapacity /
+ * cooldownSeconds) is edited in place through PATCH
+ * /api/v1/orchestrator/resources/{id}/attributes, checked first with the same
+ * rules as the wizard (scalingPolicy.ts).
  */
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElTag, ElEmpty, ElMessage, ElButton } from "element-plus";
+import { formatTime, InstanceActions, AttributeEditDialog, attributesOf, type AttributeField } from "@eu/console-kit";
+import { sdk } from "../sdk";
+import { boundsFromAttributes, validateScalingPolicy } from "../scalingPolicy";
 
 interface ResourceDetail {
   resourceId: string;
@@ -25,23 +32,24 @@ interface ResourceDetail {
   createdAt: string;
   version: number;
   currentReplicas?: number;
+  attributes?: Record<string, string>;
 }
 
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
-const sdk = createSDK({ baseURL: "" });
 
 const inst = ref<ResourceDetail | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const activeTab = ref("monitor");
 
-onMounted(async () => {
-  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+/** (Re)load the resource record — on mount and after every lifecycle action. */
+async function fetchDetail() {
   try {
     const res = await sdk.get<ResourceDetail>(`/api/v1/orchestrator/resources/${id.value}`);
     inst.value = res.data;
+    error.value = null;
   } catch (e) {
     // Branch on the structured error the SDK attaches (status/code): matching
     // the message TEXT missed 404s whose wording differs from those literals.
@@ -51,17 +59,37 @@ onMounted(async () => {
       ElMessage.error("实例不存在");
       router.push("/instances");
     }
-  } finally {
-    loading.value = false;
   }
+}
+
+onMounted(async () => {
+  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+  await fetchDetail();
+  loading.value = false;
 });
 
-function fmt(s: string): string {
-  if (!s) return "—";
-  return s.replace("T", " ").replace(/\+.*$/, "");
-}
+// RFC3339 → viewer-local time; "—" for unset ("" / zero-year) values. The old
+// textual strip showed UTC wall-clock (with a stray "Z") as if it were local.
+const fmt = formatTime;
 const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按量(管理费/小时)" : "—");
 const replicasLabel = computed(() => inst.value?.currentReplicas !== undefined ? String(inst.value.currentReplicas) : "—");
+
+// --- scaling policy (resource attributes) ---
+const attrs = computed(() => attributesOf(inst.value));
+const live = computed(() => inst.value?.state === "RUNNING" || inst.value?.state === "STOPPED");
+const policyVisible = ref(false);
+const policyFields: AttributeField[] = [
+  { key: "minSize", label: "最小副本数", min: 0, max: 1000, default: 1 },
+  { key: "maxSize", label: "最大副本数", min: 1, max: 10000, default: 10 },
+  { key: "desiredCapacity", label: "期望副本数", min: 0, max: 10000, default: 3, hint: "须在 [最小, 最大] 之间" },
+  { key: "cooldownSeconds", label: "冷却时间(秒)", min: 0, max: 3600, default: 300, hint: "两次伸缩活动之间的最短间隔" },
+];
+const validatePolicy = (v: Record<string, number | string | undefined>) => validateScalingPolicy(boundsFromAttributes(v));
+const attrLabel = (key: string, unit = "") => (attrs.value[key] !== undefined ? `${attrs.value[key]}${unit}` : "—");
+function onPolicySaved(detail: unknown) {
+  if (detail && typeof detail === "object" && "resourceId" in detail) inst.value = detail as ResourceDetail;
+  void fetchDetail();
+}
 </script>
 
 <template>
@@ -74,9 +102,15 @@ const replicasLabel = computed(() => inst.value?.currentReplicas !== undefined ?
         <p class="detail-id">ID:{{ id }} · {{ inst?.region ?? "—" }}</p>
       </div>
       <div class="detail-actions">
-        <ElButton size="small">停止</ElButton>
-        <ElButton size="small">修改策略</ElButton>
-        <ElButton size="small" type="danger">释放</ElButton>
+        <ElButton size="small" :disabled="!live" @click="policyVisible = true">修改伸缩策略</ElButton>
+        <InstanceActions
+          :sdk="sdk"
+          :resource-id="id"
+          :instance="inst"
+          :actions="['stop', 'start', 'release']"
+          @changed="fetchDetail"
+          @released="router.push('/instances')"
+        />
       </div>
     </header>
 
@@ -93,6 +127,9 @@ const replicasLabel = computed(() => inst.value?.currentReplicas !== undefined ?
           <ElDescriptionsItem label="产品">{{ inst.productCode }}</ElDescriptionsItem>
           <ElDescriptionsItem label="地域">{{ inst.region }}</ElDescriptionsItem>
           <ElDescriptionsItem label="当前副本">{{ replicasLabel }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="副本范围">{{ attrs.minSize !== undefined || attrs.maxSize !== undefined ? `${attrLabel("minSize")} ~ ${attrLabel("maxSize")}` : "—" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="期望副本">{{ attrLabel("desiredCapacity") }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="冷却时间">{{ attrLabel("cooldownSeconds", " 秒") }}</ElDescriptionsItem>
           <ElDescriptionsItem label="计费起始">{{ fmt(inst.billingStart) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="创建时间">{{ fmt(inst.createdAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="资源版本">{{ inst.version }}</ElDescriptionsItem>
@@ -108,6 +145,18 @@ const replicasLabel = computed(() => inst.value?.currentReplicas !== undefined ?
     </ElTabs>
 
     <a class="detail-back" href="#" @click.prevent="router.push('/instances')">← 返回伸缩组列表</a>
+
+    <AttributeEditDialog
+      v-model="policyVisible"
+      :sdk="sdk"
+      :resource-id="id"
+      title="修改伸缩策略"
+      description="最小 ≤ 期望 ≤ 最大;修改后伸缩组按新策略调整副本。"
+      :fields="policyFields"
+      :attributes="attrs"
+      :validate="validatePolicy"
+      @saved="onPolicySaved"
+    />
   </section>
 </template>
 

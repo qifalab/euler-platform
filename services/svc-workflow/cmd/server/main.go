@@ -40,11 +40,15 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/httpmw"
+	"github.com/qifalab/euler-platform/runmode"
 )
 
 func main() {
 	httpAddr := flag.String("http", ":8080", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -95,7 +99,7 @@ func main() {
 // logging, and recover (03§2.3.4). The chain itself lives in pkg-go/httpmw so
 // the services cannot drift apart.
 func withMiddleware(h http.Handler) http.Handler {
-	return httpmw.Chain(h)
+	return httpmw.Chain(httpmw.InternalToken(h))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
@@ -144,19 +148,42 @@ func (a *app) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Common.InvalidParameter", "def_key is required", http.StatusBadRequest)
 		return
 	}
-
-	id, result, err := a.StartFlow(accountID, req.DefKey, req.BizKey)
-	if err != nil {
-		writeErr(w, "Workflow.UnknownDef", err.Error(), http.StatusBadRequest)
+	// biz_key is VARCHAR(64) in flow_instance; a longer key is the caller's
+	// error, not a database failure.
+	if len(req.BizKey) > maxBizKeyLen {
+		writeErr(w, "Common.InvalidParameter", "biz_key is too long", http.StatusBadRequest)
 		return
 	}
 
+	id, result, err := a.StartFlow(accountID, req.DefKey, req.BizKey)
+	switch {
+	case errors.Is(err, errUnknownDef):
+		writeErr(w, "Workflow.UnknownDef", "unknown flow definition", http.StatusBadRequest)
+		return
+	case errors.Is(err, errFlowExists):
+		// Not echoing the existing instance: uk_biz spans accounts, and its id
+		// is not this caller's to learn.
+		writeErr(w, "Workflow.AlreadyStarted", "a flow for this biz_key was already started", http.StatusConflict)
+		return
+	case err != nil:
+		slog.Error("flow start failed", "defKey", req.DefKey, "flowId", id, "err", err)
+		writeErr(w, "Workflow.StartFailed", "failed to start flow", http.StatusInternalServerError)
+		return
+	}
+
+	bizKey := req.BizKey
+	if bizKey == "" {
+		bizKey = autoBizKey(id)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      id,
 		"status":  string(result.Status),
-		"biz_key": req.BizKey,
+		"biz_key": bizKey,
 	})
 }
+
+// maxBizKeyLen is the width of flow_instance.biz_key.
+const maxBizKeyLen = 64
 
 func (a *app) handleGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -181,13 +208,11 @@ func (a *app) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Workflow.LookupFailed", "flow lookup failed", http.StatusInternalServerError)
 		return
 	}
-	if !ok {
+	// A caller may only read flows that belong to its own account. Another
+	// account's flow answers exactly like a missing one: a distinct 403 let a
+	// caller probe which ids exist.
+	if !ok || rec.AccountID != accountID {
 		writeErr(w, "Workflow.NotFound", "flow not found", http.StatusNotFound)
-		return
-	}
-	// A caller may only read flows that belong to its own account.
-	if rec.AccountID != accountID {
-		writeErr(w, "Workflow.Forbidden", "flow does not belong to this account", http.StatusForbidden)
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
@@ -216,4 +241,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, code, msg string, status int) {
 	writeJSON(w, status, map[string]string{"Code": code, "Message": msg})
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

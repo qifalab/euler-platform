@@ -9,10 +9,8 @@
  *  browser cannot drift an algorithm it does not run.
  */
 import { ref, computed, onMounted, watch } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "../sdk";
 import { PageHeader, StatusBadge } from "@eu/ui";
-
-const sdk = createSDK({ baseURL: "" });
 
 // --- action catalogue (the dropdown of signable Actions) ---------------------
 interface ActionMeta {
@@ -80,7 +78,9 @@ const headerMap = computed(() => {
 
 async function loadActions() {
   try {
-    const res = await sdk.get<{ actions: ActionMeta[] } | ActionMeta[]>("/internal/actions");
+    // Public, account-gated read view of the registered metadata (same handler
+    // as the intranet-only /internal/actions, which the gateway never exposes).
+    const res = await sdk.get<{ actions: ActionMeta[] } | ActionMeta[]>("/api/v1/apimeta/explorer/actions");
     // explorer actions route may return either an envelope-unwrapped array or
     // {actions:[...]}; tolerate both.
     const list = Array.isArray(res.data) ? res.data : (res.data as { actions: ActionMeta[] }).actions ?? [];

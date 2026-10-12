@@ -45,23 +45,10 @@ interface Verdict {
 const verdict = ref<Verdict | null>(null);
 const loading = ref(false);
 
-async function readEnvelope<T>(res: Response): Promise<T> {
-  const body = await res.json();
-  if (!res.ok || body.Code !== "OK") {
-    throw new Error(body.Message ?? `request failed (HTTP ${res.status})`);
-  }
-  return body.Data as T;
-}
-function authHeaders(): HeadersInit {
-  return auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : {};
-}
-
 async function fetchPolicies() {
   if (!auth.isAuthenticated) return;
   try {
-    const data = await readEnvelope<{ policies: PolicyOption[]; total: number }>(
-      await fetch("/api/ram/policies", { headers: authHeaders() }),
-    );
+    const data = await auth.request<{ policies: PolicyOption[]; total: number }>("/api/ram/policies");
     policies.splice(0, policies.length, ...(data?.policies ?? []).map((p) => ({ name: p.name, type: p.type })));
     // Default-select all so the simulator has a policy set on first load.
     form.selected = policies.map((p) => p.name);
@@ -83,18 +70,15 @@ async function run() {
   }
   loading.value = true;
   try {
-    const data = await readEnvelope<Verdict>(
-      await fetch("/api/ram/simulate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          principal: form.principal,
-          policies: form.selected,
-          action: form.action,
-          resource: form.resource,
-        }),
+    const data = await auth.request<Verdict>("/api/ram/simulate", {
+      method: "POST",
+      body: JSON.stringify({
+        principal: form.principal,
+        policies: form.selected,
+        action: form.action,
+        resource: form.resource,
       }),
-    );
+    });
     verdict.value = data;
   } catch (e) {
     verdict.value = null;

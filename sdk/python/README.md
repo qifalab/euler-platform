@@ -11,22 +11,45 @@ golden-vector fixture so the result matches `pkg-go/cps1` byte-for-byte. The
 Go `cps1` package, this Python module, and the gateway verifier share one
 definition — drift is caught by regression, not by customers.
 
-Errors parse into the unified model (03§9.3): a non-2xx with a `{Code, Message}`
-body surfaces an `ApiError` carrying the business code and HTTP status.
+Errors parse into the unified model (03§9.3): a non-2xx with a
+`{RequestId, Code, Message}` body surfaces an `ApiError` carrying the code,
+message, HTTP status and RequestId.
 
 ## Usage
 
+`Client.invoke` speaks the OpenAPI facade's contract (services/svc-openapi):
+Action and Version in the query, the parameters as a JSON object body (or a
+form body with `form=True`; lists become repeated keys), and the success
+envelope `{RequestId, Code: "OK", Data}` unwrapped to `Data`.
+
 ```python
-from cloudsdk import Client, Config, ApiRequest
+from cloudsdk import Client, Config, ResourceNotFoundError
 
 client = Client(Config(ak="EU...", sk="...", region="cn-north-1"))
-resp = client.call(ApiRequest(
-    product_code="euecs", method="POST", path="/",
-    query={"Action": "RunInstances", "Version": "2026-08-01"},
-    body=b'{"ImageId":"img-001","InstanceType":"s2.large"}',
-))
-print(resp.status_code, resp.body)
+data = client.invoke("euecs", "RunInstances",
+                     {"InstanceType": "s2.large", "ImageId": "img-001", "ZoneId": "cn-north-1-a"})
+instance_id = data["InstanceId"]
+
+try:
+    client.invoke("euecs", "StopInstance", {"InstanceId": "i-missing"})
+except ResourceNotFoundError as e:
+    print(e.code, e.message, e.request_id)   # InvalidInstanceId.NotFound ...
 ```
+
+- **ClientToken.** A create Action (`Create*`, `Run*`, `Allocate*`) gets a
+  fresh `ClientToken` unless one is passed (`client_token=` or in the
+  parameters), so the SDK's automatic retries on 429/5xx (the facade answers
+  a downstream outage with 503 `ServiceUnavailable`) return the resource the
+  first attempt bought instead of buying another. Pass your own token to make
+  a create idempotent across processes.
+- **Typed errors.** Every error is an `ApiError`; the code picks the subclass:
+  `InvalidParameterError` (MissingParameter, InvalidParameter, Invalid…),
+  `ResourceNotFoundError` (404 …NotFound), `IncorrectStatusError`
+  (Incorrect…Status, ConcurrentModification), `IdempotentParameterMismatchError`,
+  `QuotaExceededError`, `InsufficientBalanceError`, `AuthorizationError`
+  (401/403), `ThrottlingError` (429), `ServerError` (5xx). A 2xx that is not
+  the envelope or carries a non-OK Code raises too.
+- `Client.call(ApiRequest(...))` remains the raw signed round trip.
 
 ## Tests
 
@@ -36,5 +59,5 @@ reproduced exactly:
 
 ```sh
 cd sdk/python
-python -m pytest            # 12 tests, incl. 7 golden vectors
+python -m pytest            # golden vectors, client behaviours, facade contract
 ```

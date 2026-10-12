@@ -17,6 +17,7 @@ const sandboxed = inWujieSandbox();
         <router-link to="/bills">账单</router-link>
         <router-link to="/orders">订单</router-link>
         <router-link to="/resource-packs">资源包</router-link>
+        <router-link to="/coupons">卡券</router-link>
         <router-link to="/invoices">发票</router-link>
         <router-link to="/cost-analysis">成本分析</router-link>
         <router-link to="/renew">续费管理</router-link>

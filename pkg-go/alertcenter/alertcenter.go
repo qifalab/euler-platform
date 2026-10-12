@@ -124,6 +124,11 @@ func groupKey(tenantID int64, product string) string {
 // highest-severity alert per group (inhibition falls out of that), and silence
 // drops muted groups last — a muted group's alerts vanish entirely regardless
 // of severity.
+//
+// The result is in NOTIFICATION PRIORITY order — severity descending, then
+// oldest first — because the per-tenant rate limit is applied to it in order:
+// sorted by time alone, a burst of old INFO groups would use up the window
+// while a newer CRITICAL group was the one cut.
 func Converge(alerts []Alert, silence *Silence) []Alert {
 	// 1. 去重: one alert per DedupKey, and an escalation wins. DedupKey does not
 	// carry Severity — a re-fire that raises the level is the same alert
@@ -159,8 +164,27 @@ func Converge(alerts []Alert, silence *Silence) []Alert {
 	for _, a := range best {
 		out = append(out, a)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.Before(out[j].OccurredAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if ri, rj := out[i].Severity.Rank(), out[j].Severity.Rank(); ri != rj {
+			return ri > rj
+		}
+		if !out[i].OccurredAt.Equal(out[j].OccurredAt) {
+			return out[i].OccurredAt.Before(out[j].OccurredAt)
+		}
+		return out[i].GroupKey() < out[j].GroupKey()
+	})
 	return out
+}
+
+// ParseSeverity normalizes a severity label ("critical", " Warning ") to its
+// canonical form. Unknown labels are rejected: an unrecognised severity ranks
+// 0, which would silently lose every inhibition/priority decision.
+func ParseSeverity(s string) (Severity, bool) {
+	sev := Severity(strings.ToUpper(strings.TrimSpace(s)))
+	if sev.Rank() == 0 {
+		return "", false
+	}
+	return sev, true
 }
 
 // TenantLimiter is a fixed-window per-tenant rate limiter (03§4.4.6: 10 条/分钟).

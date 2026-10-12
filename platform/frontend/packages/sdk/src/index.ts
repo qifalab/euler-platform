@@ -40,6 +40,15 @@ export interface SdkOptions {
 
 const DEFAULT_TIMEOUT = 15_000;
 
+/**
+ * Fallback message when the response carries no usable message — e.g. a
+ * gateway's HTML 502/504 page or an empty body. Chinese like the rest of the
+ * console UI, and it keeps the HTTP status so the cause is not lost.
+ */
+function fallbackMessage(status: number): string {
+  return status > 0 ? `请求失败(HTTP ${status})` : "请求失败,请检查网络后重试";
+}
+
 function toError(payload: unknown, status: number, requestId?: string): EuError {
   // Go services write {Code, Message, RequestId} (capitalized); the lower-case
   // variants cover gateway-generated error bodies.
@@ -48,10 +57,11 @@ function toError(payload: unknown, status: number, requestId?: string): EuError 
     message?: string; Message?: string;
     detailUrl?: string; requestId?: string;
   };
-  const message = body.message ?? body.Message;
-  const err = new Error(message ?? "request failed") as EuError;
+  const raw = body.message ?? body.Message;
+  const message = typeof raw === "string" && raw !== "" ? raw : fallbackMessage(status);
+  const err = new Error(message) as EuError;
   err.code = body.code ?? body.Code ?? `HTTP_${status}`;
-  err.message = message ?? "request failed";
+  err.message = message;
   err.requestId = body.requestId ?? requestId;
   err.detailUrl = body.detailUrl;
   err.status = status;
@@ -158,7 +168,7 @@ export function createSDK(options: SdkOptions = {}) {
     const body = payload as { Code?: string; Message?: string; RequestId?: string; Data?: unknown };
     if (body && typeof body === "object" && typeof body.Code === "string" && body.Code !== "OK") {
       const err = toError(
-        { code: body.Code, message: body.Message ?? "business error", requestId: body.RequestId },
+        { code: body.Code, message: body.Message || `请求失败(${body.Code})`, requestId: body.RequestId },
         res.status,
         requestId,
       );
@@ -184,6 +194,18 @@ export function createSDK(options: SdkOptions = {}) {
       request<T>(path, {
         ...init,
         method: "PUT",
+        headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      }),
+    /**
+     * PATCH — a partial update (e.g. /orchestrator/resources/{id}/attributes).
+     * Not replay-safe: like POST it is never auto-retried on 429 unless the
+     * caller supplies an idempotencyKey.
+     */
+    patch: <T>(path: string, body?: unknown, init?: CallInit) =>
+      request<T>(path, {
+        ...init,
+        method: "PATCH",
         headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),

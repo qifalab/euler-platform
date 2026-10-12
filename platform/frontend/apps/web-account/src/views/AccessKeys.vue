@@ -1,17 +1,20 @@
 <script setup lang="ts">
 /**
  * AccessKey 管理 (02§5 account security; 07§2.2 AK/SK lifecycle).
- * Lists the account's AccessKey pairs (AK + SecretKey). Enforces the cloud-side
- * limit of 2 AKs per account and the rotation-grace model: rotating an AK
+ * Lists one identity's AccessKey pairs (AK + SecretKey) — the account root,
+ * or a RAM user when `ramUserId` is given (RamUsers embeds this view in a
+ * dialog). Mirrors the cloud-side limit of 2 AKs per identity, counting
+ * enabled AND disabled keys, and the rotation-grace model: rotating an AK
  * mints a replacement while keeping the old one active through a grace window
- * so dependent SDK calls don't break mid-migration. SecretKey is surfaced
- * exactly once at creation time and never retrievable again.
+ * (≤72h, `graceUntil`) so dependent SDK calls don't break mid-migration.
+ * SecretKey is surfaced exactly once at creation time and never retrievable
+ * again.
  *
  * All lifecycle operations are backed by svc-iam (/api/ak): list, create,
  * disable, enable, rotate, delete. The client never invents an AK id or
  * secret — the server issues both and returns the secret once (07§2.7).
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   ElButton,
   ElDialog,
@@ -23,86 +26,61 @@ import {
   ElTooltip,
 } from "element-plus";
 import { useAccountAuth } from "../stores/auth";
+import { formatTime } from "../format";
+import {
+  akCapReached,
+  akCreateBody,
+  akErrorMessage,
+  akListPath,
+  maskAccessKeyId,
+  MAX_AKS_PER_IDENTITY,
+  NEVER_USED,
+  toAccessKeyView,
+  type AccessKeyDto,
+  type AccessKeyListDto,
+  type AccessKeyView,
+} from "../accessKeys";
+
+const props = defineProps<{
+  /** Manage this RAM user's keys (svc-iam ?ramUserId= / {ramUserId}); absent = the account root. */
+  ramUserId?: number;
+  /** Rendered inside another page (the RamUsers dialog): no page heading. */
+  embedded?: boolean;
+}>();
 
 const auth = useAccountAuth();
 
-type AkStatus = "active" | "inactive";
+type AccessKey = AccessKeyView;
 
-interface AccessKey {
-  /** Full AccessKeyId, kept in memory for the create dialog only. */
-  id: string;
-  /** Masked form shown in the table, e.g. LTAI5tGm****S0fH. */
-  maskedId: string;
-  /** SecretKey — populated only at creation, blanked once the dialog closes. */
-  secret: string;
-  createdAt: string;
-  lastUsed: string;
-  status: AkStatus;
-  /** True while this AK is the outgoing side of a rotation (07§2.2 grace). */
-  rotationGrace: boolean;
-}
+const MAX_AKS = MAX_AKS_PER_IDENTITY;
 
-const MAX_AKS = 2;
-
-// AccessKeys under the principal (07§2.2). Loaded from svc-iam GET /api/ak
+// AccessKeys of one identity (07§2.2). Loaded from svc-iam GET /api/ak
 // (returns {accessKeys:[...], total}); created/rotated via POST (the server
 // issues the AK/SK pair and returns the secretKey exactly once — 07§2.2).
-// Disabled/enabled/deleted via the dedicated endpoints. Max 2 per account is
-// enforced by the backend AND by disabling the create button at length >= 2.
+// Disabled/enabled/deleted via the dedicated endpoints. svc-iam caps keys at
+// 2 per identity counting enabled AND disabled ones (create / rotate answer
+// 409 Auth.AKLimitExceeded beyond that) — only deleting a key frees a slot.
 const accessKeys = ref<AccessKey[]>([]);
-
-// Backend wire shape (svc-iam). status is 1 enabled / 2 disabled; rotationGrace
-// is true while the AK is the outgoing side of a rotation.
-interface AccessKeyDto {
-  akId?: string;
-  secretKey?: string;
-  createdAt?: string;
-  lastUsed?: string;
-  status?: number;
-  rotationGrace?: boolean;
-}
-interface AccessKeyListDto { accessKeys?: AccessKeyDto[]; total?: number }
-
-// Unwrap the platform envelope {RequestId,Code,Message,Data} (03§9.3).
-async function readEnvelope<T>(res: Response): Promise<T> {
-  const body = await res.json();
-  if (!res.ok || body.Code !== "OK") {
-    throw new Error(body.Message ?? `request failed (HTTP ${res.status})`);
-  }
-  return body.Data as T;
-}
-function authHeaders(): HeadersInit {
-  return auth.accessToken
-    ? { Authorization: `Bearer ${auth.accessToken}` }
-    : {};
-}
 
 async function fetchAccessKeys() {
   if (!auth.isAuthenticated) return;
   try {
-    const data = await readEnvelope<AccessKeyListDto>(await fetch("/api/ak", { headers: authHeaders() }));
-    accessKeys.value = (data?.accessKeys ?? []).map((k) => ({
-      id: k.akId ?? "",
-      maskedId: maskAccessKeyId(k.akId ?? ""),
-      secret: "",
-      createdAt: k.createdAt ?? "—",
-      lastUsed: k.lastUsed ?? "—",
-      status: k.status === 2 ? "inactive" : "active",
-      rotationGrace: k.rotationGrace ?? false,
-    }));
+    const data = await auth.request<AccessKeyListDto>(akListPath(props.ramUserId));
+    accessKeys.value = (data?.accessKeys ?? []).map(toAccessKeyView);
   } catch (e) {
-    ElMessage.error(`加载 AccessKey 失败：${(e as Error).message}`);
+    ElMessage.error(`加载 AccessKey 失败：${akErrorMessage(e)}`);
   }
 }
 
 onMounted(fetchAccessKeys);
+// The RamUsers dialog reuses one instance across users.
+watch(() => props.ramUserId, () => {
+  accessKeys.value = [];
+  void fetchAccessKeys();
+});
 
-const atMax = computed(() => accessKeys.value.length >= MAX_AKS);
-
-function maskAccessKeyId(id: string): string {
-  if (id.length <= 14) return id;
-  return `${id.slice(0, 8)}****${id.slice(-6)}`;
-}
+const atMax = computed(() => akCapReached(accessKeys.value));
+const CAP_HINT = `每个身份最多 ${MAX_AKS_PER_IDENTITY} 个 AccessKey(含已禁用),请先删除不再使用的 AccessKey 后再创建。`;
 
 // --- create / rotate dialog ---
 type DialogMode = "create" | "rotate";
@@ -115,34 +93,33 @@ const dialogTitle = computed(() => (dialogMode.value === "rotate" ? "轮换 Acce
 
 async function openCreate() {
   if (atMax.value) {
-    ElMessage.warning("每个账号最多 2 个 AccessKey,请先删除或禁用已有的 AK 后再创建。");
+    ElMessage.warning(CAP_HINT);
     return;
   }
   // The server issues the AK/SK pair (07§2.2); secretKey is returned exactly
   // once and is never retrievable again, so it is surfaced in this dialog.
   try {
-    const created = await readEnvelope<AccessKeyDto>(
-      await fetch("/api/ak", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({}),
-      }),
-    );
+    const created = await auth.request<AccessKeyDto>("/api/ak", {
+      method: "POST",
+      body: JSON.stringify(akCreateBody(props.ramUserId)),
+    });
     const id = created.akId ?? "";
     pendingKey.value = {
       id,
       maskedId: maskAccessKeyId(id),
       secret: created.secretKey ?? "",
-      createdAt: created.createdAt ?? "—",
-      lastUsed: "—",
+      createdAt: formatTime(created.createdAt),
+      lastUsed: NEVER_USED,
       status: "active",
       rotationGrace: false,
+      graceUntil: "",
     };
     dialogMode.value = "create";
     rotatingTargetId.value = null;
     dialogVisible.value = true;
   } catch (e) {
-    ElMessage.error(`创建 AccessKey 失败：${(e as Error).message}`);
+    ElMessage.error(`创建 AccessKey 失败：${akErrorMessage(e)}`);
+    void fetchAccessKeys(); // e.g. a key created elsewhere filled the cap
   }
 }
 
@@ -150,31 +127,29 @@ async function openRotate(row: AccessKey) {
   // Rotation mints a 2nd AK while keeping the old one active in a grace window.
   // The backend issues the new AK/SK (07§2.2); the old one is marked grace there.
   if (atMax.value) {
-    ElMessage.warning("已达 2 个 AK 上限,无法轮换;请先删除一个 AccessKey 再执行轮换。");
+    ElMessage.warning(`轮换会新建一个 AccessKey,已达每个身份 ${MAX_AKS_PER_IDENTITY} 个(含已禁用)的上限;请先删除一个 AccessKey 再轮换。`);
     return;
   }
   try {
-    const rotated = await readEnvelope<AccessKeyDto>(
-      await fetch(`/api/ak/${row.id}/rotate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-      }),
-    );
+    const rotated = await auth.request<AccessKeyDto>(`/api/ak/${row.id}/rotate`, {
+      method: "POST",
+    });
     const id = rotated.akId ?? "";
     pendingKey.value = {
       id,
       maskedId: maskAccessKeyId(id),
       secret: rotated.secretKey ?? "",
-      createdAt: rotated.createdAt ?? "—",
-      lastUsed: "—",
+      createdAt: formatTime(rotated.createdAt),
+      lastUsed: NEVER_USED,
       status: "active",
       rotationGrace: false,
+      graceUntil: "",
     };
     dialogMode.value = "rotate";
     rotatingTargetId.value = row.id;
     dialogVisible.value = true;
   } catch (e) {
-    ElMessage.error(`轮换 AccessKey 失败：${(e as Error).message}`);
+    ElMessage.error(`轮换 AccessKey 失败：${akErrorMessage(e)}`);
   }
 }
 
@@ -205,15 +180,14 @@ async function toggleStatus(row: AccessKey) {
     ElMessage.warning("该 AK 处于轮换宽限期,请先完成迁移并删除后再操作。");
     return;
   }
+  // Disabled keys already count toward the cap, so enabling never exceeds it.
   const action = row.status === "active" ? "disable" : "enable";
   try {
-    await readEnvelope<unknown>(
-      await fetch(`/api/ak/${row.id}/${action}`, { method: "POST", headers: authHeaders() }),
-    );
+    await auth.request<unknown>(`/api/ak/${row.id}/${action}`, { method: "POST" });
     ElMessage.success(action === "disable" ? "AccessKey 已禁用" : "AccessKey 已启用");
     await fetchAccessKeys();
   } catch (e) {
-    ElMessage.error(`操作失败：${(e as Error).message}`);
+    ElMessage.error(`操作失败：${akErrorMessage(e)}`);
   }
 }
 
@@ -225,13 +199,11 @@ function deleteKey(row: AccessKey) {
   )
     .then(async () => {
       try {
-        await readEnvelope<unknown>(
-          await fetch(`/api/ak/${row.id}`, { method: "DELETE", headers: authHeaders() }),
-        );
+        await auth.request<unknown>(`/api/ak/${row.id}`, { method: "DELETE" });
         ElMessage.success("AccessKey 已删除");
         await fetchAccessKeys();
       } catch (e) {
-        ElMessage.error(`删除失败：${(e as Error).message}`);
+        ElMessage.error(`删除失败：${akErrorMessage(e)}`);
       }
     })
     .catch(() => {
@@ -241,19 +213,20 @@ function deleteKey(row: AccessKey) {
 </script>
 
 <template>
-  <div class="ak-page">
+  <div class="ak-page" :class="{ 'ak-embedded': embedded }">
     <div class="ak-header">
       <div class="ak-heading">
-        <h1 class="ak-title">AccessKey 管理</h1>
+        <h1 v-if="!embedded" class="ak-title">AccessKey 管理</h1>
         <p class="ak-sub">
-          AccessKey(AK)用于 API/SDK 访问辰云资源。每个账号最多 {{ MAX_AKS }} 个 AK,请定期轮换并妥善保管
+          AccessKey(AK)用于 API/SDK 访问辰云资源。每个身份最多 {{ MAX_AKS }} 个 AK(含已禁用),请定期轮换并妥善保管
           SecretKey,切勿泄露或提交到代码仓库。
         </p>
-        <p v-if="auth.user" class="ak-owner">当前账号:{{ auth.user.realName ?? auth.user.name }} (ID: {{ auth.user.id }})</p>
+        <p v-if="auth.user && !embedded" class="ak-owner">当前账号:{{ auth.user.name }} (ID: {{ auth.user.id }})</p>
+        <p v-if="atMax" class="ak-cap-hint">{{ CAP_HINT }}</p>
       </div>
 
       <el-tooltip
-        content="每个账号最多 2 个 AK"
+        :content="CAP_HINT"
         placement="top"
         :disabled="!atMax"
       >
@@ -280,6 +253,7 @@ function deleteKey(row: AccessKey) {
           <el-tag v-if="row.status === 'active'" type="success" size="small">启用</el-tag>
           <el-tag v-else type="info" size="small">禁用</el-tag>
           <el-tag v-if="row.rotationGrace" type="warning" size="small" class="ak-grace-tag">轮换宽限期</el-tag>
+          <div v-if="row.rotationGrace && row.graceUntil" class="ak-grace-until">宽限期至 {{ row.graceUntil }}</div>
         </template>
       </el-table-column>
 
@@ -295,7 +269,7 @@ function deleteKey(row: AccessKey) {
           <el-button v-else link type="primary" size="small" @click="toggleStatus(row as AccessKey)">启用</el-button>
 
           <el-button
-            v-if="row.status === 'active'"
+            v-if="row.status === 'active' && !row.rotationGrace"
             link
             type="primary"
             size="small"
@@ -309,7 +283,7 @@ function deleteKey(row: AccessKey) {
       </el-table>
     </section>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="560px" :close-on-click-modal="false" append-to-body>
       <div v-if="pendingKey" class="ak-create-body">
         <div class="ak-alert">
           请妥善保存,SecretKey 仅显示一次,关闭后将无法再次查看。
@@ -405,6 +379,19 @@ function deleteKey(row: AccessKey) {
 }
 .ak-grace-tag {
   margin-left: var(--eu-spacing-1);
+}
+.ak-grace-until {
+  margin-top: var(--eu-spacing-1);
+  font-size: var(--eu-font-size-xs);
+  color: var(--eu-color-warning-text);
+}
+.ak-cap-hint {
+  margin: var(--eu-spacing-2) 0 0;
+  font-size: var(--eu-font-size-sm);
+  color: var(--eu-color-warning-text);
+}
+.ak-page.ak-embedded {
+  padding: 0;
 }
 .ak-create-body {
   display: flex;

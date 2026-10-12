@@ -29,16 +29,48 @@ lint:yaml:
 # ---------------------------------------------------------------------------
 lint:kubeconform:
   stage: lint
-  image: ghcr.io/yannh/kubeconform:latest-alpine
+  # Pinned (supply chain): a moving :latest tag lets a registry push change what CI runs.
+  # The image's entrypoint is the kubeconform binary itself; reset it so the
+  # runner can execute the script in the image's shell (busybox, -alpine tag).
+  image:
+    name: ghcr.io/yannh/kubeconform:v0.8.0-alpine
+    entrypoint: [""]
+  variables:
+    # Helm is not in the kubeconform image: fetch a pinned, checksummed
+    # release (keep the version in step with Argo CD's bundled Helm).
+    HELM_VERSION: v3.16.4
+    HELM_SHA256: fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179
+  before_script:
+    - wget -q -O /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+    - echo "${HELM_SHA256}  /tmp/helm.tgz" | sha256sum -c -
+    - tar -xzf /tmp/helm.tgz -C /tmp && install /tmp/linux-amd64/helm /usr/local/bin/helm
   script:
-    # Helm templates carry Go directives, so render them before validating.
+    # Helm charts carry Go directives, so render them before validating —
+    # exactly as the ApplicationSet does: release name = chart dir, namespace
+    # euler-<svc>, chart defaults plus every envs/<region>/<env> override.
     - |
+      set -e
+      mkdir -p /tmp/rendered
       for chart in deploy/gitops-manifests/apps/*/; do
-        helm template "$chart" > /tmp/rendered.yaml
-        kubeconform -strict -summary /tmp/rendered.yaml
+        svc=$(basename "$chart")
+        helm template "$svc" "$chart" --namespace "euler-$svc" > "/tmp/rendered/$svc.default.yaml"
+        for values in deploy/gitops-manifests/envs/*/*/values-overrides/"$svc".yaml; do
+          [ -f "$values" ] || continue
+          env_tag=$(echo "$values" | cut -d/ -f4,5 | tr / _)
+          helm template "$svc" "$chart" --namespace "euler-$svc" -f "$values" > "/tmp/rendered/$svc.$env_tag.yaml"
+        done
       done
+      kubeconform -strict -summary -ignore-missing-schemas /tmp/rendered/
+    # Raw platform manifests: only the Kubernetes objects. The APISIX
+    # data-plane config (platform/apisix/config/) and route tables
+    # (platform/apisix/routes/) are APISIX files, not Kubernetes resources
+    # (no apiVersion/kind) — they are validated by validate:apisix-routes.
     - kubeconform -strict -summary -ignore-missing-schemas
-        deploy/gitops-manifests/platform/
+        deploy/gitops-manifests/platform/middleware/
+        deploy/gitops-manifests/platform/apisix/apisix-deployment.yaml
+        deploy/gitops-manifests/platform/apisix/kustomization.yaml
+        deploy/gitops-manifests/applicationset.yaml
+        deploy/gitops-manifests/app-of-apps.yaml
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
@@ -63,11 +95,16 @@ validate:lua-plugins:
   stage: validate
   image: alpine:3.20
   before_script:
-    - apk add --no-cache lua5.1 luarocks python3
+    - apk add --no-cache lua5.1 luarocks python3 py3-pip build-base python3-dev
     - luarocks-5.1 install luacheck
+    - pip3 install --break-system-packages lupa==2.8
   script:
-    # Structural contract check (module table, check_schema, priority).
+    # Structural contract check (module table, check_schema, priority) and
+    # identity-header strip coverage.
     - python3 tools/check-lua-plugins.py
+    # Behavioural security tests of eu-auth under a real Lua VM (header
+    # stripping, RS256 pinning, internal-token injection).
+    - python3 tools/test-lua-plugins.py
     # Real Lua linting once the interpreter is available in CI.
     - luacheck deploy/gitops-manifests/platform/apisix/plugins/ --no-color
         --globals ngx --std max
@@ -112,7 +149,8 @@ validate:proto-breaking:
 # ---------------------------------------------------------------------------
 validate:policy:
   stage: validate
-  image: openpolicyagent/conftest:latest
+  # Pinned (supply chain): a moving :latest tag lets a registry push change what CI runs.
+  image: openpolicyagent/conftest:v0.71.0
   script:
     - conftest test deploy/gitops-manifests/platform/ --policy policies/
   allow_failure: true      # advisory until the policy set is complete
@@ -125,7 +163,11 @@ validate:policy:
 # ---------------------------------------------------------------------------
 diff:argocd:
   stage: diff
-  image: argoproj/argocd:latest
+  # Pinned (supply chain): a moving :latest tag lets a registry push change what CI runs.
+  # Docker Hub's argoproj/argocd is no longer updated (its :latest is a v2.6
+  # build); the project publishes to quay.io. Keep this in step with the
+  # cluster's Argo CD server version.
+  image: quay.io/argoproj/argocd:v3.5.3
   script:
     - argocd login "$ARGOCD_SERVER" --auth-token "$ARGOCD_READONLY_TOKEN" --grpc-web
     - |

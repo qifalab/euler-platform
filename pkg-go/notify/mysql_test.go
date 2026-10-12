@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -133,5 +134,32 @@ func TestSQLStoreSurvivesRestart(t *testing.T) {
 	}
 	if got.Status != StatusPending || len(got.Deliveries) != 1 || got.Deliveries[0].MessageID != "sms-9" {
 		t.Fatalf("restarted Get = %+v", got)
+	}
+}
+
+// SUPPRESSED rows are the throttle's own output; counting them (the memory
+// stores do not) made a storm suppress every later message forever.
+func TestSQLStoreCountInWindowExcludesSuppressed(t *testing.T) {
+	store := newSQLTestStore(t)
+	for i := 0; i < 3; i++ {
+		n := testNotification(fmt.Sprintf("ntf-sent-%d", i))
+		n.Class, n.Status = ClassAlert, StatusSent
+		if err := store.Save(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		n := testNotification(fmt.Sprintf("ntf-supp-%d", i))
+		n.Class, n.Status = ClassAlert, StatusSuppressed
+		if err := store.Save(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.CountInWindow(100123, notifyClock.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 3 {
+		t.Fatalf("CountInWindow = %d, want 3 (suppressed rows excluded)", got)
 	}
 }

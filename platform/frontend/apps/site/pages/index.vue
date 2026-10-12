@@ -214,9 +214,23 @@ interface Envelope<T> {
   Data?: T;
 }
 
-const { data: annData } = await useFetch<Envelope<{ items: Announcement[] }>>("/api/v1/announcements");
-const { data: prodData } = await useFetch<Envelope<CatalogProduct[]>>("/api/v1/catalog/products");
-const { data: catData } = await useFetch<Envelope<CatalogCategory[]>>("/api/v1/catalog/categories");
+// Server-side the API needs an absolute origin (runtimeConfig.apiOrigin, see
+// nuxt.config.ts); the browser keeps same-origin relative URLs. Explicit keys:
+// the auto-generated key includes baseURL, which differs between server and
+// client and would make the client refetch instead of reusing the SSR payload.
+const apiBase = import.meta.server ? useRuntimeConfig().apiOrigin : undefined;
+const { data: annData } = await useFetch<Envelope<{ items: Announcement[] }>>("/api/v1/announcements", {
+  key: "site:announcements",
+  baseURL: apiBase,
+});
+const { data: prodData } = await useFetch<Envelope<CatalogProduct[]>>("/api/v1/catalog/products", {
+  key: "site:catalog-products",
+  baseURL: apiBase,
+});
+const { data: catData } = await useFetch<Envelope<CatalogCategory[]>>("/api/v1/catalog/categories", {
+  key: "site:catalog-categories",
+  baseURL: apiBase,
+});
 
 const announcements = computed<Announcement[]>(() => annData.value?.Data?.items ?? []);
 const onSale = computed<CatalogProduct[]>(() =>

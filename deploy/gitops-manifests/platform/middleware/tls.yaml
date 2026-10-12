@@ -1,0 +1,353 @@
+# Transport-security PKI for the shared middleware (07-security §4; K1/K2).
+#
+# Requires cert-manager >= v1.15 installed in namespace cert-manager (its
+# default cluster-resource namespace, where a ClusterIssuer's CA Secret must
+# live). v1.15 is the first release with additionalOutputFormats enabled by
+# default (GA in v1.18): the Kafka brokers read the CombinedPEM output
+# (tls-combined.pem = PKCS#8 key + chain), the one PEM keystore layout Kafka
+# accepts, straight from the Secret.
+#
+# Chain:
+#
+#   ClusterIssuer euler-selfsigned-root (selfSigned; signs the two roots only)
+#     ├── Certificate euler-platform-ca (cert-manager ns) ─► ClusterIssuer euler-platform-ca
+#     │     ├── kafka-tls            mw-mq       Kafka client listener (:9092 SASL_SSL)
+#     │     ├── minio-sell-tls       mw-storage  MinIO sell tenant (S3 data plane behind APISIX)
+#     │     ├── minio-internal-tls   mw-storage  MinIO internal tenant
+#     │     ├── minio-replication-tls mw-storage cross-region endpoint minio.<region>
+#     │     └── apisix-gateway-tls   mw-gateway  carries the platform CA into the gateway
+#     └── Certificate kafka-internal-ca (mw-mq) ─► Issuer kafka-internal-ca (mw-mq only)
+#           ├── kafka-internal-tls   mw-mq       inter-broker :9095 + KRaft controller :9093 (mTLS)
+#           └── kafka-admin-tls      mw-mq       kafka-scram-users Job (mTLS on :9095)
+#
+# Why two roots: the platform CA is a ClusterIssuer, so anyone allowed to
+# create a Certificate in ANY namespace can mint a leaf under it. Kafka's
+# inter-broker and controller listeners authenticate peers by client
+# certificate alone, so they trust only kafka-internal-ca — a namespaced
+# Issuer usable from mw-mq and nowhere else. Clients never see that root.
+#
+# Every root is per cluster (per region). Cross-region MinIO replication
+# therefore needs the peer region's euler-platform-ca certificate (public,
+# not secret) — see minio-replication.yaml.
+#
+# Rotation: roots last 10 years and renew with the SAME key
+# (rotationPolicy: Never), so leaves issued before a root renewal keep
+# verifying and no trust bundle has to change. Leaves rotate their key on
+# every renewal. MinIO reloads renewed certificates by itself; Kafka does not
+# reload PEM keystores, so its leaves last a year and renew 30 days early —
+# roll the brokers (kubectl -n mw-mq rollout restart statefulset/kafka) inside
+# that window.
+#
+# Source-only: not applied (no cluster). Structurally validated by
+# tools/check-yaml-syntax.py; kubeconform skips the cert-manager CRDs.
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: euler-selfsigned-root
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"   # PKI before middleware (-5)
+spec:
+  selfSigned: {}
+---
+# Platform root CA. The Secret must sit in cert-manager's cluster-resource
+# namespace for the CA ClusterIssuer below to read it.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: euler-platform-ca
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-8"
+spec:
+  isCA: true
+  commonName: Euler Platform Root CA
+  subject:
+    organizations: [Euler Platform]
+  secretName: euler-platform-ca
+  duration: 87600h                      # 10y
+  renewBefore: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 384
+    rotationPolicy: Never               # renewal re-signs the same key
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-selfsigned-root
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: euler-platform-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-7"
+spec:
+  ca:
+    secretName: euler-platform-ca
+---
+# Kafka-internal root: trusted ONLY by the brokers' inter-broker and
+# controller listeners (see the header for why it is a separate root).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-internal-ca
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-8"
+spec:
+  isCA: true
+  commonName: Euler Kafka Internal CA
+  subject:
+    organizations: [Euler Platform]
+  secretName: kafka-internal-ca
+  duration: 87600h
+  renewBefore: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 384
+    rotationPolicy: Never
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-selfsigned-root
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: kafka-internal-ca
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-7"
+spec:
+  ca:
+    secretName: kafka-internal-ca
+---
+# Kafka client listener (:9092, SASL_SSL). Server auth only: clients prove
+# who they are with SCRAM, not certificates. The names are the advertised
+# per-broker addresses (kafka-N.kafka-headless.mw-mq.svc, set by the
+# StatefulSet's init container) plus the bootstrap Service; lua-resty-kafka
+# and the Java client both verify the broker name they dialled. One entry per
+# broker: grow this list with the StatefulSet's replicas.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-tls
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: kafka-tls
+  commonName: kafka.mw-mq.svc
+  dnsNames:
+    - kafka-0.kafka-headless.mw-mq.svc
+    - kafka-1.kafka-headless.mw-mq.svc
+    - kafka-2.kafka-headless.mw-mq.svc
+    - kafka-0.kafka-headless.mw-mq.svc.cluster.local
+    - kafka-1.kafka-headless.mw-mq.svc.cluster.local
+    - kafka-2.kafka-headless.mw-mq.svc.cluster.local
+    - kafka.mw-mq.svc
+    - kafka.mw-mq.svc.cluster.local
+  duration: 8760h                       # Kafka needs a restart to load a renewal
+  renewBefore: 720h
+  usages: [server auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    encoding: PKCS8                     # Kafka PEM keystores require PKCS#8
+    rotationPolicy: Always
+  additionalOutputFormats:
+    - type: CombinedPEM
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-platform-ca
+---
+# Inter-broker (:9095) and KRaft controller (:9093) identity. Brokers are both
+# server and client on these listeners, hence both usages. The controller
+# quorum dials kafka-N.kafka-headless.mw-mq (controller.quorum.voters) and
+# replication dials the advertised kafka-N.kafka-headless.mw-mq.svc.
+# The subject (CN=kafka-broker, no other attributes) is the brokers' Kafka
+# principal and a super user (super.users in kafka-kraft.yaml): changing the
+# commonName or adding a subject means changing super.users with it.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-internal-tls
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: kafka-internal-tls
+  commonName: kafka-broker
+  dnsNames:
+    - kafka-0.kafka-headless.mw-mq
+    - kafka-1.kafka-headless.mw-mq
+    - kafka-2.kafka-headless.mw-mq
+    - kafka-0.kafka-headless.mw-mq.svc
+    - kafka-1.kafka-headless.mw-mq.svc
+    - kafka-2.kafka-headless.mw-mq.svc
+    - kafka-0.kafka-headless.mw-mq.svc.cluster.local
+    - kafka-1.kafka-headless.mw-mq.svc.cluster.local
+    - kafka-2.kafka-headless.mw-mq.svc.cluster.local
+  duration: 8760h
+  renewBefore: 720h
+  usages: [server auth, client auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    encoding: PKCS8
+    rotationPolicy: Always
+  additionalOutputFormats:
+    - type: CombinedPEM
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: kafka-internal-ca
+---
+# Client certificate of the kafka-scram-users Job (kafka-kraft.yaml): the
+# only non-broker identity the internal listener accepts. It provisions the
+# SCRAM credentials clients log in with on :9092, the topics and the ACLs; its
+# subject (CN=kafka-admin) is a super user in kafka-kraft.yaml, like the
+# brokers'.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-admin-tls
+  namespace: mw-mq
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: kafka-admin-tls
+  commonName: kafka-admin
+  duration: 2160h
+  usages: [client auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    encoding: PKCS8
+    rotationPolicy: Always
+  additionalOutputFormats:
+    - type: CombinedPEM
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: kafka-internal-ca
+---
+# MinIO sell tenant (04§9.3). Hand the Secret to the Tenant as
+#   requestAutoCert: false
+#   externalCertSecret: [{ name: minio-sell-tls, type: cert-manager.io/v1 }]
+# (the operator mounts it into MinIO's certs dir as public.crt / private.key;
+# without the operator, mount tls.crt/tls.key/ca.crt as
+# certs/public.crt, certs/private.key, certs/CAs/ca.crt). MinIO also uses this
+# certificate between its own nodes, hence the headless-Service wildcard.
+# euoss.api.euler.emoera.com: APISIX's openapi-euoss-data route keeps the
+# client Host (pass_host: pass), and that is the name the gateway verifies
+# (proxy_ssl_name $upstream_host) once the upstream is https.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: minio-sell-tls
+  namespace: mw-storage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: minio-sell-tls
+  commonName: minio-sell.mw-storage.svc
+  dnsNames:
+    - minio-sell.mw-storage.svc
+    - minio-sell.mw-storage.svc.cluster.local
+    - "*.minio-sell-hl.mw-storage.svc"
+    - "*.minio-sell-hl.mw-storage.svc.cluster.local"
+    - euoss.api.euler.emoera.com
+  usages: [server auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-platform-ca
+---
+# MinIO internal tenant (04§9.2: backups, etcd snapshots). Same wiring as
+# minio-sell-tls.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: minio-internal-tls
+  namespace: mw-storage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: minio-internal-tls
+  commonName: minio-internal.mw-storage.svc
+  dnsNames:
+    - minio-internal.mw-storage.svc
+    - minio-internal.mw-storage.svc.cluster.local
+    - "*.minio-internal-hl.mw-storage.svc"
+    - "*.minio-internal-hl.mw-storage.svc.cluster.local"
+  usages: [server auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-platform-ca
+---
+# Cross-region replication endpoint (minio.<region>:9000, 00§4.5). Attach it
+# as an ADDITIONAL externalCertSecret on the tenant that serves that endpoint;
+# MinIO picks the certificate by SNI. platform/ has no per-region overlay, so
+# both regions' aliases are listed: each alias resolves to exactly one region,
+# and each region signs this with its own root.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: minio-replication-tls
+  namespace: mw-storage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: minio-replication-tls
+  dnsNames:
+    - minio.cn-north-1
+    - minio.cn-east-1
+  usages: [server auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-platform-ca
+---
+# Gateway trust anchor. cert-manager has no built-in way to publish a CA into
+# another namespace (trust-manager does, but is not a platform dependency),
+# while every Secret a CA issuer writes carries that CA as ca.crt. This
+# client-auth-only leaf is that vehicle: the APISIX pods mount ONLY its
+# ca.crt (apisix-deployment.yaml), which config.yaml makes the gateway's
+# trust store (lua_ssl_trusted_certificate for eu-audit -> Kafka, and
+# proxy_ssl_trusted_certificate for https upstreams such as MinIO). It cannot
+# reach Kafka's internal listeners, which trust kafka-internal-ca only.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: apisix-gateway-tls
+  namespace: mw-gateway
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  secretName: apisix-gateway-tls
+  commonName: apisix-gateway
+  usages: [client auth, digital signature]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: euler-platform-ca

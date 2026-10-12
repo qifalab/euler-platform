@@ -52,18 +52,23 @@ func (m *memAccounts) IsAccountUsable(accountID int64) (bool, error) {
 }
 
 type memSTS struct {
-	token     string
-	accountID int64
-	principal string
-	expired   bool
+	token   string
+	cred    STSCredential
+	expired bool
 }
 
-func (m *memSTS) ValidateToken(token string, _ time.Time) (int64, string, error) {
+func (m *memSTS) ValidateToken(token string, _ time.Time) (STSCredential, error) {
 	if token != m.token || m.expired {
-		return 0, "", ErrSecurityTokenExpired
+		return STSCredential{}, ErrSecurityTokenExpired
 	}
-	return m.accountID, m.principal, nil
+	return m.cred, nil
 }
+
+// Temporary credentials sealed in the test token.
+const (
+	tempAK = "EUTEMP0000000000000000000000000A"
+	tempSK = "temporary-secret-key"
+)
 
 // akStore adapts accesskey.Manager to the AKResolver port.
 type akStore struct{ mgr *accesskey.Manager }
@@ -286,48 +291,65 @@ func TestVerifyFailsClosedWhenNonceStoreDown(t *testing.T) {
 	}
 }
 
-func TestVerifySTSHappyPath(t *testing.T) {
-	f := newFixture(t)
-	f.verifier.STS = &memSTS{token: "sts-token-abc", accountID: 100123, principal: "role/deployer"}
-
-	req := signRequest(t, f.ak, f.sk, "sts-nonce", nil, testNow)
+func stsRequest(t *testing.T, ak, sk, nonce string) Request {
+	t.Helper()
+	req := signRequest(t, ak, sk, nonce, nil, testNow)
 	req.Headers[cps1.SecurityTokenHeader] = "sts-token-abc"
 	// Re-sign because the security-token header participates in the signature.
-	req = resignWithHeaders(t, f.ak, f.sk, req, testNow)
+	return resignWithHeaders(t, ak, sk, req, testNow)
+}
 
-	id, err := f.verifier.Verify(req, testNow)
+func TestVerifySTSHappyPath(t *testing.T) {
+	f := newFixture(t)
+	f.verifier.STS = &memSTS{token: "sts-token-abc", cred: STSCredential{AccessKey: tempAK, SecretKey: tempSK, AccountID: 100123, Principal: "role/deployer"}}
+
+	id, err := f.verifier.Verify(stsRequest(t, tempAK, tempSK, "sts-nonce"), testNow)
 	if err != nil {
 		t.Fatalf("Verify with STS: %v", err)
 	}
-	if id.Principal != "role/deployer" {
-		t.Fatalf("Principal = %q, want role/deployer", id.Principal)
+	if id.Principal != "role/deployer" || id.AccountID != 100123 || id.AKID != tempAK {
+		t.Fatalf("identity = %+v", id)
 	}
 }
 
 func TestVerifySTSRejectsExpiredToken(t *testing.T) {
 	f := newFixture(t)
-	f.verifier.STS = &memSTS{token: "sts-token-abc", accountID: 100123, principal: "role/deployer", expired: true}
+	f.verifier.STS = &memSTS{token: "sts-token-abc", cred: STSCredential{AccessKey: tempAK, SecretKey: tempSK, AccountID: 100123}, expired: true}
 
-	req := signRequest(t, f.ak, f.sk, "sts-exp-nonce", nil, testNow)
-	req.Headers[cps1.SecurityTokenHeader] = "sts-token-abc"
-	req = resignWithHeaders(t, f.ak, f.sk, req, testNow)
-
-	if _, err := f.verifier.Verify(req, testNow); err != ErrSecurityTokenExpired {
+	if _, err := f.verifier.Verify(stsRequest(t, tempAK, tempSK, "sts-exp-nonce"), testNow); err != ErrSecurityTokenExpired {
 		t.Fatalf("expected ErrSecurityTokenExpired, got %v", err)
 	}
 }
 
-func TestVerifySTSRejectsCrossAccountToken(t *testing.T) {
-	// A token belonging to another account must not ride on this AK.
+// A token is bound to the temporary AK it sealed: it cannot ride on another
+// key (a long-lived AK, or someone else's temporary one).
+func TestVerifySTSRejectsTokenForAnotherAK(t *testing.T) {
 	f := newFixture(t)
-	f.verifier.STS = &memSTS{token: "sts-token-abc", accountID: 999999, principal: "role/other"}
+	f.verifier.STS = &memSTS{token: "sts-token-abc", cred: STSCredential{AccessKey: tempAK, SecretKey: tempSK, AccountID: 999999, Principal: "role/other"}}
 
-	req := signRequest(t, f.ak, f.sk, "sts-cross-nonce", nil, testNow)
-	req.Headers[cps1.SecurityTokenHeader] = "sts-token-abc"
-	req = resignWithHeaders(t, f.ak, f.sk, req, testNow)
+	if _, err := f.verifier.Verify(stsRequest(t, f.ak, f.sk, "sts-cross-nonce"), testNow); err != ErrSecurityTokenExpired {
+		t.Fatalf("expected ErrSecurityTokenExpired for a token naming another AK, got %v", err)
+	}
+}
 
-	if _, err := f.verifier.Verify(req, testNow); err != ErrSecurityTokenExpired {
-		t.Fatalf("expected ErrSecurityTokenExpired for cross-account token, got %v", err)
+// The signature must be made with the SEALED temporary secret.
+func TestVerifySTSRejectsWrongSecret(t *testing.T) {
+	f := newFixture(t)
+	f.verifier.STS = &memSTS{token: "sts-token-abc", cred: STSCredential{AccessKey: tempAK, SecretKey: tempSK, AccountID: 100123}}
+
+	if _, err := f.verifier.Verify(stsRequest(t, tempAK, "guessed-secret", "sts-wrong-sk"), testNow); err != ErrSignatureDoesNotMatch {
+		t.Fatalf("expected ErrSignatureDoesNotMatch, got %v", err)
+	}
+}
+
+// Freezing an account revokes its temporary credentials too.
+func TestVerifySTSRejectsFrozenAccount(t *testing.T) {
+	f := newFixture(t)
+	f.verifier.STS = &memSTS{token: "sts-token-abc", cred: STSCredential{AccessKey: tempAK, SecretKey: tempSK, AccountID: 100123}}
+	f.accounts.frozen[100123] = true
+
+	if _, err := f.verifier.Verify(stsRequest(t, tempAK, tempSK, "sts-frozen"), testNow); err != ErrAccountUnusable {
+		t.Fatalf("expected ErrAccountUnusable, got %v", err)
 	}
 }
 

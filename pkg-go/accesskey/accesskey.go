@@ -199,14 +199,55 @@ func (m *Manager) ResolveSK(ak string, now time.Time) (string, Record, error) {
 	return string(plain), rec, nil
 }
 
+// ErrInvalidStatus is returned by SetStatus for anything but Enabled/Disabled.
+var ErrInvalidStatus = errors.New("accesskey: SetStatus accepts only StatusEnabled or StatusDisabled (use Delete to delete)")
+
 // SetStatus enables or disables a key.
+//
+// Only StatusEnabled and StatusDisabled are accepted: deletion goes through
+// Delete, which also stamps DeletedAt for the retention sweep (a status-only
+// "delete" left DeletedAt zero, so the row was never purged).
+//
+// Enabling is an explicit operator decision to keep the key, so it clears the
+// rotation state: a superseded key's GraceUntil would otherwise survive the
+// re-enable, and once that deadline passed ResolveSK kept refusing the
+// "enabled" key. Because the cleared key no longer leaves on its own, it must
+// fit under the per-identity cap like any other live key.
 func (m *Manager) SetStatus(ak string, status Status) error {
+	if status != StatusEnabled && status != StatusDisabled {
+		return ErrInvalidStatus
+	}
 	rec, err := m.store.Get(ak)
 	if err != nil {
 		return err
 	}
 	if rec.Status == StatusDeleted {
 		return ErrAlreadyDeleted
+	}
+	if status == StatusEnabled {
+		if rec.Status == StatusEnabled && rec.GraceUntil.IsZero() {
+			return nil // already a plain enabled key
+		}
+		siblings, err := m.store.ListByOwner(rec.AccountID, rec.OwnerType, rec.OwnerID)
+		if err != nil {
+			return err
+		}
+		now := m.now()
+		live := 0
+		for _, r := range siblings {
+			if r.AK == rec.AK || r.Status != StatusEnabled {
+				continue
+			}
+			if !r.GraceUntil.IsZero() && now.After(r.GraceUntil) {
+				continue // effectively disabled (grace closed)
+			}
+			live++
+		}
+		if live >= MaxKeysPerIdentity {
+			return ErrTooManyKeys
+		}
+		rec.GraceUntil = time.Time{}
+		rec.RotatedAt = time.Time{}
 	}
 	rec.Status = status
 	return m.store.Update(rec)

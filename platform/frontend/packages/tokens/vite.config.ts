@@ -9,6 +9,9 @@ export default defineConfig({
       },
       formats: ["es", "cjs"],
       fileName: (format) => (format === "es" ? "index.js" : "index.cjs"),
+      // Vite 6 names the extracted stylesheet after the package (tokens.css);
+      // package.json exports it as ./dist/style.css, so pin the name.
+      cssFileName: "style",
     },
   },
 });

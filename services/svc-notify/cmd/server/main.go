@@ -39,12 +39,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/notify"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/storage"
 )
 
 func main() {
 	httpAddr := flag.String("http", ":9211", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -73,13 +77,20 @@ func main() {
 	}
 	slog.Info("svc-notify notification store ready", "persistent", persistent)
 	disp := notify.NewDispatcher(store, time.Now, uuid.NewString)
-	// Register a mock sender per channel so a notification always has a
-	// delivery path in this reference implementation. Production registers the
-	// SMS gateway, mail relay, in-app store and webhook push adapters instead.
+	// EMAIL goes through a real SMTP relay when EULER_SMTP_ADDR is set (and
+	// must be in production, see emailSender). The other channels keep a mock
+	// sender so a notification always has a delivery path in this reference
+	// implementation; production registers the SMS gateway, in-app store and
+	// webhook push adapters instead.
+	email, err := emailSender()
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
 	for _, s := range []notify.Sender{
 		&mockSender{ch: notify.ChannelInApp},
 		&mockSender{ch: notify.ChannelSMS},
-		&mockSender{ch: notify.ChannelEmail},
+		email,
 		&mockSender{ch: notify.ChannelWebhook},
 	} {
 		disp.Register(s)
@@ -141,16 +152,16 @@ type app struct {
 // slot the card lands in; Tab groups program cards under their tab. Field
 // names mirror what the site renders (category/badge/title/desc/image).
 type announcement struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`        // news | program | video
-	Tab         string `json:"tab,omitempty"`         // program only: tab grouping key
-	Category    string `json:"category,omitempty"`     // news only: corner tag
-	Badge       string `json:"badge,omitempty"`        // program only: corner badge
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-	Image       string `json:"image,omitempty"`
-	Link        string `json:"link,omitempty"`
-	Duration    string `json:"duration,omitempty"`     // video only
+	ID          string    `json:"id"`
+	Type        string    `json:"type"`               // news | program | video
+	Tab         string    `json:"tab,omitempty"`      // program only: tab grouping key
+	Category    string    `json:"category,omitempty"` // news only: corner tag
+	Badge       string    `json:"badge,omitempty"`    // program only: corner badge
+	Title       string    `json:"title"`
+	Description string    `json:"description,omitempty"`
+	Image       string    `json:"image,omitempty"`
+	Link        string    `json:"link,omitempty"`
+	Duration    string    `json:"duration,omitempty"` // video only
 	PublishedAt time.Time `json:"publishedAt"`
 }
 
@@ -212,7 +223,7 @@ func seedAnnouncements() []announcement {
 // withMiddleware wraps the mux with the cross-cutting middleware chain every
 // service must apply (03§2.3.4; the chain itself lives in pkg-go/httpmw).
 func withMiddleware(h http.Handler) http.Handler {
-	return httpmw.Chain(h)
+	return httpmw.Chain(httpmw.InternalToken(h))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
@@ -235,10 +246,10 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 // apiResponse wraps every JSON payload with the platform envelope so clients
 // can branch on a stable Code rather than parsing transport errors.
 type apiResponse struct {
-	Code    string      `json:"Code"`
-	Message string      `json:"Message,omitempty"`
-	RequestId string   `json:"RequestId"`
-	Data    interface{} `json:"Data,omitempty"`
+	Code      string      `json:"Code"`
+	Message   string      `json:"Message,omitempty"`
+	RequestId string      `json:"RequestId"`
+	Data      interface{} `json:"Data,omitempty"`
 }
 
 // sendRequest is the body of POST /internal/notifications.
@@ -253,17 +264,17 @@ type sendRequest struct {
 // notificationDTO is the JSON projection of a persisted Notification, including
 // the per-channel delivery evidence a support agent needs for a dispute.
 type notificationDTO struct {
-	NotificationID string             `json:"NotificationId"`
-	AccountID      int64              `json:"AccountId"`
-	Class          notify.Class       `json:"Class"`
-	TemplateID     string             `json:"TemplateId"`
-	BizKey         string             `json:"BizKey,omitempty"`
-	Status         notify.Status      `json:"Status"`
-	Attempts       int                `json:"Attempts"`
-	CreatedAt      time.Time          `json:"CreatedAt"`
-	SentAt         time.Time          `json:"SentAt,omitempty"`
-	Deliveries     []notify.Delivery  `json:"Deliveries,omitempty"`
-	LastError      string             `json:"LastError,omitempty"`
+	NotificationID string            `json:"NotificationId"`
+	AccountID      int64             `json:"AccountId"`
+	Class          notify.Class      `json:"Class"`
+	TemplateID     string            `json:"TemplateId"`
+	BizKey         string            `json:"BizKey,omitempty"`
+	Status         notify.Status     `json:"Status"`
+	Attempts       int               `json:"Attempts"`
+	CreatedAt      time.Time         `json:"CreatedAt"`
+	SentAt         time.Time         `json:"SentAt,omitempty"`
+	Deliveries     []notify.Delivery `json:"Deliveries,omitempty"`
+	LastError      string            `json:"LastError,omitempty"`
 }
 
 func toDTO(n notify.Notification) notificationDTO {
@@ -312,6 +323,11 @@ func (a *app) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !knownClass(req.Class) {
+		writeErr(w, r, http.StatusBadRequest, "Notify.InvalidClass", "unknown notification class")
+		return
+	}
+
 	n := notify.Notification{
 		AccountID:  accountID,
 		Class:      req.Class,
@@ -339,13 +355,31 @@ func (a *app) dispatch(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, r, http.StatusOK, "Notify.NotDelivered", "message not delivered on any channel", toDTO(sent))
 		case errors.Is(err, notify.ErrMissingAccount):
 			writeErr(w, r, http.StatusForbidden, "Notify.MissingAccount", err.Error())
-		default:
+		case errors.Is(err, notify.ErrNoChannels), errors.Is(err, notify.ErrMissingBizKey):
+			// The caller's request is incomplete; the sentinel text is safe to echo.
 			writeErr(w, r, http.StatusBadRequest, "Common.InvalidParameter", err.Error())
+		default:
+			// A store/database failure is ours, not the caller's: 500, and the
+			// raw error (SQL text, hosts) stays in the log.
+			slog.Error("notification dispatch failed", "account", accountID, "class", req.Class, "err", err)
+			writeErr(w, r, http.StatusInternalServerError, "Common.InternalError", "notification could not be dispatched")
 		}
 		return
 	}
 
 	writeJSON(w, r, http.StatusOK, "OK", "", toDTO(sent))
+}
+
+// knownClass reports whether c is one of the notification classes pkg-go/notify
+// defines; anything else is a malformed request.
+func knownClass(c notify.Class) bool {
+	switch c {
+	case notify.ClassArrears, notify.ClassExpiry, notify.ClassReleaseWarning,
+		notify.ClassAlert, notify.ClassOrder, notify.ClassMarketing,
+		notify.ClassVerificationCode:
+		return true
+	}
+	return false
 }
 
 // handleVerify implements GET /internal/notifications/verify.
@@ -372,9 +406,17 @@ func (a *app) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only the trust-critical classes carry delivery evidence; any other class
+	// is a malformed query, not a server failure.
+	if !class.TrustCritical() {
+		writeErr(w, r, http.StatusBadRequest, "Common.InvalidParameter", "class must be ARREARS, EXPIRY, RELEASE_WARNING or VERIFICATION_CODE")
+		return
+	}
+
 	delivered, err := a.disp.VerifyDelivered(accountID, class, bizKey)
 	if err != nil {
-		writeErr(w, r, http.StatusBadRequest, "Common.InvalidParameter", err.Error())
+		slog.Error("notification verify failed", "account", accountID, "class", class, "err", err)
+		writeErr(w, r, http.StatusInternalServerError, "Common.InternalError", "delivery evidence could not be read")
 		return
 	}
 	if !delivered {
@@ -527,4 +569,61 @@ func (s *mockSender) Send(n notify.Notification) (notify.Delivery, error) {
 		Provider:  string(s.ch) + "-provider",
 		MessageID: uuid.NewString(),
 	}, nil
+}
+
+// emailSender returns the EMAIL channel's sender.
+//
+// With EULER_SMTP_ADDR set it is the real SMTP relay (pkg-go/notify
+// SMTPSender; an invalid EULER_SMTP_* configuration is a startup error).
+// Unset outside production, it is the development stand-in that logs the
+// rendered mail instead of sending it — that is how a developer reads a
+// password-reset code locally. Unset in production is a startup error, by
+// the same rule as a missing secret (pkg-go/runmode): a stand-in there would
+// record "delivered" evidence for verification codes and expiry/release
+// warnings that never reached anyone.
+func emailSender() (notify.Sender, error) {
+	cfg, ok, err := notify.SMTPConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		s, err := notify.NewSMTPSender(cfg)
+		if err != nil {
+			return nil, err
+		}
+		host, _, _ := strings.Cut(cfg.Addr, ":")
+		slog.Info("EMAIL channel: SMTP relay", "relay", host, "tls", string(cfg.TLS), "auth", cfg.Username != "")
+		return s, nil
+	}
+	if runmode.Production() {
+		return nil, fmt.Errorf("%s is required in production (%s=%s): without a mail relay the EMAIL channel would record deliveries that never happened", notify.SMTPAddrEnv, runmode.EnvVar, runmode.Env())
+	}
+	slog.Warn("no SMTP relay configured — EMAIL notifications are logged, not sent (dev only)", "set", notify.SMTPAddrEnv)
+	return devLogEmailSender{}, nil
+}
+
+// devLogEmailSender is the development EMAIL channel: it renders the message
+// exactly as the SMTP sender would and writes it to the log. Never used in
+// production (emailSender refuses to start there without a relay).
+type devLogEmailSender struct{}
+
+func (devLogEmailSender) Channel() notify.Channel { return notify.ChannelEmail }
+
+func (devLogEmailSender) Send(n notify.Notification) (notify.Delivery, error) {
+	subject, body, err := notify.DefaultRenderer(n)
+	if err != nil {
+		return notify.Delivery{Channel: notify.ChannelEmail}, err
+	}
+	slog.Warn("DEV EMAIL (not sent — no SMTP relay configured)",
+		"to", n.Params[notify.ParamRecipient], "class", n.Class, "template", n.TemplateID,
+		"subject", subject, "body", body)
+	return notify.Delivery{
+		Channel: notify.ChannelEmail, Success: true, SentAt: time.Now(),
+		Provider: "dev-log", MessageID: uuid.NewString(),
+	}, nil
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

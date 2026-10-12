@@ -1,9 +1,7 @@
 /** 工单枚举 meta composable。
  *  数据源 svc-ticket GET /api/v1/tickets/meta;模块级缓存,多视图共享一次请求。 */
 import { ref, type Ref } from "vue";
-import { createSDK } from "@eu/sdk";
-
-const sdk = createSDK({ baseURL: "" });
+import { sdk } from "@/sdk";
 
 export interface TicketOption { value: string; label: string; }
 

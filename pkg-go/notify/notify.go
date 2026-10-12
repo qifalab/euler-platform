@@ -24,12 +24,22 @@
 // Critically, the three trust-critical classes are EXEMPT from suppression:
 // throttling a release warning to protect a customer's inbox would defeat the
 // purpose of sending it.
+//
+// # Verification codes ride the same guarantees
+//
+// A one-time verification code (password reset) is the fourth trust-critical
+// class: an alert storm must not suppress the code a locked-out customer is
+// waiting for, it cannot be opted out of, and its delivery is recorded like
+// any other evidence. The code itself is NOT evidence and must not outlive the
+// message: parameters whose key starts with SecretParamPrefix reach the
+// senders but are redacted in everything the Store persists.
 package notify
 
 import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -54,12 +64,50 @@ const (
 	ClassOrder Class = "ORDER"
 	// ClassMarketing is promotional. Opt-out applies here and nowhere else.
 	ClassMarketing Class = "MARKETING"
+
+	// ClassVerificationCode carries a one-time code (password reset). It is
+	// trust-critical: never throttled, never opted out of, delivery recorded —
+	// with the code itself redacted from the record (SecretParamPrefix).
+	ClassVerificationCode Class = "VERIFICATION_CODE"
 )
 
 // TrustCritical reports whether this class must be persisted, provably
-// delivered, and exempt from throttling and opt-out (03§4.4.2).
+// delivered, and exempt from throttling and opt-out (03§4.4.2), plus the
+// verification-code class (see the package doc).
 func (c Class) TrustCritical() bool {
-	return c == ClassArrears || c == ClassExpiry || c == ClassReleaseWarning
+	return c == ClassArrears || c == ClassExpiry || c == ClassReleaseWarning || c == ClassVerificationCode
+}
+
+// Well-known parameter keys.
+const (
+	// ParamRecipient is the delivery address for address-based channels
+	// (EMAIL: an RFC 5322 address). A Notification carries the tenant, not a
+	// mailbox, so a caller that wants an email delivered names the mailbox
+	// here; the email sender refuses a message without one.
+	ParamRecipient = "to"
+	// SecretParamPrefix marks a parameter the senders need but the record
+	// must not keep (a one-time code): its value is replaced by
+	// RedactedValue in everything the Dispatcher persists or returns.
+	SecretParamPrefix = "secret."
+	// RedactedValue replaces a secret parameter's value in the record.
+	RedactedValue = "[redacted]"
+)
+
+// RedactSecrets returns params with every SecretParamPrefix value replaced
+// by RedactedValue (the key is kept: the record still shows that a code was
+// part of the message). The input map is not modified.
+func RedactSecrets(params map[string]string) map[string]string {
+	if params == nil {
+		return nil
+	}
+	out := make(map[string]string, len(params))
+	for k, v := range params {
+		if strings.HasPrefix(k, SecretParamPrefix) {
+			v = RedactedValue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // Channel is a delivery mechanism.
@@ -76,9 +124,9 @@ const (
 type Status string
 
 const (
-	StatusPending   Status = "PENDING"
-	StatusSent      Status = "SENT"
-	StatusFailed    Status = "FAILED"
+	StatusPending    Status = "PENDING"
+	StatusSent       Status = "SENT"
+	StatusFailed     Status = "FAILED"
 	StatusSuppressed Status = "SUPPRESSED" // throttled; never applies to trust-critical
 )
 
@@ -142,13 +190,13 @@ func (n Notification) Delivered() bool {
 
 // Errors.
 var (
-	ErrNoChannels       = errors.New("notify: no delivery channels")
-	ErrRateLimited      = errors.New("notify: tenant rate limit exceeded")
-	ErrNotDelivered     = errors.New("notify: message was not delivered on any channel")
-	ErrMissingAccount   = errors.New("notify: no account attribution")
-	ErrMissingBizKey    = errors.New("notify: trust-critical notification requires a BizKey")
+	ErrNoChannels        = errors.New("notify: no delivery channels")
+	ErrRateLimited       = errors.New("notify: tenant rate limit exceeded")
+	ErrNotDelivered      = errors.New("notify: message was not delivered on any channel")
+	ErrMissingAccount    = errors.New("notify: no account attribution")
+	ErrMissingBizKey     = errors.New("notify: trust-critical notification requires a BizKey")
 	ErrDeliveryExhausted = errors.New("notify: delivery attempts exhausted, escalating")
-	ErrNotFound         = errors.New("notify: notification not found")
+	ErrNotFound          = errors.New("notify: notification not found")
 )
 
 // Sender delivers a message on one channel. Production implementations wrap
@@ -224,6 +272,10 @@ func (d *Dispatcher) Send(n Notification) (Notification, error) {
 	if n.NotificationID == "" {
 		n.NotificationID = d.nextID()
 	}
+	// Secret parameters reach the senders and nothing else: the record (and
+	// the Notification handed back to the caller) carries them redacted.
+	sendParams := n.Params
+	n.Params = RedactSecrets(n.Params)
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = now
 	}
@@ -261,7 +313,9 @@ func (d *Dispatcher) Send(n Notification) (Notification, error) {
 			})
 			continue
 		}
-		del, err := sender.Send(n)
+		outgoing := n
+		outgoing.Params = sendParams
+		del, err := sender.Send(outgoing)
 		del.Channel = ch
 		if del.SentAt.IsZero() {
 			del.SentAt = now
@@ -323,6 +377,10 @@ func Exhausted(n Notification) bool {
 
 // RetryDue reports whether a failed notification should be retried now, with
 // exponential backoff.
+//
+// The backoff runs from the LAST attempt (the newest delivery outcome), not
+// from creation: measured from CreatedAt, every attempt after the first is due
+// the moment the previous one fails, which is no backoff at all.
 func RetryDue(n Notification, now time.Time) bool {
 	if n.Status != StatusFailed || Exhausted(n) {
 		return false
@@ -331,7 +389,19 @@ func RetryDue(n Notification, now time.Time) bool {
 	if backoff > 30*time.Minute {
 		backoff = 30 * time.Minute
 	}
-	return !now.Before(n.CreatedAt.Add(backoff))
+	return !now.Before(lastAttemptAt(n).Add(backoff))
+}
+
+// lastAttemptAt is when the notification was last tried: the newest delivery
+// timestamp, or CreatedAt when no delivery was recorded.
+func lastAttemptAt(n Notification) time.Time {
+	last := n.CreatedAt
+	for _, d := range n.Deliveries {
+		if d.SentAt.After(last) {
+			last = d.SentAt
+		}
+	}
+	return last
 }
 
 // ChannelsFor returns the default channels for a class.
@@ -353,6 +423,10 @@ func ChannelsFor(c Class) []Channel {
 	case ClassOrder:
 		return []Channel{ChannelInApp}
 	case ClassMarketing:
+		return []Channel{ChannelEmail}
+	case ClassVerificationCode:
+		// The code goes to the mailbox the customer proved they own; an
+		// in-app copy would be readable by whoever holds the session.
 		return []Channel{ChannelEmail}
 	default:
 		return []Channel{ChannelInApp}

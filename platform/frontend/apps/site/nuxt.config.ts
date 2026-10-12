@@ -20,6 +20,20 @@ export default defineNuxtConfig({
       ],
     },
   },
+  // Origin the SSR server uses for /api/v1/* (announcements, catalogue).
+  // A relative useFetch("/api/v1/...") on the server resolves to Nitro itself:
+  // the devProxy below exists only under `nuxt dev`, and in production APISIX
+  // fronts only the browser's requests — so server-rendered pages 404'd and
+  // shipped empty. The browser keeps same-origin relative URLs. Override at
+  // runtime with NUXT_API_ORIGIN (e.g. the in-cluster gateway address).
+  runtimeConfig: {
+    apiOrigin: "https://www.euler.emoera.com",
+  },
+  $development: {
+    // `nuxt dev --port 3000`: SSR goes through the dev server, whose devProxy
+    // forwards to the local services.
+    runtimeConfig: { apiOrigin: "http://localhost:3000" },
+  },
   nitro: {
     compressPublicAssets: true,
     // Dev-only proxy: the SSR server and the browser fetch site content

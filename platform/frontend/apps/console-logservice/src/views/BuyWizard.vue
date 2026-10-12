@@ -15,16 +15,19 @@
  * payable as payableAmount; the summary shows 预估每小时. Price is
  * server-trial-computed; the client never invents a unit price. The order id is
  * issued by svc-order.
+ *
+ * Storage quota and retention are passed to fulfil as resource attributes
+ * (`params`: storageGb, retentionDays) — adjustable later on the detail page.
  */
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInputNumber, ElSwitch, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@eu/sdk";
-import { useCatalogMeta } from "@eu/console-kit";
+import { yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta, useOrderCheckout, fulfilledMessage, toParams } from "@eu/console-kit";
+import { sdk } from "../sdk";
+import { RETENTION_MAX, RETENTION_MIN, STORAGE_MAX_GB, STORAGE_MIN_GB, logAttributes, retentionError, storageError } from "../logPolicy";
 
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
-const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
@@ -73,7 +76,10 @@ function parseSpec(json: string): SkuSpec {
 onMounted(async () => {
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=eulog");
-    skus.value = res.data ?? [];
+    // Only on-sale POSTPAID SKUs: EULOG is postpaid-only, and the quote
+    // rejects an off-sale SKU (Catalog.NotOnSale) or a chargeType other than
+    // the SKU's own (Catalog.ChargeTypeMismatch).
+    skus.value = (res.data ?? []).filter((s) => s.status === "1" && s.chargeType === "POSTPAID");
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
       form.value.edition = specs.value[0].edition;
@@ -156,58 +162,59 @@ watch(
 function next() { if (active.value < 2) active.value++; }
 function prev() { if (active.value > 0) active.value--; }
 
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one.
+// The pending button re-runs submit(): with an order outstanding, checkout()
+// retries THAT order, carrying the (possibly corrected) params.
+const { submitting, pending, checkout } = useOrderCheckout({
+  sdk,
+  onFulfilled: (res) => {
+    ElMessage.success(fulfilledMessage("日志服务", res));
+    router.push("/instances");
+  },
+});
+
 async function submit() {
   const specCode = form.value.spec;
   if (!specCode) { ElMessage.error("请选择日志服务规格"); active.value = 0; return; }
-  if (form.value.retentionDays <= 0) { ElMessage.warning("保留期必须大于 0"); active.value = 1; return; }
-  if (form.value.storageGb < 10) { ElMessage.warning("存储容量至少 10GB"); active.value = 1; return; }
-  submitting.value = true;
-  try {
-    // 1) Quote — the authoritative per-hour payable comes from the pricing engine.
-    const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "eulog", specCode,
-      chargeType: "POSTPAID", quantity: 1,
-      regionId: form.value.region,
-    });
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo.
-    const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
-    const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
-      "/api/v1/orders",
-      {
+  // Same bounds the orchestrator enforces on the attributes — checked before
+  // an order is created and paid, not after.
+  const attrErr = storageError(form.value.storageGb) ?? retentionError(form.value.retentionDays);
+  if (attrErr) { ElMessage.warning(attrErr); active.value = 1; return; }
+  await checkout(
+    async () => {
+      // 1) Quote — the authoritative payable comes from the pricing engine.
+      const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
+        productCode: "eulog", specCode,
+        chargeType: "POSTPAID", quantity: 1,
+        regionId: form.value.region,
+      });
+      // Hourly payable in 分; actual billing accrues from metering.
+      const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>("/api/v1/orders", {
         type: "NEW", productCode: "eulog", skuCode: specCode,
+        chargeType: "POSTPAID",
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
-      },
-    );
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
-      paymentId: `pay-${created.data.orderId}`,
-      paidAmountMinor: amountMinor,
-    });
-
-    // 4) Fulfill — the orchestrator runs the saga and returns the new resource id.
-    // The productCode=eulog routes it to the DriverK8s binding. The instance
-    // params (retention/storage/crossAz) flow through to the reconcile loop.
-    const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-      "/api/v1/orchestrator/fulfill",
-      {
-        orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "eulog", region: form.value.region,
-        specCode, chargeType: "POSTPAID",
-        retentionDays: form.value.retentionDays,
-        storageGb: form.value.storageGb,
-        crossAz: form.value.crossAz,
-      },
-    );
-    ElMessage.success(`日志服务已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-    router.push("/instances");
-  } catch (e) {
-    ElMessage.error((e as Error).message || "创建失败");
-  } finally {
-    submitting.value = false;
-  }
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil run in the composable (saga: order PAID→FULFILLING→
+    // COMPLETED, resource CREATING→RUNNING; productCode=eulog routes it to the
+    // DriverK8s binding). The body is captured now so a retry repeats exactly
+    // what was ordered.
+    {
+      productCode: "eulog", region: form.value.region,
+      specCode, chargeType: "POSTPAID",
+      retentionDays: form.value.retentionDays,
+      storageGb: form.value.storageGb,
+      crossAz: form.value.crossAz,
+      // Stored as resource attributes (svc-orchestrator validates them).
+      params: toParams(logAttributes(form.value)),
+    },
+  );
 }
 </script>
 
@@ -231,8 +238,8 @@ async function submit() {
         </ElForm>
 
         <ElForm v-show="active === 1" label-position="top" class="buy-form">
-          <ElFormItem label="存储容量 (GB)"><ElInputNumber v-model="form.storageGb" :min="10" :max="100000" :step="50" /></ElFormItem>
-          <ElFormItem label="保留期 (天)"><ElInputNumber v-model="form.retentionDays" :min="1" :max="3650" /></ElFormItem>
+          <ElFormItem label="存储容量 (GB)"><ElInputNumber v-model="form.storageGb" :min="STORAGE_MIN_GB" :max="STORAGE_MAX_GB" :step="50" :precision="0" /></ElFormItem>
+          <ElFormItem label="保留期 (天)"><ElInputNumber v-model="form.retentionDays" :min="RETENTION_MIN" :max="RETENTION_MAX" :precision="0" /></ElFormItem>
           <ElFormItem label="跨可用区存储">
             <ElSwitch v-model="form.crossAz" :disabled="form.edition !== 'pro'" />
             <span class="form-hint-inline">{{ form.crossAz ? "开启:ClickHouse 存储将复制到第二可用区" : "关闭:仅单可用区存储" }}</span>
@@ -254,7 +261,8 @@ async function submit() {
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 2" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 2" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="active === 2 && !pending" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pending" type="warning" :loading="submitting" @click="submit">{{ pending.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pending.orderNo }})</ElButton>
         </div>
       </div>
 

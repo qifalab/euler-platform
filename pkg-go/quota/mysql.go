@@ -132,41 +132,48 @@ func (s *SQLStore) UpdateUsage(u Usage, expectedVersion int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), statementTimeout)
 	defer cancel()
 
-	next := expectedVersion + 1
 	return storage.Tx(ctx, s.db, func(tx *sql.Tx) error {
-		if expectedVersion == 0 {
-			_, err := tx.ExecContext(ctx,
-				`INSERT INTO quota_usage (account_id, quota_code, region, used, occupying, hard_limit, version)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				u.AccountID, u.QuotaCode, u.Region, u.Used, u.Occupying, u.HardLimit, next)
-			if err == nil {
-				return nil
-			}
-			if !storage.IsDuplicateKey(err) {
-				return fmt.Errorf("quota: create usage for account %d/%s/%s: %w", u.AccountID, u.QuotaCode, u.Region, err)
-			}
-			// uk_acc_quota_region fired: a row is already there. Fall through to
-			// the guarded UPDATE, which succeeds only if it sits at version 0.
-		}
-
-		res, err := tx.ExecContext(ctx,
-			`UPDATE quota_usage
-			    SET used = ?, occupying = ?, hard_limit = ?, version = ?
-			  WHERE account_id = ? AND quota_code = ? AND region = ? AND version = ?`,
-			u.Used, u.Occupying, u.HardLimit, next,
-			u.AccountID, u.QuotaCode, u.Region, expectedVersion)
-		if err != nil {
-			return fmt.Errorf("quota: update usage for account %d/%s/%s: %w", u.AccountID, u.QuotaCode, u.Region, err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("quota: update usage for account %d/%s/%s: %w", u.AccountID, u.QuotaCode, u.Region, err)
-		}
-		if n == 0 {
-			return errVersionConflict
-		}
-		return nil
+		return updateUsageTx(ctx, tx, u, expectedVersion)
 	})
+}
+
+// updateUsageTx is UpdateUsage's write, inside the caller's transaction so the
+// keyed operations can commit it together with their idempotency record.
+func updateUsageTx(ctx context.Context, tx *sql.Tx, u Usage, expectedVersion int) error {
+	next := expectedVersion + 1
+
+	if expectedVersion == 0 {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO quota_usage (account_id, quota_code, region, used, occupying, hard_limit, version)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			u.AccountID, u.QuotaCode, u.Region, u.Used, u.Occupying, u.HardLimit, next)
+		if err == nil {
+			return nil
+		}
+		if !storage.IsDuplicateKey(err) {
+			return fmt.Errorf("quota: create usage for account %d/%s/%s: %w", u.AccountID, u.QuotaCode, u.Region, err)
+		}
+		// uk_acc_quota_region fired: a row is already there. Fall through to
+		// the guarded UPDATE, which succeeds only if it sits at version 0.
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE quota_usage
+		    SET used = ?, occupying = ?, hard_limit = ?, version = ?
+		  WHERE account_id = ? AND quota_code = ? AND region = ? AND version = ?`,
+		u.Used, u.Occupying, u.HardLimit, next,
+		u.AccountID, u.QuotaCode, u.Region, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("quota: update usage for account %d/%s/%s: %w", u.AccountID, u.QuotaCode, u.Region, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("quota: update usage for account %d/%s/%s: %w", u.AccountID, u.QuotaCode, u.Region, err)
+	}
+	if n == 0 {
+		return errVersionConflict
+	}
+	return nil
 }
 
 // PutToken stores a reservation. It is an upsert: the Manager restores a token

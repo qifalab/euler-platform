@@ -125,10 +125,16 @@ type Pool struct {
 	Source    DeductionSource
 	Ref       string
 	Available pricing.Amount
-	// ExpireAt orders coupon consumption; zero means no expiry.
+	// ExpireAt orders coupon consumption; zero means no expiry. A pool at or
+	// past its ExpireAt contributes nothing: expired credit is forfeit.
 	ExpireAt time.Time
 	// ProductCodes restricts what the pool may pay for; empty means universal.
 	ProductCodes []string
+}
+
+// expired reports whether the pool's deadline has passed at t.
+func (p Pool) expired(t time.Time) bool {
+	return !p.ExpireAt.IsZero() && !t.Before(p.ExpireAt)
 }
 
 // applicable reports whether the pool may settle a charge for this product.
@@ -194,7 +200,8 @@ func (e *Engine) Settle(
 	if unitPrice.IsNegative() {
 		return Settlement{}, fmt.Errorf("%w: %s", ErrNoUnitPrice, unitPrice)
 	}
-	if metering.Frozen(usage.HourStart, e.Now()) {
+	now := e.Now()
+	if metering.Frozen(usage.HourStart, now) {
 		return Settlement{}, fmt.Errorf("%w: %s", ErrFrozenPeriod, usage.HourStart.Format("2006-01"))
 	}
 
@@ -205,7 +212,7 @@ func (e *Engine) Settle(
 		return Settlement{}, ErrNegativeCharge
 	}
 
-	deductions, shortfall := applyWaterfall(pretax, productCode, pools)
+	deductions, shortfall := applyWaterfall(pretax, productCode, pools, now)
 
 	var cashPaid pricing.Amount
 	for _, d := range deductions {
@@ -234,7 +241,7 @@ func (e *Engine) Settle(
 		SnapshotID:   snapshotID,
 		Shortfall:    shortfall,
 		CoveredRatio: usage.CoveredRatio,
-		SettledAt:    e.Now(),
+		SettledAt:    now,
 	}
 
 	return Settlement{
@@ -245,8 +252,9 @@ func (e *Engine) Settle(
 }
 
 // applyWaterfall spends pools in the fixed order: resource pack → coupon
-// (expiry ascending) → cash balance (01§12.3).
-func applyWaterfall(amount pricing.Amount, productCode string, pools []Pool) ([]Deduction, pricing.Amount) {
+// (expiry ascending) → cash balance (01§12.3). Pools already expired at now
+// are skipped: a voucher past its deadline is not money the customer holds.
+func applyWaterfall(amount pricing.Amount, productCode string, pools []Pool, now time.Time) ([]Deduction, pricing.Amount) {
 	if amount.IsZero() {
 		return nil, 0
 	}
@@ -255,7 +263,7 @@ func applyWaterfall(amount pricing.Amount, productCode string, pools []Pool) ([]
 	// that would otherwise be wasted is spent first.
 	ordered := make([]Pool, 0, len(pools))
 	for _, p := range pools {
-		if p.applicable(productCode) && !p.Available.IsZero() && !p.Available.IsNegative() {
+		if p.applicable(productCode) && !p.expired(now) && !p.Available.IsZero() && !p.Available.IsNegative() {
 			ordered = append(ordered, p)
 		}
 	}

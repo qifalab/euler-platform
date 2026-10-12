@@ -35,10 +35,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/identifier"
+	"github.com/qifalab/euler-platform/runmode"
 )
 
 // --- Ticket domain model ----------------------------------------------------
@@ -47,29 +49,32 @@ import (
 type TicketStatus string
 
 const (
-	StatusOpen          TicketStatus = "OPEN"           // 新建待处理
-	StatusProcessing    TicketStatus = "PROCESSING"     // 处理中
-	StatusWaitingReply  TicketStatus = "WAITING_REPLY"  // 待用户回复
-	StatusClosed        TicketStatus = "CLOSED"         // 已关闭
+	StatusOpen         TicketStatus = "OPEN"          // 新建待处理
+	StatusProcessing   TicketStatus = "PROCESSING"    // 处理中
+	StatusWaitingReply TicketStatus = "WAITING_REPLY" // 待用户回复
+	StatusClosed       TicketStatus = "CLOSED"        // 已关闭
 )
 
 // Ticket is one support ticket. SLA deadline = created + 4h for high priority,
 // +24h otherwise (MVP minimal form, 03§4.4.4).
 type Ticket struct {
-	TicketID   string      `json:"ticket_id"`
-	AccountID  int64       `json:"account_id"`
-	Category   string      `json:"category"`
-	Priority   string      `json:"priority"`
-	Status     TicketStatus `json:"status"`
-	SLADeadline time.Time  `json:"sla_deadline"`
-	Assignee   string      `json:"assignee"`
+	TicketID  string `json:"ticket_id"`
+	AccountID int64  `json:"account_id"`
+	Category  string `json:"category"`
+	// Title is the customer's one-line subject, stored on its own: it used
+	// to be dropped whenever a message was also supplied.
+	Title       string       `json:"title"`
+	Priority    string       `json:"priority"`
+	Status      TicketStatus `json:"status"`
+	SLADeadline time.Time    `json:"sla_deadline"`
+	Assignee    string       `json:"assignee"`
 	// Contact is the phone/email the customer supplied; the support workbench
 	// reads it when reaching out, so it must be persisted, not collected and
 	// dropped.
-	Contact   string      `json:"contact,omitempty"`
-	Messages  []Message   `json:"messages"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	Contact   string    `json:"contact,omitempty"`
+	Messages  []Message `json:"messages"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// ClientToken is the idempotency key the DDL's uk_client_token arbitrates
 	// (不可后置通道 must not double-open a ticket under a network retry). The
 	// store fills it in when the caller did not supply one.
@@ -111,11 +116,28 @@ type Store interface {
 	// part of the port because a SQL backend has one; the in-memory store has
 	// nothing to report and returns nil.
 	ListByAccount(accountID int64) ([]*Ticket, error)
-	// Reply appends a message and moves the ticket to WAITING_REPLY, under the
-	// store's write lock so concurrent replies cannot lose each other's append.
+	// Reply appends a message and moves the ticket per statusAfterReply, under
+	// the store's write lock so concurrent replies cannot lose each other's
+	// append.
 	Reply(accountID int64, ticketID string, msg Message, now time.Time) (*Ticket, error)
 	// Close moves the ticket to CLOSED under the store's write lock.
 	Close(accountID int64, ticketID string, now time.Time) (*Ticket, error)
+}
+
+// statusAfterReply is the reply edge of the ticket state machine. WAITING_REPLY
+// (待您回复) means the ball is in the customer's court, so only a support/system
+// reply moves a ticket there. A customer's own reply hands the ticket back to
+// support: PROCESSING, except on a ticket nobody has picked up yet, which stays
+// OPEN (待处理). Moving every reply to WAITING_REPLY told customers they owed
+// an answer right after they had given one.
+func statusAfterReply(cur TicketStatus, fromUser bool) TicketStatus {
+	if !fromUser {
+		return StatusWaitingReply
+	}
+	if cur == StatusOpen {
+		return StatusOpen
+	}
+	return StatusProcessing
 }
 
 // Errors returned by the store's mutating operations; the handlers map them to
@@ -127,9 +149,9 @@ var (
 
 // memoryStore is the phase-1 in-memory Store.
 type memoryStore struct {
-	mu      sync.RWMutex
-	byID    map[string]*Ticket
-	byAcct  map[int64][]*Ticket
+	mu     sync.RWMutex
+	byID   map[string]*Ticket
+	byAcct map[int64][]*Ticket
 }
 
 func newMemoryStore() *memoryStore {
@@ -194,7 +216,7 @@ func (s *memoryStore) Reply(accountID int64, ticketID string, msg Message, now t
 		return nil, errTicketClosed
 	}
 	t.Messages = append(t.Messages, msg)
-	t.Status = StatusWaitingReply
+	t.Status = statusAfterReply(t.Status, msg.FromUser)
 	t.UpdatedAt = now
 	return cloneTicket(t), nil
 }
@@ -253,6 +275,10 @@ func (a *app) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Ticket.InvalidCategory", "category is required")
 		return
 	}
+	if utf8.RuneCountInString(body.Category) > maxCategoryRunes {
+		writeErr(w, http.StatusBadRequest, "Ticket.InvalidCategory", fmt.Sprintf("category must be at most %d characters", maxCategoryRunes))
+		return
+	}
 	switch body.Priority {
 	case "HIGH", "NORMAL", "LOW", "":
 	default:
@@ -269,13 +295,13 @@ func (a *app) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	now := a.now()
 	t := &Ticket{
-		TicketID:   uuid.NewString(),
-		AccountID:  accountID,
-		Category:   body.Category,
-		Priority:   body.Priority,
-		Status:     StatusOpen,
+		TicketID:    uuid.NewString(),
+		AccountID:   accountID,
+		Category:    body.Category,
+		Priority:    body.Priority,
+		Status:      StatusOpen,
 		SLADeadline: slaDeadline(body.Priority, now),
-		Assignee:   identifier.ServiceName("ticket"),
+		Assignee:    identifier.ServiceName("ticket"),
 		Messages: []Message{{
 			ID:        uuid.NewString(),
 			Author:    strconv.FormatInt(accountID, 10),
@@ -390,10 +416,21 @@ func (a *app) handleClose(w http.ResponseWriter, r *http.Request) {
 type apiCreateReq struct {
 	Category string `json:"category"`
 	Priority string `json:"priority"`
-	Title    string `json:"title"`  // human title; persisted as the first message body
+	Title    string `json:"title"` // one-line subject, stored as Ticket.Title
 	Message  string `json:"message"`
 	Contact  string `json:"contact"` // phone/email the customer supplied
 }
+
+// maxCategoryRunes is the width of ticket.category (VARCHAR(32), characters).
+// A longer category is the caller's error: MySQL would refuse it as a 500.
+const maxCategoryRunes = 32
+
+// maxTitleRunes is the width of ticket.title (VARCHAR(128), characters).
+const maxTitleRunes = 128
+
+// maxContactRunes is the width of ticket.contact (VARCHAR(128), characters).
+// A longer contact is the caller's error: MySQL would refuse it as a 500.
+const maxContactRunes = 128
 
 // handleAPICreate is the public create endpoint. It reuses the Store/app
 // validation + creation but returns the platform envelope {RequestId,Code,...}.
@@ -415,18 +452,32 @@ func (a *app) handleAPICreate(w http.ResponseWriter, r *http.Request) {
 		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidCategory", "category is required")
 		return
 	}
+	if utf8.RuneCountInString(body.Category) > maxCategoryRunes {
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidCategory", fmt.Sprintf("category must be at most %d characters", maxCategoryRunes))
+		return
+	}
 	switch body.Priority {
 	case "HIGH", "NORMAL", "LOW", "":
 	default:
 		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidPriority", "priority must be HIGH/NORMAL/LOW")
 		return
 	}
-	// title doubles as the first message body when an explicit message is absent;
-	// the /internal contract requires a non-empty initial message.
+	// The title is stored as its own field; the message opens the thread.
+	// When only a title is given it also becomes the first message, since a
+	// ticket's thread is never empty.
 	body.Message = strings.TrimSpace(body.Message)
 	body.Title = strings.TrimSpace(body.Title)
 	if body.Message == "" && body.Title == "" {
 		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidMessage", "title or message is required")
+		return
+	}
+	if utf8.RuneCountInString(body.Title) > maxTitleRunes {
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidTitle", fmt.Sprintf("title must be at most %d characters", maxTitleRunes))
+		return
+	}
+	body.Contact = strings.TrimSpace(body.Contact)
+	if utf8.RuneCountInString(body.Contact) > maxContactRunes {
+		writeEnvelopedErr(w, r, http.StatusBadRequest, "Ticket.InvalidContact", fmt.Sprintf("contact must be at most %d characters", maxContactRunes))
 		return
 	}
 	if body.Priority == "" {
@@ -442,11 +493,12 @@ func (a *app) handleAPICreate(w http.ResponseWriter, r *http.Request) {
 		TicketID:    uuid.NewString(),
 		AccountID:   accountID,
 		Category:    body.Category,
+		Title:       body.Title,
 		Priority:    body.Priority,
 		Status:      StatusOpen,
 		SLADeadline: slaDeadline(body.Priority, now),
 		Assignee:    identifier.ServiceName("ticket"),
-		Contact:     strings.TrimSpace(body.Contact),
+		Contact:     body.Contact,
 		Messages: []Message{{
 			ID:        uuid.NewString(),
 			Author:    strconv.FormatInt(accountID, 10),
@@ -490,6 +542,7 @@ func (a *app) handleAPIList(w http.ResponseWriter, r *http.Request) {
 type ticketDTO struct {
 	TicketID    string       `json:"ticket_id"`
 	Category    string       `json:"category"`
+	Title       string       `json:"title"` // empty for tickets created without one
 	Priority    string       `json:"priority"`
 	Status      TicketStatus `json:"status"`
 	Assignee    string       `json:"assignee"`
@@ -497,7 +550,7 @@ type ticketDTO struct {
 	SLADeadline time.Time    `json:"sla_deadline"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
-	Message     string       `json:"message"` // first thread message (title)
+	Message     string       `json:"message"` // first thread message
 }
 
 func toTicketDTO(t *Ticket) ticketDTO {
@@ -508,6 +561,7 @@ func toTicketDTO(t *Ticket) ticketDTO {
 	return ticketDTO{
 		TicketID:    t.TicketID,
 		Category:    t.Category,
+		Title:       t.Title,
 		Priority:    t.Priority,
 		Status:      t.Status,
 		Assignee:    t.Assignee,
@@ -650,6 +704,9 @@ func main() {
 		httpAddr = flag.String("http", ":9209", "HTTP listen address")
 	)
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -744,5 +801,10 @@ func main() {
 // withMiddleware wraps the mux with the cross-cutting middleware chain every
 // service must apply (03§2.3.4; the chain itself lives in pkg-go/httpmw).
 func withMiddleware(h http.Handler) http.Handler {
-	return httpmw.Chain(h)
+	return httpmw.Chain(httpmw.InternalToken(h))
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

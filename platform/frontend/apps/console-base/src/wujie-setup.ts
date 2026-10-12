@@ -11,6 +11,7 @@ import * as Pinia from "pinia";
 import * as ElementPlus from "element-plus";
 import { useAuthStore } from "./stores/auth";
 import { useRegionStore } from "./stores/region";
+import { router } from "./router";
 
 /**
  * The theme in force when a sub-app is set up. The shell writes data-theme on
@@ -45,6 +46,14 @@ function createSharedProps() {
      * the returned token.
      */
     refreshToken: () => auth.silentRefresh(),
+    /**
+     * Cross-app navigation for sub-apps (e.g. 续费 → /billing): a sub-app's
+     * own router/hash cannot reach a shell route; @eu/console-kit's
+     * navigateShell() calls this, falling back to a full parent navigation.
+     */
+    navigate: (path: string) => {
+      void router.push(path);
+    },
     regionId: region.regionId,
     theme: currentTheme(),
     shared: {

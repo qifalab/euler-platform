@@ -77,9 +77,9 @@ func (m *memStore) ListByAccount(accountID int64) ([]Notification, error) {
 
 // mockSender records what it was asked to send and can be made to fail.
 type mockSender struct {
-	ch     Channel
-	fail   bool
-	sent   int
+	ch   Channel
+	fail bool
+	sent int
 }
 
 func (s *mockSender) Channel() Channel { return s.ch }
@@ -129,8 +129,9 @@ func releaseWarning() Notification {
 // --- Trust-critical classification ---
 
 func TestTrustCriticalClasses(t *testing.T) {
-	// 03§4.4.2 names exactly three.
-	critical := []Class{ClassArrears, ClassExpiry, ClassReleaseWarning}
+	// 03§4.4.2 names three; one-time verification codes ride the same
+	// guarantees (never throttled, never opted out of).
+	critical := []Class{ClassArrears, ClassExpiry, ClassReleaseWarning, ClassVerificationCode}
 	for _, c := range critical {
 		if !c.TrustCritical() {
 			t.Errorf("%s must be trust-critical", c)
@@ -453,5 +454,27 @@ func TestVerifyRejectsNonCriticalClass(t *testing.T) {
 	d, _, _ := newDispatcher(base)
 	if _, err := d.VerifyDelivered(acct, ClassMarketing, "x"); err == nil {
 		t.Fatal("delivery verification only applies to trust-critical classes")
+	}
+}
+
+// The backoff must run from the latest attempt. Measured from CreatedAt, a
+// message that failed again an hour after creation was immediately due again.
+func TestRetryBackoffFromLastAttempt(t *testing.T) {
+	lastTry := base.Add(time.Hour)
+	n := Notification{Status: StatusFailed, Attempts: 2, CreatedAt: base,
+		Deliveries: []Delivery{
+			{Channel: ChannelSMS, SentAt: base},
+			{Channel: ChannelSMS, SentAt: lastTry},
+		}}
+	if RetryDue(n, lastTry.Add(time.Minute)) {
+		t.Fatal("second backoff (2m) has not elapsed since the last attempt")
+	}
+	if !RetryDue(n, lastTry.Add(2*time.Minute)) {
+		t.Fatal("should retry once the backoff has elapsed since the last attempt")
+	}
+	// No delivery recorded: fall back to CreatedAt.
+	bare := Notification{Status: StatusFailed, Attempts: 1, CreatedAt: base}
+	if !RetryDue(bare, base.Add(time.Minute)) {
+		t.Fatal("without deliveries the backoff runs from CreatedAt")
 	}
 }

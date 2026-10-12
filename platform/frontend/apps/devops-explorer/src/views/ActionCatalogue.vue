@@ -4,10 +4,9 @@
  *  svc-api-meta; this view lists what is registered so the Explorer dropdown
  *  and docs reflect the real gate. */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "../sdk";
 import { PageHeader } from "@eu/ui";
 
-const sdk = createSDK({ baseURL: "" });
 const actions = ref<ActionMeta[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -26,7 +25,9 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    const res = await sdk.get<ActionMeta[] | { actions: ActionMeta[] }>("/internal/actions");
+    // /internal/actions is intranet-only (never routed by the gateway); the
+    // explorer catalogue endpoint serves the same list to console users.
+    const res = await sdk.get<ActionMeta[] | { actions: ActionMeta[] }>("/api/v1/apimeta/explorer/actions");
     actions.value = Array.isArray(res.data) ? res.data : (res.data as { actions: ActionMeta[] }).actions ?? [];
   } catch (e) {
     error.value = (e as Error).message;

@@ -14,3 +14,7 @@ data:
   PORT: {{ .Values.service.port | quote }}
   NACOS_NAMESPACE: {{ .Values.env.NACOS_NAMESPACE | quote }}
   SERVICE_GROUP: {{ .Values.env.SERVICE_GROUP | quote }}
+  # Non-secret runtime settings (EULER_ENV, downstream URLs, ...).
+  {{- range $k, $v := .Values.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

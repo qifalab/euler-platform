@@ -40,8 +40,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/multiregion"
 	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/topology"
 )
 
@@ -64,13 +66,22 @@ type product struct {
 	OwnerTeam    string `json:"ownerTeam"`
 }
 
+// Sale statuses (sql/V1: t_product.status 0草稿 1审核中 2在售 3停售, 仅 2 可下单;
+// t_sku.status 0草稿 1在售 2下架). The list endpoints show every row (the ops
+// back-office and the console render drafts/off-sale rows with their status);
+// only the quote path — the gate in front of every order — requires on-sale.
+const (
+	productStatusOnSale = 2
+	skuStatusOnSale     = "1"
+)
+
 // sku mirrors t_sku.
 type sku struct {
-	SKUCode     string            `json:"skuCode"`
-	ProductCode string            `json:"productCode"`
+	SKUCode     string             `json:"skuCode"`
+	ProductCode string             `json:"productCode"`
 	ChargeType  pricing.ChargeType `json:"chargeType"`
-	SpecJSON    string            `json:"specJson"`
-	Status      string            `json:"status"`
+	SpecJSON    string             `json:"specJson"`
+	Status      string             `json:"status"`
 }
 
 // zone is one availability zone inside a region (00§4.1). The zone id follows
@@ -392,15 +403,15 @@ func seedCategories() []category {
 // create time, so the quote must carry the AZ so placement can be validated and
 // the resource_id built with the right zone context.
 type quoteRequest struct {
-	ProductCode string `json:"productCode"`
-	SpecCode    string `json:"specCode"`    // SKU code, e.g. euecs.s2.large.prepaid
-	ChargeType  string `json:"chargeType"`  // PREPAID / POSTPAID
-	Duration    int64  `json:"duration"`     // months for PREPAID; ignored for POSTPAID
-	Quantity    int64  `json:"quantity"`     // instances; defaults to 1
-	RegionID    string `json:"regionId"`    // optional; "" → wildcard rule
-	ZoneID      string `json:"zoneId"`      // optional REGIONAL; required ZONAL (M-6, 00§4.4)
+	ProductCode   string `json:"productCode"`
+	SpecCode      string `json:"specCode"`   // SKU code, e.g. euecs.s2.large.prepaid
+	ChargeType    string `json:"chargeType"` // optional; must equal the SKU's charge type ("" = the SKU's)
+	Duration      int64  `json:"duration"`   // months for PREPAID; ignored for POSTPAID
+	Quantity      int64  `json:"quantity"`   // instances; defaults to 1
+	RegionID      string `json:"regionId"`   // optional; "" → wildcard rule
+	ZoneID        string `json:"zoneId"`     // optional REGIONAL; required ZONAL (M-6, 00§4.4)
 	CustomerLevel string `json:"customerLevel"`
-	UserTag     string `json:"userTag"`      // "new" for first-purchase promo
+	UserTag       string `json:"userTag"` // "new" for first-purchase promo
 }
 
 func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
@@ -452,6 +463,29 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Catalog.SKUNotFound", 404, "规格不存在或与产品不匹配")
 		return
 	}
+	// A SKU row whose product row is missing (catalogue drift: the SKU was
+	// loaded but its t_product row was deleted or never seeded) cannot be
+	// placed or priced — answer 404 instead of dereferencing nil.
+	if matchedProduct == nil {
+		writeErr(w, "Catalog.ProductNotFound", 404, "产品不存在")
+		return
+	}
+	// Sale-status gate: only an on-sale product (status 2) with an on-sale SKU
+	// (status 1) may be quoted — a draft, under-review, delisted or stopped row
+	// must not reach an order even though the list endpoints still show it.
+	if matchedProduct.Status != productStatusOnSale || matched.Status != skuStatusOnSale {
+		writeErr(w, "Catalog.NotOnSale", 409, "产品或规格未在售")
+		return
+	}
+	// The charge type is a property of the SKU (one row per spec × charge
+	// form), not a caller's choice: pricing a PREPAID SKU as POSTPAID would
+	// drop the duration factor (payable 0 for a month of compute). An empty
+	// chargeType means "the SKU's own"; a different one is rejected.
+	if req.ChargeType != "" && pricing.ChargeType(req.ChargeType) != matched.ChargeType {
+		writeErr(w, "Catalog.ChargeTypeMismatch", 400,
+			"chargeType "+req.ChargeType+" does not match SKU "+matched.SKUCode+" ("+string(matched.ChargeType)+")")
+		return
+	}
 
 	// Placement gate (M-6, 00§4.4): a ZONAL product pins to one AZ at create
 	// time, so its quote must carry a zoneId that is a valid AZ in the quote's
@@ -481,12 +515,15 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 				"zone "+req.ZoneID+" is not in region "+req.RegionID)
 			return
 		}
+		// A zone-only quote still prices in the zone's region: without this the
+		// empty regionId would select the wildcard rule over a region rule.
+		if req.RegionID == "" {
+			req.RegionID = az.Region
+		}
 	}
 
-	ct := pricing.ChargeType(req.ChargeType)
-	if ct == "" {
-		ct = matched.ChargeType
-	}
+	// Always price with the catalogue's charge type (checked above).
+	ct := matched.ChargeType
 	if req.Quantity == 0 {
 		req.Quantity = 1
 	}
@@ -512,17 +549,17 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	preq := pricing.Request{
-		AccountID:      acct,
-		ProductCode:    req.ProductCode,
-		SKUCode:        req.SpecCode,
-		RegionID:       req.RegionID,
-		ChargeType:     ct,
-		Duration:       dur,
-		DurationUnit:   durUnit,
-		Quantity:       req.Quantity,
-		CustomerLevel:  req.CustomerLevel,
-		UserTag:        req.UserTag,
-		At:             time.Now(),
+		AccountID:     acct,
+		ProductCode:   req.ProductCode,
+		SKUCode:       req.SpecCode,
+		RegionID:      req.RegionID,
+		ChargeType:    ct,
+		Duration:      dur,
+		DurationUnit:  durUnit,
+		Quantity:      req.Quantity,
+		CustomerLevel: req.CustomerLevel,
+		UserTag:       req.UserTag,
+		At:            time.Now(),
 	}
 
 	// The real pricing engine: 目录价 → 促销折扣 → 代金券. Phase-1 catalog
@@ -533,7 +570,13 @@ func (s *catalogStore) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Catalog.QuoteFailed", 400, err.Error())
 		return
 	}
-	writeJSON(w, "OK", resultToMap(res, ct, dur, durUnit, req.Quantity))}
+	out := resultToMap(res, ct, dur, durUnit, req.Quantity)
+	// The placement scope rides the quote: svc-order enforces it at create
+	// (a ZONAL order must name its zone; a REGIONAL order's zone is dropped)
+	// without a second catalogue round trip.
+	out["regionScope"] = string(scope)
+	writeJSON(w, "OK", out)
+}
 
 func (s *catalogStore) handleProducts(w http.ResponseWriter, r *http.Request) {
 	// Anonymous-safe: the product catalogue is public marketing data — the
@@ -770,7 +813,7 @@ func (s *catalogStore) handlePlacement(w http.ResponseWriter, r *http.Request) {
 	scope := topology.RegionScope(matched.RegionScope)
 	writeJSON(w, "OK", map[string]any{
 		"productCode":  matched.ProductCode,
-		"regionScope": matched.RegionScope,
+		"regionScope":  matched.RegionScope,
 		"zonal":        scope.Zonal(),
 		"crossAz":      matched.CrossAZ,
 		"zoneRequired": scope.Zonal(),
@@ -890,7 +933,7 @@ func writeErr(w http.ResponseWriter, code string, status int, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Euler-TraceId")
+		id := httpmw.SanitizeRequestID(r.Header.Get("X-Euler-TraceId"))
 		if id == "" {
 			id = fmt.Sprintf("catalog-%d", time.Now().UnixNano())
 		}
@@ -914,6 +957,9 @@ func recoverMiddleware(h http.Handler) http.Handler {
 func main() {
 	addr := flag.String("http", ":9207", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	repo, err := newCatalogRepo(context.Background())
@@ -942,10 +988,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/catalog/placement", store.handlePlacement)
 	mux.HandleFunc("GET /api/v1/catalog/regions", store.handleRegions)
 	mux.HandleFunc("GET /api/v1/catalog/region-topology", store.handleRegionTopology)
-mux.HandleFunc("GET /api/v1/catalog/images", store.handleImages)
-mux.HandleFunc("GET /api/v1/catalog/categories", store.handleCategories)
+	mux.HandleFunc("GET /api/v1/catalog/images", store.handleImages)
+	mux.HandleFunc("GET /api/v1/catalog/categories", store.handleCategories)
 
-	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(httpmw.InternalToken(mux))), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("svc-catalog listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -963,4 +1009,9 @@ mux.HandleFunc("GET /api/v1/catalog/categories", store.handleCategories)
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 	}
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

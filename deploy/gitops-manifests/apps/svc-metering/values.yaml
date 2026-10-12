@@ -54,3 +54,20 @@ topology:
 pdb:
   enabled: true
   minAvailable: 1
+
+# Least-privilege runtime (templates/deployment.yaml securityContext) and
+# ingress isolation (templates/networkpolicy.yaml).
+networkPolicy:
+  enabled: true
+  # Namespaces allowed in addition to those labelled euler.platform/plane=control.
+  allowFromNamespaces:
+    - mw-gateway
+    - observability
+
+# Secret projected with envFrom (optional); see README「生产必需配置」.
+secretName: euler-platform-secrets
+
+# Non-secret env projected into the ConfigMap (EULER_ENV is set per
+# environment in envs/<region>/<env>/values-overrides).
+extraEnv:
+  EULER_SVC_ORCHESTRATOR_URL: "http://svc-orchestrator.euler-svc-orchestrator.svc:9203"

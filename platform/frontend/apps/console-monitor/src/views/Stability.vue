@@ -7,9 +7,8 @@
 import { ref, onMounted } from "vue";
 import { ElButton } from "element-plus";
 import { PageHeader, StatusBadge } from "@eu/ui";
-import { createSDK } from "@eu/sdk";
-
-const sdk = createSDK({ baseURL: "" });
+import { formatDate } from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 interface ObjectiveDTO {
   name: string;
@@ -178,7 +177,7 @@ onMounted(() => void load());
                 <StatusBadge :status="d.needsRemediation ? 'Error' : 'Success'" />
                 {{ d.needsRemediation ? "需整改" : "通过" }}
               </td>
-              <td>{{ d.drilledAt ? d.drilledAt.slice(0, 10) : "" }}</td>
+              <td>{{ formatDate(d.drilledAt) }}</td>
             </tr>
           </tbody>
         </table>

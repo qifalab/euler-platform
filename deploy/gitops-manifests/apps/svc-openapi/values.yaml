@@ -1,0 +1,84 @@
+# Default values for the svc-openapi chart.
+# Env-specific overrides live in deploy/gitops-manifests/envs/<region>/<env>/values-overrides/.
+
+image:
+  repository: harbor.internal/cloudplatform/svc-openapi
+  # Immutable version tag (never `latest`): CI stamps the released tag via the
+  # env values-overrides; v0.1.0 is the placeholder for the first cut.
+  tag: v0.1.0
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+serviceAccount:
+  name: svc-openapi
+
+service:
+  port: 9230
+  targetPort: 9230
+
+# The service binary takes its listen address from the -http flag
+# (services/svc-openapi/cmd/server/main.go). The chart injects it so containerPort,
+# Service port, probes and the actual listen port always agree.
+args:
+  - "-http=:9230"
+
+# Runtime env shared by all phase-1 services (04§3.4, 08§6.2), projected via
+# the <release>-config ConfigMap and mounted with envFrom.
+env:
+  NACOS_NAMESPACE: "public"
+  SERVICE_GROUP: "cloudplatform"
+
+# Probe endpoints (all-Go services expose /healthz and /readyz).
+probe:
+  readinessPath: /readyz
+  livenessPath: /healthz
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: "1Gi"
+
+# Cross-AZ topology (M-6, 00§4.4 P2). Default off (P1 single-AZ dev); prod
+# and staging overrides turn zoneSpread on so replicas hard-spread across AZs.
+topology:
+  zoneSpread: false                  # set true in prod/staging values-overrides
+  maxSkew: 1                         # the smallest skew a P2 service tolerates
+  whenUnsatisfiable: DoNotSchedule   # hard, not ScheduleAnyway (P2 is a promise)
+
+# PodDisruptionBudget: rendered only when replicas > 1 (a single-replica dev
+# deployment with minAvailable 1 would block every node drain).
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Least-privilege runtime (templates/deployment.yaml securityContext) and
+# ingress isolation (templates/networkpolicy.yaml).
+networkPolicy:
+  enabled: true
+  # Namespaces allowed in addition to those labelled euler.platform/plane=control.
+  # mw-gateway: APISIX forwards every OpenAPI-zone route
+  # (platform/apisix/routes/openapi-zone.yaml) here.
+  allowFromNamespaces:
+    - mw-gateway
+    - observability
+
+# Secret projected with envFrom (optional); see README「生产必需配置」.
+secretName: euler-platform-secrets
+
+# Non-secret env projected into the ConfigMap (EULER_ENV is set per
+# environment in envs/<region>/<env>/values-overrides). The facade keeps no
+# state: every Action is translated into calls on these services, each
+# carrying the caller's X-Euler-Account-Id and the internal token (from the
+# euler-platform-secrets Secret, EULER_INTERNAL_TOKEN).
+extraEnv:
+  EULER_SVC_CATALOG_URL: "http://svc-catalog.euler-svc-catalog.svc:9207"
+  EULER_SVC_ORDER_URL: "http://svc-order.euler-svc-order.svc:9204"
+  EULER_SVC_ORCHESTRATOR_URL: "http://svc-orchestrator.euler-svc-orchestrator.svc:9203"
+  EULER_SVC_MONITOR_URL: "http://svc-monitor.euler-svc-monitor.svc:9202"
+  # Region a create lands in when the caller names neither RegionId nor
+  # ZoneId: the region the OpenAPI routes' eu-auth signs for.
+  EULER_OPENAPI_DEFAULT_REGION: "cn-north-1"

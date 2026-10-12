@@ -25,6 +25,15 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      # Least privilege (等保三级 / CIS): non-root, no privilege escalation,
+      # read-only root filesystem, all capabilities dropped, default seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       # Business workloads land on the general services pool (04§2.1); the
       # gateway pool is tainted and reserved for gateway/middleware.
       nodeSelector:
@@ -72,6 +81,18 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-config
+            # Secrets (EULER_INTERNAL_TOKEN, signing/KMS keys, DSN, ...) from one
+            # Secret per namespace — README「生产必需配置」. Optional so dev
+            # clusters start without it; production services refuse to start
+            # when a required secret is missing (pkg-go/runmode).
+            - secretRef:
+                name: {{ .Values.secretName | default "euler-platform-secrets" }}
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:
@@ -89,7 +110,9 @@ spec:
           lifecycle:
             preStop:
               # Drain before exit: stop accepting new connections and let
-              # in-flight requests finish (08§6.2).
-              exec:
-                command: ["/bin/sh", "-c", "sleep 15"]
+              # in-flight requests finish (08§6.2). Native sleep action
+              # (Kubernetes >= 1.30): the images are distroless, so an exec
+              # of /bin/sh would fail and skip the drain entirely.
+              sleep:
+                seconds: 15
       terminationGracePeriodSeconds: 45

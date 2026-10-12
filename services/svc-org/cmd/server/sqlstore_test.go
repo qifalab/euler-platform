@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/qifalab/euler-platform/storage/sqltest"
@@ -269,17 +272,18 @@ func TestSQLStoreOrgSurvivesRestart(t *testing.T) {
 }
 
 // TestSQLStoreMatchesMemoryStore runs one script through both implementations and
-// requires the same observable outcome. The script supplies numeric project ids:
-// those are valid keys in both stores, so every field — including the parent link
-// — can be compared exactly, which a UUID-vs-号段 mismatch would hide.
+// requires the same observable outcome. Both stores issue their own ids (号段
+// numbers vs UUIDs), so projects are compared by name with the parent link
+// resolved to the parent's name — which is what the ids encode.
 func TestSQLStoreMatchesMemoryStore(t *testing.T) {
-	run := func(store orgStore) (project, []project, []tag) {
+	type view struct{ Name, Parent string }
+	run := func(store orgStore) (view, []view, []tag) {
 		t.Helper()
-		p := project{ProjectID: "1001", AccountID: testAccount, Name: "生产"}
+		p := project{AccountID: testAccount, Name: "生产"}
 		if err := store.CreateProject(&p); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		child := project{ProjectID: "1002", AccountID: testAccount, Name: "测试", ParentID: p.ProjectID}
+		child := project{AccountID: testAccount, Name: "测试", ParentID: p.ProjectID}
 		if err := store.CreateProject(&child); err != nil {
 			t.Fatalf("create child: %v", err)
 		}
@@ -301,13 +305,22 @@ func TestSQLStoreMatchesMemoryStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
-		return got, projects, tags
+		names := map[string]string{}
+		for _, q := range projects {
+			names[q.ProjectID] = q.Name
+		}
+		views := make([]view, 0, len(projects))
+		for _, q := range projects {
+			views = append(views, view{q.Name, names[q.ParentID]})
+		}
+		sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
+		return view{got.Name, names[got.ParentID]}, views, tags
 	}
 
 	sqlChild, sqlProjects, sqlTags := run(newSQLTestStore(t))
 	memChild, memProjects, memTags := run(newMemStore())
 
-	if sqlChild != memChild {
+	if sqlChild != memChild || sqlChild.Parent != "生产" {
 		t.Fatalf("child project: sql %+v, memory %+v", sqlChild, memChild)
 	}
 	if len(sqlProjects) != len(memProjects) {
@@ -320,5 +333,152 @@ func TestSQLStoreMatchesMemoryStore(t *testing.T) {
 	}
 	if len(sqlTags) != len(memTags) || sqlTags[0] != memTags[0] {
 		t.Fatalf("tags: sql %+v, memory %+v", sqlTags, memTags)
+	}
+}
+
+// bothStores runs fn against the SQL store (when a database is configured) and
+// the memory store.
+func bothStores(t *testing.T, fn func(t *testing.T, store orgStore)) {
+	t.Run("sql", func(t *testing.T) { fn(t, newSQLTestStore(t)) })
+	t.Run("memory", func(t *testing.T) { fn(t, newMemStore()) })
+}
+
+// Regression: a numeric client-supplied project_id was used as the global
+// primary key, so one tenant could take the ids the allocator would hand to
+// another tenant's next creates — which then failed as "already exists".
+func TestStoresIgnoreClientSuppliedProjectID(t *testing.T) {
+	bothStores(t, func(t *testing.T, store orgStore) {
+		for i := 1; i <= 5; i++ {
+			squat := project{ProjectID: strconv.Itoa(i), AccountID: "999", Name: "squat-" + strconv.Itoa(i)}
+			if err := store.CreateProject(&squat); err != nil {
+				t.Fatal(err)
+			}
+		}
+		chosen := project{ProjectID: "777777", AccountID: "999", Name: "chosen"}
+		if err := store.CreateProject(&chosen); err != nil {
+			t.Fatal(err)
+		}
+		if chosen.ProjectID == "777777" {
+			t.Fatal("the store kept the caller's project id")
+		}
+		for i := 1; i <= 5; i++ {
+			p := project{AccountID: testAccount, Name: "p-" + strconv.Itoa(i)}
+			if err := store.CreateProject(&p); err != nil {
+				t.Fatalf("create %d for another tenant: %v", i, err)
+			}
+		}
+	})
+}
+
+// Regression: parent_id was never validated — a project could be its own
+// parent, close a cycle, or hang under another account's (or a missing) project.
+func TestStoresValidateParent(t *testing.T) {
+	bothStores(t, func(t *testing.T, store orgStore) {
+		a := project{AccountID: testAccount, Name: "a"}
+		if err := store.CreateProject(&a); err != nil {
+			t.Fatal(err)
+		}
+		b := project{AccountID: testAccount, Name: "b", ParentID: a.ProjectID}
+		if err := store.CreateProject(&b); err != nil {
+			t.Fatal(err)
+		}
+		c := project{AccountID: testAccount, Name: "c", ParentID: b.ProjectID}
+		if err := store.CreateProject(&c); err != nil {
+			t.Fatal(err)
+		}
+		stranger := project{AccountID: "999", Name: "stranger"}
+		if err := store.CreateProject(&stranger); err != nil {
+			t.Fatal(err)
+		}
+
+		for name, parent := range map[string]string{
+			"missing":         "424242424",
+			"non-numeric":     "not-a-project",
+			"another account": stranger.ProjectID,
+		} {
+			p := project{AccountID: testAccount, Name: "x-" + name, ParentID: parent}
+			if err := store.CreateProject(&p); !errors.Is(err, errInvalidParent) {
+				t.Errorf("create under %s parent = %v, want errInvalidParent", name, err)
+			}
+			if err := store.UpdateProject(testAccount, c.ProjectID, nil, &parent); !errors.Is(err, errInvalidParent) {
+				t.Errorf("reparent under %s parent = %v, want errInvalidParent", name, err)
+			}
+		}
+		self := a.ProjectID
+		if err := store.UpdateProject(testAccount, a.ProjectID, nil, &self); !errors.Is(err, errInvalidParent) {
+			t.Errorf("self-parent = %v, want errInvalidParent", err)
+		}
+		descendant := c.ProjectID
+		if err := store.UpdateProject(testAccount, a.ProjectID, nil, &descendant); !errors.Is(err, errInvalidParent) {
+			t.Errorf("parent = own grandchild (cycle) = %v, want errInvalidParent", err)
+		}
+		got, err := store.GetProject(testAccount, a.ProjectID)
+		if err != nil || got.ParentID != "" {
+			t.Fatalf("a refused reparent changed the project: %+v %v", got, err)
+		}
+		// A legal reparent still works: c moves directly under a.
+		up := a.ProjectID
+		if err := store.UpdateProject(testAccount, c.ProjectID, nil, &up); err != nil {
+			t.Fatalf("legal reparent: %v", err)
+		}
+	})
+}
+
+// Names are unique per account in both stores, on create and on rename.
+func TestStoresProjectNameUniqueOnCreateAndRename(t *testing.T) {
+	bothStores(t, func(t *testing.T, store orgStore) {
+		a := project{AccountID: testAccount, Name: "a"}
+		b := project{AccountID: testAccount, Name: "b"}
+		for _, p := range []*project{&a, &b} {
+			if err := store.CreateProject(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dup := project{AccountID: testAccount, Name: "a"}
+		if err := store.CreateProject(&dup); !errors.Is(err, errProjectExists) {
+			t.Fatalf("duplicate create = %v, want errProjectExists", err)
+		}
+		name := "a"
+		if err := store.UpdateProject(testAccount, b.ProjectID, &name, nil); !errors.Is(err, errProjectExists) {
+			t.Fatalf("rename onto an existing name = %v, want errProjectExists", err)
+		}
+		same := "b"
+		if err := store.UpdateProject(testAccount, b.ProjectID, &same, nil); err != nil {
+			t.Fatalf("renaming a project to its own name: %v", err)
+		}
+	})
+}
+
+// Regression: the membership row (global uk_resource) was read and updated by
+// resource_id alone, so a tenant could move another tenant's resource into its
+// own project, and the mismatch error echoed the other tenant's project id.
+func TestSQLStoreMoveResourceIsAccountScoped(t *testing.T) {
+	store := newSQLTestStore(t)
+
+	theirs := project{AccountID: "999", Name: "theirs"}
+	theirs2 := project{AccountID: "999", Name: "theirs-2"}
+	mine := project{AccountID: testAccount, Name: "mine"}
+	mine2 := project{AccountID: testAccount, Name: "mine-2"}
+	for _, p := range []*project{&theirs, &theirs2, &mine, &mine2} {
+		if err := store.CreateProject(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.MoveResource("999", "res-x", theirs.ProjectID, theirs.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, from := range []string{mine.ProjectID, mine2.ProjectID} {
+		err := store.MoveResource(testAccount, "res-x", from, mine2.ProjectID)
+		if !errors.Is(err, errResourceNotFound) {
+			t.Fatalf("moving another account's resource = %v, want errResourceNotFound", err)
+		}
+		if strings.Contains(err.Error(), theirs.ProjectID) {
+			t.Fatalf("error leaked the owner's project id: %v", err)
+		}
+	}
+	// The owner's membership is untouched and still movable by the owner.
+	if err := store.MoveResource("999", "res-x", theirs.ProjectID, theirs2.ProjectID); err != nil {
+		t.Fatalf("owner's move after the foreign attempts: %v", err)
 	}
 }

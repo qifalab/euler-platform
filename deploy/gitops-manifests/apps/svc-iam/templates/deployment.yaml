@@ -25,6 +25,15 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      # Least privilege (等保三级 / CIS): non-root, no privilege escalation,
+      # read-only root filesystem, all capabilities dropped, default seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       # Business workloads land on the general services pool (04§2.1); the
       # gateway pool is tainted and reserved for gateway/middleware.
       nodeSelector:
@@ -53,7 +62,8 @@ spec:
               app.kubernetes.io/name: {{ .Chart.Name }}
         {{- end }}
       containers:
-        - name: {{ .Chart.Name }}
+        # web-auth: the image's default entrypoint (/app/app).
+        - name: web-auth
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.args }}
@@ -72,6 +82,18 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-config
+            # Secrets (EULER_INTERNAL_TOKEN, signing/KMS keys, DSN, ...) from one
+            # Secret per namespace — README「生产必需配置」. Optional so dev
+            # clusters start without it; production services refuse to start
+            # when a required secret is missing (pkg-go/runmode).
+            - secretRef:
+                name: {{ .Values.secretName | default "euler-platform-secrets" }}
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:
@@ -89,7 +111,52 @@ spec:
           lifecycle:
             preStop:
               # Drain before exit: stop accepting new connections and let
-              # in-flight requests finish (08§6.2).
-              exec:
-                command: ["/bin/sh", "-c", "sleep 15"]
+              # in-flight requests finish (08§6.2). Native sleep action
+              # (Kubernetes >= 1.30): the images are distroless, so an exec
+              # of /bin/sh would fail and skip the drain entirely.
+              sleep:
+                seconds: 15
+        # verify: the OpenAPI signature verifier eu-auth forwards to
+        # (svc-iam.<ns>.svc:{{ .Values.verify.port }}/internal/openapi/verify).
+        - name: verify
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.verify.command | nindent 12 }}
+          {{- with .Values.verify.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: {{ .Values.verify.port }}
+              name: verify
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+            - secretRef:
+                name: {{ .Values.secretName | default "euler-platform-secrets" }}
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.verify.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probe.readinessPath }}
+              port: {{ .Values.verify.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probe.livenessPath }}
+              port: {{ .Values.verify.port }}
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 15
       terminationGracePeriodSeconds: 45

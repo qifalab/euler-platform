@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,12 +17,28 @@ import (
 // implementation writes resource_db's flow_instance + step_instance; the
 // in-memory one keeps the demo and `go test` dependency-free.
 //
-// put carries an error because a SQL backend has one: refusing to start a flow it
-// cannot record is better than running an untraceable saga.
+// Every method carries an error because a SQL backend has one: refusing to start
+// a flow it cannot record is better than running an untraceable saga.
 type flowStore interface {
-	put(r flowRecord) error
+	// reserve records a RUNNING instance before any step runs. It returns
+	// errFlowExists when (def_key, biz_key) already has an instance — the
+	// uk_biz rule, enforced by both implementations.
+	reserve(r flowRecord) error
+	// finish writes the outcome (status, failure trail, steps) of an instance
+	// reserve recorded.
+	finish(r flowRecord) error
+	// release drops a reservation that never got an outcome (still RUNNING), so
+	// the business key can be started again. An instance that already has an
+	// outcome is left alone (nil).
+	release(id int64) error
 	get(id int64) (flowRecord, bool, error)
 }
+
+// Errors StartFlow reports; the handler maps them to status codes.
+var (
+	errUnknownDef = errors.New("workflow: unknown flow definition")
+	errFlowExists = errors.New("workflow: a flow for this business key was already started")
+)
 
 // app wires the pkg-go/workflow engine to the HTTP handlers through small
 // ports, so the production Vitess-backed repositories (03§4.3.3) can be
@@ -61,25 +79,56 @@ func newInMemoryApp() *app {
 // StartFlow runs a predefined flow for def_key over an in-memory set of steps
 // registered as closures, and records the Result so the caller can inspect it
 // later (GET /internal/flows/{id}).
+//
+// The instance is reserved (RUNNING) before the first step runs. uk_biz is the
+// answer to "did this order already start this flow", and it used to be
+// consulted only when the finished record was written — after the saga had
+// already provisioned — so a retried start ran every step a second time and
+// only then failed. A duplicate now returns errFlowExists without running.
 func (a *app) StartFlow(accountID int64, defKey, bizKey string) (int64, workflow.Result, error) {
 	steps, ok := registeredFlows[defKey]
 	if !ok {
-		return 0, workflow.Result{}, fmt.Errorf("unknown flow definition %q", defKey)
+		return 0, workflow.Result{}, fmt.Errorf("%w %q", errUnknownDef, defKey)
 	}
 
 	id := a.nextID()
+	if bizKey == "" {
+		bizKey = autoBizKey(id)
+	}
+	if err := a.store.reserve(flowRecord{
+		ID: id, AccountID: accountID, DefKey: defKey, BizKey: bizKey,
+		Status: workflow.FlowRunning, Steps: []stepRecord{},
+	}); err != nil {
+		return 0, workflow.Result{}, err
+	}
+
 	ctx := &workflow.Context{AccountID: accountID, BizKey: bizKey}
 	result := a.engine.Run(id, ctx, steps)
 
 	// The record is the saga's trail: writing it is part of starting the flow,
 	// and a failure here is surfaced rather than logged-and-forgotten — an
 	// instance nobody can see is an unexplainable resource (03§8.5).
-	if err := a.store.put(toFlowRecord(id, accountID, defKey, bizKey, result)); err != nil {
+	if err := a.store.finish(toFlowRecord(id, accountID, defKey, bizKey, result)); err != nil {
+		// A reservation left RUNNING refused every retry with 409 forever. It
+		// is released (best effort) so a retry can run the flow again — its
+		// steps are idempotent per business key — and the failure is surfaced.
+		if rerr := a.store.release(id); rerr != nil {
+			slog.Error("flow outcome not recorded and its reservation could not be released; retries will be refused",
+				"flowId", id, "defKey", defKey, "bizKey", bizKey, "status", result.Status, "err", err, "releaseErr", rerr)
+		} else {
+			slog.Warn("flow outcome not recorded; reservation released so a retry can start it again",
+				"flowId", id, "defKey", defKey, "bizKey", bizKey, "status", result.Status, "err", err)
+		}
 		return id, result, err
 	}
 
 	return id, result, nil
 }
+
+// autoBizKey names a flow started without a business key. Such a start has
+// nothing to deduplicate against, so it gets a key of its own: storing "" would
+// make every keyless start after the first collide on uk_biz.
+func autoBizKey(id int64) string { return "auto-" + strconv.FormatInt(id, 10) }
 
 // flowRecord is the persisted representation of a flow instance as served by
 // GET /internal/flows/{id}. It mirrors workflow.Result with fields that decode
@@ -146,16 +195,50 @@ func toFlowRecord(id, accountID int64, defKey, bizKey string, res workflow.Resul
 type memFlowStore struct {
 	mu    sync.RWMutex
 	items map[int64]flowRecord
+	byBiz map[string]int64 // def_key + "\x00" + biz_key → id: the in-memory uk_biz
 }
 
 func newMemFlowStore() *memFlowStore {
-	return &memFlowStore{items: make(map[int64]flowRecord)}
+	return &memFlowStore{items: make(map[int64]flowRecord), byBiz: make(map[string]int64)}
 }
 
-func (s *memFlowStore) put(r flowRecord) error {
+func bizIndexKey(defKey, bizKey string) string { return defKey + "\x00" + bizKey }
+
+func (s *memFlowStore) reserve(r flowRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	k := bizIndexKey(r.DefKey, r.BizKey)
+	if _, dup := s.byBiz[k]; dup {
+		return errFlowExists
+	}
+	if _, dup := s.items[r.ID]; dup {
+		return fmt.Errorf("workflow: flow id %d already exists", r.ID)
+	}
+	s.byBiz[k] = r.ID
 	s.items[r.ID] = r
+	return nil
+}
+
+func (s *memFlowStore) finish(r flowRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, ok := s.items[r.ID]
+	if !ok || cur.Status != workflow.FlowRunning {
+		return fmt.Errorf("workflow: flow %d has no running reservation", r.ID)
+	}
+	s.items[r.ID] = r
+	return nil
+}
+
+func (s *memFlowStore) release(id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, ok := s.items[id]
+	if !ok || cur.Status != workflow.FlowRunning {
+		return nil
+	}
+	delete(s.items, id)
+	delete(s.byBiz, bizIndexKey(cur.DefKey, cur.BizKey))
 	return nil
 }
 

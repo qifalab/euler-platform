@@ -3,11 +3,16 @@
  * web-marketplace shell (M-10 生态门户). Standalone: shared glass SiteTopbar;
  * Wujie sandbox: shell-less (the console provides the top bar).
  */
+import { ref } from "vue";
 import { RouterView } from "vue-router";
 import { inWujieSandbox } from "@eu/wujie-bridge";
 import { SiteTopbar } from "@eu/ui";
+import { isOperator } from "./marketplace";
 
 const sandboxed = inWujieSandbox();
+// 上架审核 / 订单结算 are operator-only; partners and tenants never see them.
+const operator = ref(false);
+void isOperator().then((v) => { operator.value = v; });
 </script>
 
 <template>
@@ -16,8 +21,8 @@ const sandboxed = inWujieSandbox();
       <template #nav>
         <router-link to="/storefront">商品目录</router-link>
         <router-link to="/publish">发布商品</router-link>
-        <router-link to="/review">上架审核</router-link>
-        <router-link to="/settlement">订单结算</router-link>
+        <router-link v-if="operator" to="/review">上架审核</router-link>
+        <router-link v-if="operator" to="/settlement">订单结算</router-link>
       </template>
       <template #actions>
         <a class="mkt-console" href="https://console.euler.emoera.com">返回控制台</a>

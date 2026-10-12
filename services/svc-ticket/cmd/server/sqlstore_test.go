@@ -166,8 +166,10 @@ func TestSQLStoreConcurrentRepliesDoNotLoseMessages(t *testing.T) {
 	if len(got.Messages) != replies+1 {
 		t.Fatalf("thread has %d messages, want %d (a concurrent reply was lost)", len(got.Messages), replies+1)
 	}
-	if got.Status != StatusWaitingReply {
-		t.Fatalf("status = %s, want WAITING_REPLY after a reply", got.Status)
+	// Customer replies on a ticket support has not picked up keep it OPEN
+	// (待处理); WAITING_REPLY (待您回复) is for support's replies only.
+	if got.Status != StatusOpen {
+		t.Fatalf("status = %s, want OPEN after customer replies", got.Status)
 	}
 	if got.Version != replies {
 		t.Fatalf("version = %d, want %d (one bump per transition)", got.Version, replies)
@@ -280,7 +282,7 @@ func TestSQLStoreSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ticket did not survive the restart: %v", err)
 	}
-	if len(got.Messages) != 2 || got.Status != StatusWaitingReply || got.Contact != "13800000000" {
+	if len(got.Messages) != 2 || got.Status != StatusOpen || got.Contact != "13800000000" {
 		t.Fatalf("reloaded ticket = %+v (messages %d)", got, len(got.Messages))
 	}
 }
@@ -296,6 +298,7 @@ func TestSQLStoreMatchesMemoryStore(t *testing.T) {
 	run := func(store Store) *Ticket {
 		t.Helper()
 		tk := newTicket(acct, "HIGH", "billing", "13800000000", "扣费异常")
+		tk.Title = "本月账单多扣费"
 		if err := store.Create(tk); err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -314,7 +317,7 @@ func TestSQLStoreMatchesMemoryStore(t *testing.T) {
 
 	if sqlTicket.Status != memTicket.Status || sqlTicket.Priority != memTicket.Priority ||
 		sqlTicket.Category != memTicket.Category || sqlTicket.Contact != memTicket.Contact ||
-		sqlTicket.Assignee != memTicket.Assignee {
+		sqlTicket.Assignee != memTicket.Assignee || sqlTicket.Title != memTicket.Title {
 		t.Fatalf("sql ticket %+v, memory ticket %+v", sqlTicket, memTicket)
 	}
 	if len(sqlTicket.Messages) != len(memTicket.Messages) {
@@ -329,4 +332,79 @@ func TestSQLStoreMatchesMemoryStore(t *testing.T) {
 			t.Fatalf("message %d: sql %+v, memory %+v", i, a, b)
 		}
 	}
+}
+
+// bothTicketStores runs fn against the SQL store (when a database is
+// configured) and the memory store.
+func bothTicketStores(t *testing.T, fn func(t *testing.T, store Store)) {
+	t.Run("sql", func(t *testing.T) { fn(t, newSQLTestStore(t)) })
+	t.Run("memory", func(t *testing.T) { fn(t, newMemoryStore()) })
+}
+
+// Regression: the title was dropped (only used as the first message when no
+// message was given). It is now a field of its own in both stores.
+func TestStoresKeepTicketTitle(t *testing.T) {
+	bothTicketStores(t, func(t *testing.T, store Store) {
+		const acct = int64(100123)
+		titled := newTicket(acct, "NORMAL", "consult", "", "登录时提示密码错误")
+		titled.Title = "无法登录控制台"
+		untitled := newTicket(acct, "NORMAL", "consult", "", "body")
+		untitled.CreatedAt = testNow.Add(time.Minute)
+		titled.TicketID, untitled.TicketID = "t-titled", "t-untitled" // distinct for the memory store
+		for _, tk := range []*Ticket{titled, untitled} {
+			if err := store.Create(tk); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := store.Get(acct, titled.TicketID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Title != "无法登录控制台" || got.Messages[0].Body != "登录时提示密码错误" {
+			t.Fatalf("title %q / first message %q", got.Title, got.Messages[0].Body)
+		}
+		list, err := store.ListByAccount(acct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(list) != 2 || list[0].Title != "" || list[1].Title != "无法登录控制台" {
+			t.Fatalf("listed titles = %+v", list)
+		}
+	})
+}
+
+// Regression: every reply — the customer's own included — moved the ticket to
+// WAITING_REPLY (待您回复).
+func TestStoresReplyStatusFollowsAuthor(t *testing.T) {
+	bothTicketStores(t, func(t *testing.T, store Store) {
+		const acct = int64(100123)
+		tk := newTicket(acct, "NORMAL", "billing", "", "root")
+		if err := store.Create(tk); err != nil {
+			t.Fatal(err)
+		}
+		steps := []struct {
+			fromUser bool
+			want     TicketStatus
+		}{
+			{true, StatusOpen},          // customer adds detail before support picks it up
+			{false, StatusWaitingReply}, // support asks a question
+			{true, StatusProcessing},    // customer answers: back to support
+			{true, StatusProcessing},    // and adds more
+			{false, StatusWaitingReply}, // support replies again
+		}
+		for i, s := range steps {
+			author := "100123"
+			if !s.fromUser {
+				author = "support-agent"
+			}
+			at := testNow.Add(time.Duration(i+1) * time.Minute)
+			got, err := store.Reply(acct, tk.TicketID, Message{Author: author, FromUser: s.fromUser, Body: fmt.Sprint(i), CreatedAt: at}, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != s.want {
+				t.Fatalf("step %d (fromUser=%v): status = %s, want %s", i, s.fromUser, got.Status, s.want)
+			}
+		}
+	})
 }

@@ -7,9 +7,7 @@
 import { ref, onMounted } from "vue";
 import { ElButton } from "element-plus";
 import { PageHeader, StatusBadge } from "@eu/ui";
-import { createSDK } from "@eu/sdk";
-
-const sdk = createSDK({ baseURL: "" });
+import { sdk } from "../sdk";
 
 interface RegionView {
   name: string;

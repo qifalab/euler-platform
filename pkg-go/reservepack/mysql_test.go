@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -525,5 +526,43 @@ func TestSQLStoreParityWithMemoryStore(t *testing.T) {
 			a.Balance != b.Balance || a.BizKey != b.BizKey || a.IdempotencyKey != b.IdempotencyKey {
 			t.Fatalf("journal entry %d: sql %+v, memory %+v", i, a, b)
 		}
+	}
+}
+
+// Concurrent purchases of one pack under the same order key on MySQL: every
+// caller gets the idempotent replay (uk_pack used to surface as a version
+// conflict to the losers) and the pack is credited exactly once.
+func TestSQLStoreConcurrentPurchaseReplay(t *testing.T) {
+	_, store := newSQLTestLedger(t)
+	var seq int64
+	l := New(store, fixedNow, func() int64 { return atomic.AddInt64(&seq, 1) })
+	expire := testNow.Add(30 * 24 * time.Hour)
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _, errs[i] = l.Purchase("pk-conc", sqlAcct, "euecs", "euecs.pack", yuan("1000"), expire, "ord-1")
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("purchase %d: %v", i, err)
+		}
+	}
+	entries, err := store.ListEntries("pk-conc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Type != EntryPurchase {
+		t.Fatalf("journal = %+v, want exactly one PURCHASE", entries)
+	}
+	pack, _, err := store.GetPack("pk-conc")
+	if err != nil || pack.Remaining.String() != "1000" || pack.Version != 1 {
+		t.Fatalf("pack = %+v, %v; want remaining 1000, version 1", pack, err)
 	}
 }

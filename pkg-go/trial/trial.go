@@ -33,12 +33,12 @@ const VoucherValidDays = 30
 type Rule string
 
 const (
-	RuleRealName     Rule = "TRIAL.REALNAME_REQUIRED"
-	RuleActiveLimit  Rule = "TRIAL.ACTIVE_LIMIT"
+	RuleRealName      Rule = "TRIAL.REALNAME_REQUIRED"
+	RuleActiveLimit   Rule = "TRIAL.ACTIVE_LIMIT"
 	RuleLifetimeLimit Rule = "TRIAL.LIFETIME_LIMIT"
 	RuleIdentityLimit Rule = "TRIAL.IDENTITY_LIMIT"
-	RuleCooldown     Rule = "TRIAL.COOLDOWN"
-	RuleGlobalBudget Rule = "TRIAL.GLOBAL_BUDGET"
+	RuleCooldown      Rule = "TRIAL.COOLDOWN"
+	RuleGlobalBudget  Rule = "TRIAL.GLOBAL_BUDGET"
 )
 
 // Policy is the anti-abuse configuration (B7). Zero numeric limits are
@@ -75,12 +75,12 @@ type Policy struct {
 // identity, 30-day cooldown, 10 000 concurrent vouchers platform-wide.
 func DefaultPolicy() Policy {
 	return Policy{
-		RequireRealName:      true,
-		MaxActivePerAccount:  1,
+		RequireRealName:       true,
+		MaxActivePerAccount:   1,
 		MaxLifetimePerAccount: 1,
-		MaxPerIdentity:       1,
-		Cooldown:             30 * 24 * time.Hour,
-		MaxActiveGlobal:      10_000,
+		MaxPerIdentity:        1,
+		Cooldown:              30 * 24 * time.Hour,
+		MaxActiveGlobal:       10_000,
 	}
 }
 
@@ -137,9 +137,16 @@ func Admit(p Policy, s State, now time.Time) Verdict {
 		return Verdict{Rule: RuleLifetimeLimit,
 			Detail: "账号累计试用次数已达上限"}
 	}
-	// Identity dedup applies only when the account carries an identity key; a
-	// verified account without one is a data bug the caller owns — the rule
-	// stays silent rather than denying on a field it cannot judge.
+	// Identity dedup needs the account's identity key. When the policy requires
+	// real-name, a verified account WITHOUT a key (a caller data bug) fails
+	// closed: staying silent would skip the one rule that stops "N accounts, one
+	// ID card", so a bug that drops identity keys would open the subsidy faucet
+	// for every multi-account claimant. Without the real-name requirement there
+	// is no identity to judge and the rule does not apply.
+	if p.RequireRealName && s.Account.IdentityKey == "" {
+		return Verdict{Rule: RuleRealName,
+			Detail: "实名身份信息缺失,无法校验跨账号领取"}
+	}
 	if s.Account.IdentityKey != "" {
 		if s.IdentityCounts[s.Account.IdentityKey] >= int64(p.MaxPerIdentity) {
 			return Verdict{Rule: RuleIdentityLimit,

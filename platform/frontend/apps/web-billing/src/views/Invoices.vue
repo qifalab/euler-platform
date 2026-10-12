@@ -3,10 +3,10 @@
  *  红冲 = 开一张全额负数发票冲抵原票,原票置 VOIDED 终态保留.
  *  Wired to console-bff /console/invoices (fan-out svc-billing). */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PriceText, PageHeader } from "@eu/ui";
+import { formatTime } from "@eu/console-kit";
 
-const sdk = createSDK({ baseURL: "" });
 const invoices = ref<Invoice[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -68,7 +68,7 @@ onMounted(load);
             <td>{{ inv.title }}</td>
             <td><PriceText :amount-decimal="inv.amount" /></td>
             <td>{{ inv.status }}</td>
-            <td>{{ inv.issuedAt || "—" }}</td>
+            <td>{{ formatTime(inv.issuedAt) }}</td>
             <td>{{ inv.reversesId ? `冲抵 ${inv.reversesId}` : (inv.voidedById ? `已被 ${inv.voidedById} 红冲` : "—") }}</td>
             <td>
               <button v-if="inv.status === 'DRAFT'" class="btn" @click="issue(inv)">开具</button>

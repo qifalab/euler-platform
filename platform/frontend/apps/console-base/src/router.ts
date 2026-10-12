@@ -7,6 +7,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router"
 import { ElMessage } from "element-plus";
 import { useRegistry } from "./registry";
 import { useAuthStore } from "./stores/auth";
+import { accountBase } from "./accountBase";
 
 const Overview = () => import("./views/Overview.vue");
 const NotFound = () => import("./views/NotFound.vue");
@@ -23,8 +24,10 @@ export const router = createRouter({
   routes,
 });
 
-// Account center base URL (dev: local web-account; prod: account.euler.emoera.com).
-const ACCOUNT_BASE = "http://localhost:5175";
+// Shell-owned routes that are not sub-apps: the permission check must let them
+// through. Redirecting to { name: "not-found" } re-entered this guard, found no
+// sub-app for /404 and redirected to not-found again — forever.
+const BUILTIN_ROUTES = new Set(["overview", "not-found"]);
 
 // Three-level guard (02§5.3): whitelist → silent refresh → permission check.
 router.beforeEach(async (to) => {
@@ -39,10 +42,19 @@ router.beforeEach(async (to) => {
     if (!refreshed) {
       // Not authenticated — do NOT let the navigation through. Bounce to the
       // account login with a redirect back to the intended target (02§5.3).
-      window.location.href = `${ACCOUNT_BASE}/login?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
+      // Account-center origin from runtime env (__SC_ENV__) / build env; the
+      // localhost default applies to dev builds only.
+      window.location.href = `${accountBase()}/login?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
       return false;
     }
   }
+
+  if (BUILTIN_ROUTES.has(String(to.name ?? ""))) return true;
+
+  // app.use(router) starts the first navigation before main.ts has finished
+  // loading the registry; resolving against an empty registry would send
+  // every deep link to 404. Wait for the (shared) load.
+  await registry.ensureLoaded();
 
   // 3) Real-name gate (01§4.5/07§2.3): opening/operating resources requires
   // verified real name. Unverified accounts hitting a product route are bounced
@@ -51,7 +63,7 @@ router.beforeEach(async (to) => {
     const app = registry.resolve(to.path);
     if (app && app.productCodes.length > 0) {
       ElMessage.warning("请先完成实名认证后再访问产品控制台");
-      window.location.href = `${ACCOUNT_BASE}/realname?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
+      window.location.href = `${accountBase()}/realname?redirect=${encodeURIComponent(window.location.origin + to.fullPath)}`;
       return false;
     }
   }

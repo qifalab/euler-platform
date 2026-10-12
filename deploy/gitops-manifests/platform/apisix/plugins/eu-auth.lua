@@ -11,9 +11,14 @@
 -- implementation would be a fourth place for the contract to drift, which
 -- 03§9.4 rule ⑤ forbids.
 --
--- Two auth modes, one of which must succeed:
+-- Auth modes (set per route):
 --   * OpenAPI zone ({productCode}.api.euler.emoera.com): CPS1 signature
 --   * Console zone (console.euler.emoera.com): JWT issued by svc-iam
+--   * anonymous: public read-only routes of the marketing site. No identity
+--     is established — client identity headers are stripped and NO account id
+--     is injected — but the request is still vouched for with the internal
+--     token, because every backend requires it (httpmw.InternalToken). Routes
+--     using it must be limited to exact, public, read-only paths.
 --
 -- On success the plugin injects the identity headers upstream services trust
 -- (07§3.3): X-Euler-Account-Id, X-Euler-Identity, X-Euler-TraceId, plus X-Euler-Ak-Id and
@@ -30,20 +35,32 @@ local ngx  = ngx
 
 local plugin_name = "eu-auth"
 
+-- Internal shared secret (EULER_INTERNAL_TOKEN). Exposed to the workers via
+-- nginx_config.envs in config.yaml and mounted from a Secret. It is injected
+-- upstream ONLY after authentication succeeded, and is sent to svc-iam on the
+-- verify call, so backend services can require it (httpmw.InternalToken) and
+-- refuse X-Euler-Account-Id from anything that did not pass through here.
+-- Clients cannot supply it: X-Euler-* headers are stripped first.
+local internal_token = os.getenv("EULER_INTERNAL_TOKEN")
+if internal_token == "" then
+    internal_token = nil
+end
+
 local schema = {
     type = "object",
     properties = {
-        -- svc-iam internal verification endpoint (04§3.4).
+        -- svc-iam internal verification endpoint (04§3.4): the `verify`
+        -- container of the svc-iam pod (port 9100; web-auth is 9101).
         verify_endpoint = {
             type = "string",
-            default = "http://svc-iam.business.svc/internal/openapi/verify",
+            default = "http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify",
         },
         -- Auth mode for this route: "signature" (OpenAPI zone) or "jwt"
         -- (console zone). Set per-route rather than sniffed from the request,
         -- so a caller cannot downgrade from signature auth to a weaker mode.
         mode = {
             type = "string",
-            enum = { "signature", "jwt" },
+            enum = { "signature", "jwt", "anonymous" },
             default = "signature",
         },
         -- region/service are resolved from the ROUTE, never from client input.
@@ -113,13 +130,36 @@ local function get_jwt_public_key(conf)
     return key
 end
 
--- strip_client_identity_headers removes any X-Euler-* header the client sent.
--- Without this, a caller could present X-Euler-Account-Id and impersonate another
--- tenant on any upstream that trusts the header (07§4.3 内部防伪).
+-- Every gateway-asserted header lives under one of these (lowercase) prefixes.
+-- tools/check-lua-plugins.py fails CI if any X-Euler-*/X-Eu-* header named in
+-- the plugins is not covered here: after the SC→EU rebrand this check was a
+-- single 5-char compare against "x-eu-", which no longer matched any
+-- X-Euler-* header, so client-supplied X-Euler-Identity / X-Euler-Quota-Qps
+-- flowed straight through to upstreams.
+local IDENTITY_HEADER_PREFIXES = { "x-euler-", "x-eu-" }
+
+local function is_identity_header(name)
+    local lower = string.lower(name)
+    for _, prefix in ipairs(IDENTITY_HEADER_PREFIXES) do
+        if string.sub(lower, 1, #prefix) == prefix then
+            return true
+        end
+    end
+    return false
+end
+
+-- strip_client_identity_headers removes any X-Euler-* / X-Eu-* header the
+-- client sent. Without this, a caller could present X-Euler-Account-Id (or
+-- X-Euler-Identity) and impersonate another tenant or principal on any
+-- upstream that trusts the header (07§4.3 内部防伪).
+--
+-- get_headers(0): the default only returns the first 100 headers, so a client
+-- could pad the request with 100 junk headers and smuggle an identity header
+-- past the strip. 0 lifts that limit.
 local function strip_client_identity_headers(ctx)
-    local headers = ngx.req.get_headers()
+    local headers = ngx.req.get_headers(0)
     for name, _ in pairs(headers) do
-        if string.sub(string.lower(name), 1, 5) == "x-eu-" then
+        if is_identity_header(name) then
             core.request.set_header(ctx, name, nil)
         end
     end
@@ -169,32 +209,41 @@ local function verify_signature(conf, ctx)
         return deny(ctx, 503, "Common.InternalError", "cannot read request body")
     end
 
-    -- Sign the RAW request target, not nginx's normalized $uri: $uri is
-    -- percent-decoded and path-normalized, while cps1 canonicalises the path
-    -- the client actually signed (strict RFC 3986, encoding preserved). A path
-    -- containing an encoded octet would otherwise never verify.
+    -- Forward the RAW request path, not nginx's normalized $uri ($uri also
+    -- merges slashes and resolves dot segments, which the client did not
+    -- sign). The path stays percent-encoded here and svc-iam decodes it
+    -- exactly once: cps1 canonicalises the DECODED path (golden vector
+    -- "path-with-encoding" signs "/buckets/my bucket/objects"), so neither
+    -- side may skip or repeat the decode.
     local raw_target = ngx.var.request_uri or ctx.var.uri or "/"
     local raw_path = string.match(raw_target, "^[^?]*") or raw_target
     if raw_path == "" then
         raw_path = "/"
     end
 
+    -- query/headers are forwarded in OpenResty's own shapes (a repeated key
+    -- is an array, a bare "?flag" is `true`); svc-iam maps them onto the
+    -- canonical request. The body travels base64-encoded: a JSON string
+    -- cannot carry arbitrary bytes, and the signature covers the exact bytes.
     local payload = {
-        method  = ngx.req.get_method(),
-        host    = ctx.var.host,
-        path    = raw_path,
-        query   = ngx.req.get_uri_args(),
-        headers = ngx.req.get_headers(),
-        body    = body,
+        method   = ngx.req.get_method(),
+        host     = ctx.var.host,
+        path     = raw_path,
+        query    = ngx.req.get_uri_args(),
+        headers  = ngx.req.get_headers(),
+        body_b64 = ngx.encode_base64(body),
         -- Route-bound, never client-supplied.
-        region  = conf.region,
-        service = conf.service,
+        region   = conf.region,
+        service  = conf.service,
     }
 
     local res, req_err = httpc:request_uri(conf.verify_endpoint, {
         method  = "POST",
         body    = core.json.encode(payload),
-        headers = { ["Content-Type"] = "application/json" },
+        headers = {
+            ["Content-Type"]           = "application/json",
+            ["X-Euler-Internal-Token"] = internal_token,
+        },
     })
 
     if not res then
@@ -262,12 +311,35 @@ local function verify_jwt(conf, ctx)
     if not public_key then
         return deny(ctx, 503, "Common.ServiceUnavailable", "jwt public key unavailable")
     end
+
+    -- Algorithm pinning BEFORE verification. lua-resty-jwt picks the
+    -- algorithm from the token header, so without this an attacker could
+    -- send {"alg":"HS256"} signed with the (public!) RSA key as the HMAC
+    -- secret. Also refuse JWE-shaped tokens ("enc"), which some
+    -- lua-resty-jwt versions route around signature checks (CVE-2024-33531),
+    -- and "crit" extensions we do not implement.
+    local parsed = jwt:load_jwt(token)
+    if not parsed or not parsed.valid or type(parsed.header) ~= "table" then
+        return deny(ctx, 403, "IAM.InvalidToken", "token verification failed")
+    end
+    if parsed.header.alg ~= "RS256" or parsed.header.enc ~= nil or parsed.header.crit ~= nil then
+        return deny(ctx, 403, "IAM.InvalidToken", "token verification failed")
+    end
+    if type(jwt.set_alg_whitelist) == "function" then
+        jwt:set_alg_whitelist({ RS256 = 1 })
+    end
+
     local verified = jwt:verify(public_key, token)
     if not verified or not verified.verified then
         return deny(ctx, 403, "IAM.InvalidToken", "token verification failed")
     end
 
     local payload = verified.payload or {}
+    -- Only access tokens open the console: MFA challenge tokens carry
+    -- "typ":"mfa" and authorize exactly one svc-iam call.
+    if payload.typ ~= nil then
+        return deny(ctx, 403, "IAM.InvalidToken", "token verification failed")
+    end
     -- Expiry is enforced by resty.jwt, but check explicitly: a token with no
     -- exp claim at all would otherwise pass.
     if not payload.exp or payload.exp < ngx.time() then
@@ -294,10 +366,23 @@ function _M.rewrite(conf, ctx)
     -- Always strip client-supplied identity headers first, whatever the mode.
     strip_client_identity_headers(ctx)
 
+    local status, body
     if conf.mode == "signature" then
-        return verify_signature(conf, ctx)
+        status, body = verify_signature(conf, ctx)
+    elseif conf.mode == "anonymous" then
+        -- No identity: only the trace id is injected (X-Euler-* already stripped).
+        core.request.set_header(ctx, "X-Euler-TraceId", ngx.var.request_id)
+    else
+        status, body = verify_jwt(conf, ctx)
     end
-    return verify_jwt(conf, ctx)
+    if status then
+        return status, body
+    end
+    -- Authenticated: vouch for the injected identity to the upstream.
+    if internal_token then
+        core.request.set_header(ctx, "X-Euler-Internal-Token", internal_token)
+    end
+    ctx.eu_internal_token = internal_token
 end
 
 return _M

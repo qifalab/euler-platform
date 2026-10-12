@@ -47,14 +47,14 @@ func settleBody(aggID string) map[string]any {
 }
 
 // TestSettleIdempotent verifies a retried settlement replays the original
-// result (200) and deducts the ledger and pools exactly once.
+// result (200) and deducts the ledger exactly once. Cash comes from the ledger
+// itself — no static BALANCE pool is seeded.
 func TestSettleIdempotent(t *testing.T) {
 	a := newInMemoryApp()
 	const acct = int64(1001)
 	if _, _, err := a.ledger.Recharge(acct, pricing.MustParseAmount("100"), "seed", "seed-1", "seed"); err != nil {
 		t.Fatal(err)
 	}
-	a.pools.set(acct, []billing.Pool{{Source: billing.SourceBalance, Available: pricing.MustParseAmount("100")}})
 
 	for i := 0; i < 3; i++ {
 		rr := doReq(t, a.handleSettle, http.MethodPost, "/internal/settle", acct, settleBody("agg-idem"))
@@ -80,7 +80,6 @@ func TestSettleConcurrentDuplicates(t *testing.T) {
 	if _, _, err := a.ledger.Recharge(acct, pricing.MustParseAmount("100"), "seed", "seed-1", "seed"); err != nil {
 		t.Fatal(err)
 	}
-	a.pools.set(acct, []billing.Pool{{Source: billing.SourceBalance, Available: pricing.MustParseAmount("100")}})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
@@ -133,6 +132,7 @@ func TestPoolForAccountReturnsCopy(t *testing.T) {
 // different account with 404.
 func TestInvoiceIssueVoidIDOR(t *testing.T) {
 	a := newInMemoryApp()
+	spend(t, a, 1, "100")
 	draft := map[string]any{
 		"invoiceId":  "inv-a",
 		"billPeriod": "2026-08",
@@ -169,6 +169,9 @@ func TestInvoiceIssueVoidIDOR(t *testing.T) {
 // -race to verify the seq closure locking.
 func TestSeqClosuresConcurrent(t *testing.T) {
 	a := newInMemoryApp()
+	for i := 0; i < 16; i++ {
+		spend(t, a, int64(100+i), "10")
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)

@@ -1,0 +1,35 @@
+# Ingress isolation for this service (等保三级 network segmentation).
+#
+# Business services trust the gateway-injected X-Euler-Account-Id, so only the
+# gateway, the platform's own control-plane namespaces (labelled by the
+# ApplicationSet) and observability may reach them. Tenant workloads (ECI pods,
+# KubeVirt VMs) and anything else in the cluster are denied — before this,
+# any pod could call e.g. svc-payment directly with a forged account header.
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              euler.platform/plane: control
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  {{- toYaml .Values.networkPolicy.allowFromNamespaces | nindent 18 }}
+      ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP
+{{- end }}

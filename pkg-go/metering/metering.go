@@ -249,10 +249,13 @@ func NewAggregator(now func() time.Time) *Aggregator {
 
 // Aggregate folds records for ONE (resource, item, hour) into an HourlyUsage.
 //
-// Duplicate record_ids are collapsed, not summed — this is where
+// Duplicate readings are collapsed, not summed — this is where
 // over-collection becomes safe. Records are deduplicated before summation
 // precisely so that the "collect twice rather than miss once" default does not
-// produce double charges.
+// produce double charges. The dedup key is the collection WINDOW, not the
+// record_id: a caller-supplied or differently-derived record_id for a window
+// already counted is still the same minute of usage (a re-collection is a
+// correction, not an addition).
 func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (HourlyUsage, error) {
 	if len(records) == 0 {
 		return HourlyUsage{}, ErrEmptyWindow
@@ -260,7 +263,7 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 
 	resourceID := records[0].ResourceID
 	item := records[0].MeteringItem
-	seen := make(map[string]UsageRecord, len(records))
+	seen := make(map[int64]UsageRecord, len(records))
 	hour := HourOf(hourStart)
 
 	for _, r := range records {
@@ -278,21 +281,15 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 		if ws.Before(hour) || !ws.Before(hour.Add(time.Hour)) {
 			return HourlyUsage{}, fmt.Errorf("%w: window %v vs hour %v", ErrWindowOutsideHour, r.WindowStart, hour)
 		}
-		id := r.RecordID
-		if id == "" {
-			id = RecordID(r.ResourceID, r.MeteringItem, r.WindowStart)
-		}
 		// Last writer wins for the same window: a re-collection of the same
 		// window is a correction, not an addition.
-		seen[id] = r
+		seen[ws.Unix()] = r
 	}
 
 	var total Quantity
-	windows := make(map[int64]bool, len(seen))
 	batch := BatchRealtime
 	for _, r := range seen {
 		total = total.Add(r.Quantity)
-		windows[r.WindowStart.UTC().Unix()] = true
 		if r.BatchID == BatchLate || r.BatchID == BatchBackfill {
 			batch = r.BatchID
 		}
@@ -309,7 +306,7 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 	if expected <= 0 {
 		expected = 60
 	}
-	covered := len(windows) * 100 / expected
+	covered := len(seen) * 100 / expected
 	if covered > 100 {
 		// More windows than expected means the collection period is finer than
 		// configured. Cap the ratio rather than reporting >100%, which would
@@ -330,7 +327,7 @@ func (a *Aggregator) Aggregate(records []UsageRecord, hourStart time.Time) (Hour
 		CoveredRatio:    covered,
 		ProducedTS:      a.Now(),
 		BatchID:         batch,
-		WindowsSeen:     len(windows),
+		WindowsSeen:     len(seen),
 		WindowsExpected: expected,
 	}, nil
 }
@@ -412,7 +409,7 @@ type ReconcileL2 struct {
 	ResourceID    string
 	ExpectedHours int
 	ActualHours   int
-	DiffRatio     float64 // |expected-actual| / expected
+	DiffRatio     float64 // |expected-actual| / expected; 1 if none expected but some metered
 	NeedsBackfill bool    // >0.1%
 	NeedsAlert    bool    // >0.5%
 }
@@ -430,6 +427,11 @@ func Reconcile(resourceID string, expectedHours, actualHours int) ReconcileL2 {
 			diff = -diff
 		}
 		r.DiffRatio = float64(diff) / float64(expectedHours)
+	} else if actualHours != 0 {
+		// Usage metered for a resource the lifecycle says never ran is a 100%
+		// unexplained difference (billing a non-existent resource), not a
+		// perfect match.
+		r.DiffRatio = 1
 	}
 	// Thresholds are ENGINEERING triggers, not the acceptance criterion.
 	// Adjudication S17: commercial acceptance is 无未解释差异 — every

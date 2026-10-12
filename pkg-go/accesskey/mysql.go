@@ -126,10 +126,29 @@ func (s *SQLStore) Update(r Record) error {
 	if err != nil {
 		return fmt.Errorf("accesskey: update %s: %w", r.AK, err)
 	}
-	// Zero rows is ErrNotFound, not a silent success: the caller just read the
-	// record, so a miss means it was physically deleted (soft-delete retention
-	// sweep) between the read and the write.
-	return storage.Affected(res, nil)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("accesskey: update %s: %w", r.AK, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	// MySQL reports CHANGED rows, not matched rows: an update that writes the
+	// values already stored (re-disable, a usage stamp within the same
+	// second) affects 0 rows. That is a successful no-op — the memory store
+	// returns nil for it too. Only a row that no longer exists (physically
+	// removed by the soft-delete retention sweep between the caller's read
+	// and this write) is ErrNotFound. The table has no version column, so
+	// there is no optimistic-concurrency conflict to report here.
+	var one int
+	err = s.db.QueryRowContext(ctx, `SELECT 1 FROM access_key WHERE ak = ?`, r.AK).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("accesskey: update %s: %w", r.AK, err)
+	}
+	return nil
 }
 
 func scanRecord(sc interface{ Scan(...any) error }) (Record, error) {

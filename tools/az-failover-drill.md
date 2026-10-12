@@ -78,8 +78,38 @@ SurvivesAZLossMGR 编码的不变式 (见 §5).
 | 组件 | 期望 | 验证 |
 |---|---|---|
 | Redis | 每 shard 的 master 若在演练 AZ,replica 在存活 AZ 提升为主 | `redis-cli CLUSTER NODES` (每 shard 仍有 1 可用节点) |
-| Kafka | 演练 AZ broker 离线,ISR 仍含存活侧副本 (min.insync.replicas=2) | `kafka-topics --describe`;leader 选举完成 |
+| Kafka | 演练 AZ broker 离线,ISR 仍含存活侧副本 (min.insync.replicas=2) | `kafka-topics.sh --describe` (SASL_SSL,见下);leader 选举完成 |
 | 客户端容忍 | 无 "cluster down" 错误 | 业务错误率看板 |
+
+Kafka 只有 SASL_SSL 客户端端口 :9092 (SCRAM-SHA-512 + 平台 CA 校验, kafka-kraft.yaml),
+broker 广播的是集群内地址 `kafka-N.kafka-headless.mw-mq.svc`,所以 CLI 在 mw-mq 内的临时
+pod 里跑 (T0 之后创建,自然调度到存活 AZ;NetworkPolicy kafka-ingress 放行同 namespace).
+登录用运维只读账号 `kafka-ops` (Secret kafka-scram-users 的可选 key;kafka-scram-users
+Job 只授予全部 topic 的 DESCRIBE/DESCRIBE_CONFIGS,不能读写消息):
+
+```
+kubectl -n mw-mq run kafka-cli --restart=Never --image=bitnami/kafka:3.7.0 \
+  --command -- sleep 1800
+kubectl -n mw-mq wait --for=condition=Ready pod/kafka-cli --timeout=120s
+# CA: 签发 :9092 证书 (kafka-tls) 的 euler-platform-ca 根证书 (公开)
+kubectl -n mw-mq get secret kafka-tls -o jsonpath='{.data.ca\.crt}' | base64 -d \
+  | kubectl -n mw-mq exec -i kafka-cli -- sh -c 'cat > /tmp/ca.crt'
+# --command-config: 密码从 Secret 直接写进 pod 内文件,不进命令行、不落本机磁盘
+KAFKA_OPS_PW="$(kubectl -n mw-mq get secret kafka-scram-users -o jsonpath='{.data.kafka-ops}' | base64 -d)"
+kubectl -n mw-mq exec -i kafka-cli -- sh -c 'cat > /tmp/client.properties' <<EOF
+security.protocol=SASL_SSL
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-ops" password="${KAFKA_OPS_PW}";
+ssl.truststore.type=PEM
+ssl.truststore.location=/tmp/ca.crt
+EOF
+unset KAFKA_OPS_PW
+# ISR: 期望无输出 (没有副本数不足 min.insync.replicas 的分区),leader 均在存活 broker
+kubectl -n mw-mq exec kafka-cli -- /opt/bitnami/kafka/bin/kafka-topics.sh \
+  --bootstrap-server kafka.mw-mq.svc:9092 --command-config /tmp/client.properties \
+  --describe --under-min-isr-partitions
+kubectl -n mw-mq delete pod kafka-cli    # 演练结束即删 (pod 内有密码文件)
+```
 
 ### 3.5 T0+~4min: 验证数据面资源
 

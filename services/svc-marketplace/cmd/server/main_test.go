@@ -144,7 +144,14 @@ func TestSettleIdempotent(t *testing.T) {
 	if first.Code != http.StatusOK || second.Code != http.StatusOK {
 		t.Fatalf("settle: %d / %d", first.Code, second.Code)
 	}
-	if first.Body.String() != second.Body.String() {
+	// Compare the settlement record, not the whole body: the envelope's
+	// RequestId differs per request by design.
+	var a, b struct {
+		Data json.RawMessage `json:"Data"`
+	}
+	_ = json.Unmarshal(first.Body.Bytes(), &a)
+	_ = json.Unmarshal(second.Body.Bytes(), &b)
+	if len(a.Data) == 0 || string(a.Data) != string(b.Data) {
 		t.Fatal("settling the same order twice must return the same record, not a double payout")
 	}
 }

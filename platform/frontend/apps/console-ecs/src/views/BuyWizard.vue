@@ -17,10 +17,9 @@ import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
 import { sdk } from "../sdk";
 import { yuanToMinor } from "@eu/sdk";
-import { useCatalogMeta } from "@eu/console-kit";
+import { useCatalogMeta, useOrderCheckout, fulfilledMessage, CouponPicker, OrderAmountSummary } from "@eu/console-kit";
 
 const router = useRouter();
-const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
@@ -78,17 +77,40 @@ function parseSpec(json: string): SkuSpec {
   }
 }
 
-/** Resolve the SKU code for the currently-selected charge type + spec. */
+/** The spec group the <select> currently points at. */
+const currentSpec = computed(() =>
+  specs.value.find((s) => s.code === form.value.spec || s.prepaid === form.value.spec || s.postpaid === form.value.spec),
+);
+
+/**
+ * The SKU code for the selected spec in the selected charge type — never the
+ * other charge type's SKU (quoting a POSTPAID SKU as PREPAID is a 400
+ * Catalog.ChargeTypeMismatch). "" when the spec has no SKU of that type.
+ */
 function skuForCurrent(): string {
-  const entry = specs.value.find((s) => s.code === form.value.spec || s.prepaid === form.value.spec || s.postpaid === form.value.spec);
+  const entry = currentSpec.value;
   if (!entry) return "";
-  return form.value.chargeType === "prepaid" ? (entry.prepaid || entry.code) : (entry.postpaid || entry.code);
+  return form.value.chargeType === "prepaid" ? entry.prepaid : entry.postpaid;
 }
+
+/** The charge type the catalogue declares for a SKU — quote/order/fulfil send this. */
+function chargeTypeOf(skuCode: string): string {
+  return skus.value.find((s) => s.skuCode === skuCode)?.chargeType ?? "";
+}
+
+// A spec offered in only one charge type: follow it instead of leaving the
+// wizard on a charge type the spec has no SKU for.
+watch([currentSpec, () => form.value.chargeType], ([entry]) => {
+  if (!entry) return;
+  if (form.value.chargeType === "prepaid" && !entry.prepaid && entry.postpaid) form.value.chargeType = "postpaid";
+  else if (form.value.chargeType === "postpaid" && !entry.postpaid && entry.prepaid) form.value.chargeType = "prepaid";
+});
 
 onMounted(async () => {
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euecs");
-    skus.value = res.data ?? [];
+    // Only on-sale SKUs (status "1"): anything else quotes 409 Catalog.NotOnSale.
+    skus.value = (res.data ?? []).filter((s) => s.status === "1");
     // Default-select the first spec once the catalogue lands.
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
@@ -154,15 +176,19 @@ onUnmounted(() => {
 async function refreshQuote() {
   const specCode = skuForCurrent();
   if (!specCode) { quote.value = null; return; }
+  // ZONAL: the quote needs the AZ — wait for the zone default instead of
+  // firing a request that can only 400 (Catalog.ZoneRequired).
+  if (!form.value.zone && (placement.value?.zoneRequired ?? true)) { quote.value = null; return; }
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
       productCode: "euecs",
       specCode,
-      chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
+      chargeType: chargeTypeOf(specCode),
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
       quantity: 1,
       regionId: form.value.region,
+      zoneId: form.value.zone, // ZONAL product: the quote rejects a missing AZ (Catalog.ZoneRequired)
     });
     quote.value = res.data;
   } catch (e) {
@@ -175,7 +201,7 @@ async function refreshQuote() {
 
 // Re-quote (debounced) when the price-determining inputs change.
 watch(
-  [() => form.value.spec, () => form.value.chargeType, () => form.value.period, () => form.value.region],
+  [() => form.value.spec, () => form.value.chargeType, () => form.value.period, () => form.value.region, () => form.value.zone],
   () => {
     if (quoteTimer) clearTimeout(quoteTimer);
     quoteTimer = setTimeout(refreshQuote, 300);
@@ -185,39 +211,28 @@ watch(
 function next() { if (active.value < 3) active.value++; }
 function prev() { if (active.value > 0) active.value--; }
 
-// Order paid but fulfill failed — keep the order so the user can retry the
-// saga without paying again (pay succeeded; only provisioning is pending).
-const pendingFulfill = ref<{ orderId: number; orderNo: string; specCode: string } | null>(null);
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one.
+// Coupons (优惠券) apply to prepaid orders only — a postpaid order has no
+// upfront amount. The picker's selection is read when the order is created;
+// svc-order's verdict (Order.CouponInvalid / CouponExpired) comes back through
+// the composable.
+const couponIds = ref<string[]>([]);
+const {
+  submitting, pending: pendingFulfill, checkout, resume: retryFulfill,
+  lastOrder, couponError, couponBlocked, couponRevision, cancelBlockedOrder,
+} = useOrderCheckout({
+  sdk,
+  couponIds: () => (form.value.chargeType === "prepaid" ? couponIds.value : []),
+  onFulfilled: (res, order) => {
+    ElMessage.success(fulfilledMessage("实例", res, order));
+    router.push("/instances");
+  },
+});
 
-async function fulfill(order: { orderId: number; orderNo: string; specCode: string }) {
-  // The orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-  // resource CREATING→RUNNING) and returns the new resource id.
-  const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-    "/api/v1/orchestrator/fulfill",
-    {
-      orderId: order.orderId, orderNo: order.orderNo,
-      productCode: "euecs", region: form.value.region,
-      specCode: order.specCode, chargeType: form.value.chargeType.toUpperCase(),
-      zone: form.value.zone, image: form.value.image,
-      disk: form.value.disk, bandwidth: form.value.bandwidth,
-      password: form.value.password,
-    },
-  );
-  pendingFulfill.value = null;
-  ElMessage.success(`实例已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-  router.push("/instances");
-}
-
-async function retryFulfill() {
-  if (!pendingFulfill.value) return;
-  submitting.value = true;
-  try {
-    await fulfill(pendingFulfill.value);
-  } catch (e) {
-    ElMessage.error(`开通重试失败:${(e as Error).message}`);
-  } finally {
-    submitting.value = false;
-  }
+async function cancelExpiredOrder() {
+  if (await cancelBlockedOrder()) ElMessage.success("订单已取消,优惠券已释放,请重新选择优惠券后下单");
 }
 
 async function submit() {
@@ -226,49 +241,40 @@ async function submit() {
   }
   const specCode = skuForCurrent();
   if (!specCode) { ElMessage.error("请选择实例规格"); active.value = 0; return; }
-  submitting.value = true;
-  try {
-    // 1) Quote — the authoritative payable amount comes from the pricing
-    // engine, already covering the full duration; the client never multiplies.
-    const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "euecs", specCode,
-      chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
-      duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
-      quantity: 1, regionId: form.value.region,
-    });
-    // svc-order takes amountMinor in 分 (1 分 = 0.01 元); the quote is a yuan
-    // decimal. Converting (not rounding to yuan) is what keeps the order's
-    // payable equal to the price the customer was shown.
-    const amountMinor = yuanToMinor(q.data.payableAmount);
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo.
-    const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
-      "/api/v1/orders",
-      {
+  const chargeType = chargeTypeOf(specCode);
+  const duration = chargeType === "PREPAID" ? form.value.period : 1;
+  await checkout(
+    async (extras) => {
+      // 1) Quote — the authoritative payable amount comes from the pricing
+      // engine, already covering the full duration; the client never multiplies.
+      const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
+        productCode: "euecs", specCode, chargeType, duration,
+        quantity: 1, regionId: form.value.region, zoneId: form.value.zone,
+      });
+      // svc-order takes amountMinor in 分 (1 分 = 0.01 元); the quote is a yuan
+      // decimal. Converting (not rounding to yuan) is what keeps the order's
+      // payable equal to the price the customer was shown.
+      const amountMinor = yuanToMinor(q.data.payableAmount);
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>("/api/v1/orders", {
         type: "NEW", productCode: "euecs", skuCode: specCode,
-        regionId: form.value.region, quantity: 1,
-        duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
-        amountMinor,
-      },
-    );
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`);
-
-    // 4) Fulfill. If this step fails, the order is already PAID — remember it
-    // and surface a retry entry instead of forcing the user to re-order.
-    const order = { orderId: created.data.orderId, orderNo: created.data.orderNo, specCode };
-    try {
-      await fulfill(order);
-    } catch (e) {
-      pendingFulfill.value = order;
-      ElMessage.error(`订单已支付(${order.orderNo}),但开通失败:${(e as Error).message},可点击"重试开通"`);
-    }
-  } catch (e) {
-    ElMessage.error((e as Error).message || "创建失败");
-  } finally {
-    submitting.value = false;
-  }
+        chargeType, zoneId: form.value.zone,
+        regionId: form.value.region, quantity: 1, duration, amountMinor,
+        ...extras, // couponIds (prepaid only)
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil run inside the composable. The orchestrator runs the
+    // saga (order PAID→FULFILLING→COMPLETED, resource CREATING→RUNNING); this
+    // body is captured now so a retry repeats exactly what was ordered.
+    {
+      productCode: "euecs", region: form.value.region,
+      specCode, chargeType,
+      zone: form.value.zone, image: form.value.image,
+      disk: form.value.disk, bandwidth: form.value.bandwidth,
+      password: form.value.password,
+    },
+  );
 }
 </script>
 
@@ -312,17 +318,24 @@ async function submit() {
             <li>镜像:{{ form.image }}</li>
           </ul>
           <ElRadioGroup v-model="form.chargeType" class="confirm-charge">
-            <ElRadio value="prepaid">包年包月</ElRadio>
-            <ElRadio value="postpaid">按量付费</ElRadio>
+            <ElRadio value="prepaid" :disabled="!!currentSpec && !currentSpec.prepaid">包年包月</ElRadio>
+            <ElRadio value="postpaid" :disabled="!!currentSpec && !currentSpec.postpaid">按量付费</ElRadio>
           </ElRadioGroup>
           <ElFormItem v-if="form.chargeType === 'prepaid'" label="购买时长(月)"><ElInputNumber v-model="form.period" :min="1" :max="36" /></ElFormItem>
+          <ElFormItem v-if="form.chargeType === 'prepaid'" label="优惠券">
+            <CouponPicker
+              v-model="couponIds" :sdk="sdk" product-code="euecs" :sku-code="skuForCurrent()" charge-type="PREPAID"
+              :amount="quote?.payableAmount" :disabled="!!pendingFulfill" :error="couponError" :refresh-key="couponRevision"
+            />
+          </ElFormItem>
         </div>
 
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 3" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 3 && !pendingFulfill" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
-          <ElButton v-if="pendingFulfill" type="warning" :loading="submitting" @click="retryFulfill">重试开通(订单 {{ pendingFulfill.orderNo }})</ElButton>
+          <ElButton v-if="active === 3 && !pendingFulfill && !couponBlocked" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pendingFulfill" type="warning" :loading="submitting" @click="retryFulfill">{{ pendingFulfill.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pendingFulfill.orderNo }})</ElButton>
+          <ElButton v-if="couponBlocked && !pendingFulfill" type="danger" plain :loading="submitting" @click="cancelExpiredOrder">取消订单 {{ couponBlocked.orderNo }} 并重新下单</ElButton>
         </div>
       </div>
 
@@ -340,6 +353,8 @@ async function submit() {
           <strong v-else>—</strong>
         </div>
         <p class="sum-hint">价格由服务端试算,下单时以收银台为准</p>
+        <p v-if="form.chargeType === 'prepaid' && couponIds.length && !lastOrder" class="sum-hint">已选 {{ couponIds.length }} 张优惠券,抵扣金额以订单为准</p>
+        <OrderAmountSummary :order="pendingFulfill ?? couponBlocked ?? lastOrder" />
       </aside>
     </div>
   </section>

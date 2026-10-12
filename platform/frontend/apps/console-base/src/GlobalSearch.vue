@@ -10,6 +10,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useRegistry } from "./registry";
 import { useSDK } from "./sdk";
+import { attributesOf, resourceDisplayName } from "@eu/console-kit";
 
 const router = useRouter();
 const registry = useRegistry();
@@ -23,8 +24,12 @@ interface SearchResource {
   resourceId: string;
   productCode: string;
   region: string;
+  /** Availability zone ("" for REGIONAL resources). */
+  zone?: string;
   state: string;
   specCode: string;
+  /** Customer attributes; the search also matches attributes.name. */
+  attributes?: Record<string, unknown> | null;
 }
 interface SearchProduct {
   productCode: string;
@@ -137,8 +142,8 @@ const stateLabels: Record<string, string> = {
         <template v-if="backend?.resources?.length">
           <li class="gs-group">我的资源</li>
           <li v-for="r in backend.resources" :key="r.resourceId" class="gs-item" @click="goResource(r)">
-            <span class="gs-title">{{ r.resourceId }}</span>
-            <span class="gs-code">{{ r.productCode }} · {{ r.region }} · {{ stateLabels[r.state] ?? r.state }}</span>
+            <span class="gs-title">{{ resourceDisplayName(r.resourceId, attributesOf(r).name) }}</span>
+            <span class="gs-code">{{ r.productCode }} · {{ r.zone || r.region }} · {{ stateLabels[r.state] ?? r.state }}</span>
           </li>
         </template>
         <template v-if="backend?.products?.length">

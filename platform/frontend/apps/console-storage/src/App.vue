@@ -16,7 +16,10 @@
  */
 import { ref, computed, h, onMounted, onUnmounted, watch } from "vue";
 import { ElButton, ElDialog, ElForm, ElFormItem, ElSelect, ElOption, ElMessage } from "element-plus";
-import { ResourceTable, useResourceTable, useCatalogMeta } from "@eu/console-kit";
+import {
+  ResourceTable, useResourceTable, useCatalogMeta, useOrderCheckout, fulfilledMessage,
+  paginate, isTransitionalState, formatTime, attributesOf, resourceDisplayName,
+} from "@eu/console-kit";
 import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
 import { sdk } from "./sdk";
 import { yuanToMinor } from "@eu/sdk";
@@ -44,22 +47,25 @@ type BucketRow = Record<string, unknown>;
 // returns the shared Resource shape (store.go); map to list columns. Fields
 // not surfaced by the resource list (objectCount/size/access) fall back to a
 // dash so the existing columns/template keep rendering.
-const { rows, loading, columns, page, pageSize, total, setPage, refresh } = useResourceTable<BucketRow>({
-  api: async () => {
-    const res = await sdk.get<BucketRow[]>("/console/resources");
+const { rows, loading, error, columns, page, pageSize, total, setPage, refresh } = useResourceTable<BucketRow>({
+  api: async (params, signal) => {
+    const res = await sdk.get<BucketRow[]>("/console/resources", { signal });
     const items = (res.data ?? [])
       .filter((r) => r.ProductCode === "euoss")
       .map((r) => ({
         bucketName: r.ResourceId,
+        // The customer-given `name` attribute (when set) beside the bucket id.
+        displayName: resourceDisplayName(String(r.ResourceId ?? ""), attributesOf(r).name),
         status: String(r.State ?? "").charAt(0).toUpperCase() + String(r.State ?? "").slice(1).toLowerCase(),
         storageClass: r.SpecCode,
         region: r.Region,
         objectCount: "—",
         size: "—",
         access: "—",
-        createTime: r.CreatedAt ?? "—",
+        createTime: formatTime(r.CreatedAt as string | undefined),
       }));
-    return { items, total: items.length };
+    // The endpoint returns every resource: page client-side, total = full count.
+    return paginate(items, params);
   },
   columns: [
     { key: "bucketName", title: "存储桶名称", link: (r) => `#/euoss/buckets/${r.bucketName}` },
@@ -71,7 +77,7 @@ const { rows, loading, columns, page, pageSize, total, setPage, refresh } = useR
     { key: "access", title: "读写权限" },
     { key: "createTime", title: "创建时间" },
   ],
-  polling: { interval: 10_000, when: (r) => r.some((x) => x.status === "Creating") },
+  polling: { interval: 10_000, when: (r) => r.some((x) => isTransitionalState(x.status)) },
   pageSize: 20,
 });
 
@@ -80,7 +86,9 @@ const tableColumns = computed(() =>
   columns.value.map((c) =>
     c.key === "status"
       ? { ...c, render: (row: BucketRow) => h(StatusBadge, { status: String(row.status ?? "") }) }
-      : c,
+      : c.key === "bucketName"
+        ? { ...c, render: (row: BucketRow) => String(row.displayName ?? row.bucketName ?? "") }
+        : c,
   ),
 );
 
@@ -105,10 +113,9 @@ interface EuossSku {
   specJson: string;   // e.g. {"storage_class":"standard"}
   status: string;     // "1" = 上架
 }
-interface StorageClassOption { skuCode: string; storageClass: string }
+interface StorageClassOption { skuCode: string; storageClass: string; chargeType: string }
 
 const createVisible = ref(false);
-const creating = ref(false);
 const skuOptions = ref<StorageClassOption[]>([]);
 const form = ref({ region: "", sku: "" });
 
@@ -123,7 +130,7 @@ onMounted(async () => {
         try {
           storageClass = (JSON.parse(s.specJson) as Partial<{ storage_class: string }>).storage_class ?? s.skuCode;
         } catch { /* 解析失败退回 skuCode */ }
-        return { skuCode: s.skuCode, storageClass };
+        return { skuCode: s.skuCode, storageClass, chargeType: s.chargeType };
       });
     if (!form.value.sku && skuOptions.value.length) form.value.sku = skuOptions.value[0].skuCode;
   } catch (e) {
@@ -142,46 +149,45 @@ watch(regions, (rs) => {
   if (!form.value.region && rs.length) form.value.region = rs[0].regionId;
 });
 
-async function submitCreate() {
-  if (!form.value.region || !form.value.sku) { ElMessage.warning("请选择地域和存储类型"); return; }
-  creating.value = true;
-  try {
-    // 1) 询价 — 后端定价权威,金额不本地拼算。
-    const q = await sdk.post<{ payableAmount: string }>("/api/v1/catalog/quote", {
-      productCode: "euoss", specCode: form.value.sku, chargeType: "POSTPAID",
-      quantity: 1, regionId: form.value.region,
-    });
-    // svc-order takes amountMinor in 分 (1 分 = 0.01 元) — same conversion as
-    // BuyWizard; the quote's payableAmount is a yuan decimal.
-    const amountMinor = yuanToMinor(q.data.payableAmount);
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo.
-    const created = await sdk.post<{ orderId: number; orderNo: string }>("/api/v1/orders", {
-      type: "NEW", productCode: "euoss", skuCode: form.value.sku,
-      regionId: form.value.region, quantity: 1, duration: 1, amountMinor,
-    });
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
-      paymentId: `pay-${created.data.orderId}`,
-      paidAmountMinor: amountMinor,
-    });
-
-    // 4) Fulfill — saga opens the bucket; the ResourceId IS the bucket id.
-    const fulfilled = await sdk.post<{ resourceId: string; state: string }>("/api/v1/orchestrator/fulfill", {
-      orderId: created.data.orderId, orderNo: created.data.orderNo,
-      productCode: "euoss", region: form.value.region,
-      specCode: form.value.sku, chargeType: "POSTPAID",
-    });
-
-    ElMessage.success(`存储桶已创建:${fulfilled.data.resourceId}(状态 ${fulfilled.data.state})`);
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one.
+const { submitting: creating, pending, checkout, resume } = useOrderCheckout({
+  sdk,
+  onFulfilled: (res) => {
+    ElMessage.success(fulfilledMessage("存储桶", res));
     createVisible.value = false;
     void refresh();
-  } catch (e) {
-    ElMessage.error(errMsg(e));
-  } finally {
-    creating.value = false;
-  }
+  },
+});
+
+async function submitCreate() {
+  if (!form.value.region || !form.value.sku) { ElMessage.warning("请选择地域和存储类型"); return; }
+  const specCode = form.value.sku;
+  // The quote rejects a chargeType other than the SKU's own
+  // (Catalog.ChargeTypeMismatch): send what the catalogue declares.
+  const chargeType = skuOptions.value.find((s) => s.skuCode === specCode)?.chargeType || "POSTPAID";
+  const region = form.value.region;
+  await checkout(
+    async () => {
+      // 1) 询价 — 后端定价权威,金额不本地拼算。
+      const q = await sdk.post<{ payableAmount: string }>("/api/v1/catalog/quote", {
+        productCode: "euoss", specCode, chargeType, quantity: 1, regionId: region,
+      });
+      // svc-order takes amountMinor in 分 (1 分 = 0.01 元) — same conversion as
+      // BuyWizard; the quote's payableAmount is a yuan decimal.
+      const amountMinor = yuanToMinor(q.data.payableAmount);
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string }>("/api/v1/orders", {
+        type: "NEW", productCode: "euoss", skuCode: specCode, chargeType,
+        regionId: region, quantity: 1, duration: 1, amountMinor,
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil (the saga opens the bucket; the ResourceId IS the
+    // bucket id), body captured now so a retry repeats what was ordered.
+    { productCode: "euoss", region, specCode, chargeType },
+  );
 }
 
 // EmptyGuide renders its action as a plain <a href> with no click hook, and
@@ -205,6 +211,12 @@ function onGuideAction(e: MouseEvent) {
       </template>
     </PageHeader>
 
+    <!-- A failed load must not read as "暂无存储桶". -->
+    <div v-if="error" class="oss-error">
+      <p class="oss-error-msg">列表加载失败:{{ (error as Error)?.message ?? String(error) }}</p>
+      <ElButton size="small" @click="refresh">重试</ElButton>
+    </div>
+    <template v-else>
     <ResourceTable
       :rows="rows as Record<string, unknown>[]"
       :columns="tableColumns"
@@ -213,17 +225,19 @@ function onGuideAction(e: MouseEvent) {
       :page="page"
       :page-size="pageSize"
       @update:page="setPage"
-    />
-
-    <div @click.capture="onGuideAction">
-      <EmptyGuide
-        v-if="!loading && rows.length === 0"
-        title="暂无存储桶"
-        description="创建您的第一个存储桶,开始使用对象存储服务。"
-        action-label="创建存储桶"
-        action-href="#/euoss/create"
-      />
-    </div>
+    >
+      <template #empty>
+        <div @click.capture="onGuideAction">
+          <EmptyGuide
+            title="暂无存储桶"
+            description="创建您的第一个存储桶,开始使用对象存储服务。"
+            action-label="创建存储桶"
+            action-href="#/euoss/create"
+          />
+        </div>
+      </template>
+    </ResourceTable>
+    </template>
 
     <!-- 建桶弹窗:地域(useCatalogMeta)+ 存储类型(sku 目录)。fulfill 不接收
          桶名,列表中的桶名即 ResourceId,不做名称输入。 -->
@@ -243,7 +257,8 @@ function onGuideAction(e: MouseEvent) {
       <p class="oss-create-hint">按量付费(POSTPAID),创建后立即生效;桶名由系统按资源 ID 生成。</p>
       <template #footer>
         <ElButton @click="createVisible = false">取消</ElButton>
-        <ElButton type="primary" :loading="creating" @click="submitCreate">创建</ElButton>
+        <ElButton v-if="!pending" type="primary" :loading="creating" @click="submitCreate">创建</ElButton>
+        <ElButton v-else type="warning" :loading="creating" @click="resume">{{ pending.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pending.orderNo }})</ElButton>
       </template>
     </ElDialog>
     </template>
@@ -253,4 +268,9 @@ function onGuideAction(e: MouseEvent) {
 <style scoped>
 .oss-app { padding: 16px 24px; }
 .oss-create-hint { font-size: 12px; color: var(--eu-text-secondary); margin: 0; }
+.oss-error {
+  padding: 32px; text-align: center;
+  border: 1px solid var(--eu-border); border-radius: var(--eu-radius-lg);
+}
+.oss-error-msg { color: var(--eu-color-danger); font-size: 13px; margin: 0 0 12px; }
 </style>

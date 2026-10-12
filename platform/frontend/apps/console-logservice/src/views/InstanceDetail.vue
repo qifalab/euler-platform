@@ -7,11 +7,16 @@
  * The orchestrator is the sole owner of the resource lifecycle ledger, so this
  * is the authoritative source of state, spec, billing start, etc. EULOG
  * carries chargeType=POSTPAID (按量, billed by stored capacity + ingestion).
+ *
+ * 调整配额 (storageGb) and 修改保留期 (retentionDays) edit the resource
+ * attributes in place: PATCH /api/v1/orchestrator/resources/{id}/attributes.
  */
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElTag, ElEmpty, ElMessage, ElButton } from "element-plus";
+import { formatTime, InstanceActions, AttributeEditDialog, attributesOf, type AttributeField } from "@eu/console-kit";
+import { sdk } from "../sdk";
+import { RETENTION_MAX, RETENTION_MIN, STORAGE_MAX_GB, STORAGE_MIN_GB } from "../logPolicy";
 
 interface ResourceDetail {
   resourceId: string;
@@ -23,39 +28,60 @@ interface ResourceDetail {
   billingStart: string;
   createdAt: string;
   version: number;
+  attributes?: Record<string, string>;
 }
 
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
-const sdk = createSDK({ baseURL: "" });
 
 const inst = ref<ResourceDetail | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const activeTab = ref("monitor");
 
-onMounted(async () => {
-  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+/** (Re)load the resource record — on mount and after every lifecycle action. */
+async function fetchDetail() {
   try {
     const res = await sdk.get<ResourceDetail>(`/api/v1/orchestrator/resources/${id.value}`);
     inst.value = res.data;
+    error.value = null;
   } catch (e) {
     error.value = (e as Error).message ?? "加载失败";
     if (error.value.includes("404") || error.value.includes("不存在")) {
       ElMessage.error("实例不存在");
       router.push("/instances");
     }
-  } finally {
-    loading.value = false;
   }
+}
+
+onMounted(async () => {
+  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+  await fetchDetail();
+  loading.value = false;
 });
 
-function fmt(s: string): string {
-  if (!s) return "—";
-  return s.replace("T", " ").replace(/\+.*$/, "");
-}
+// RFC3339 → viewer-local time; "—" for unset ("" / zero-year) values. The old
+// textual strip showed UTC wall-clock (with a stray "Z") as if it were local.
+const fmt = formatTime;
 const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按量" : "—");
+
+// --- quota / retention (resource attributes) ---
+const attrs = computed(() => attributesOf(inst.value));
+const live = computed(() => inst.value?.state === "RUNNING" || inst.value?.state === "STOPPED");
+const editing = ref<"quota" | "retention" | null>(null);
+const quotaFields: AttributeField[] = [
+  { key: "storageGb", label: "存储容量 (GB)", min: STORAGE_MIN_GB, max: STORAGE_MAX_GB, step: 50, default: 200, hint: `可调整范围 ${STORAGE_MIN_GB}-${STORAGE_MAX_GB} GB,按存储容量计费` },
+];
+const retentionFields: AttributeField[] = [
+  { key: "retentionDays", label: "保留期 (天)", min: RETENTION_MIN, max: RETENTION_MAX, default: 30, hint: "超过保留期的日志将被自动清理" },
+];
+const quotaVisible = computed({ get: () => editing.value === "quota", set: (v: boolean) => { editing.value = v ? "quota" : null; } });
+const retentionVisible = computed({ get: () => editing.value === "retention", set: (v: boolean) => { editing.value = v ? "retention" : null; } });
+function onAttrsSaved(detail: unknown) {
+  if (detail && typeof detail === "object" && "resourceId" in detail) inst.value = detail as ResourceDetail;
+  void fetchDetail();
+}
 </script>
 
 <template>
@@ -68,9 +94,16 @@ const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按�
         <p class="detail-id">ID:{{ id }} · {{ inst?.region ?? "—" }}</p>
       </div>
       <div class="detail-actions">
-        <ElButton size="small">调整配额</ElButton>
-        <ElButton size="small">修改保留期</ElButton>
-        <ElButton size="small" type="danger">释放</ElButton>
+        <ElButton size="small" :disabled="!live" @click="editing = 'quota'">调整配额</ElButton>
+        <ElButton size="small" :disabled="!live" @click="editing = 'retention'">修改保留期</ElButton>
+        <InstanceActions
+          :sdk="sdk"
+          :resource-id="id"
+          :instance="inst"
+          :actions="['release']"
+          @changed="fetchDetail"
+          @released="router.push('/instances')"
+        />
       </div>
     </header>
 
@@ -86,6 +119,8 @@ const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按�
           <ElDescriptionsItem label="计费方式">{{ chargeLabel }}</ElDescriptionsItem>
           <ElDescriptionsItem label="产品">{{ inst.productCode }}</ElDescriptionsItem>
           <ElDescriptionsItem label="地域">{{ inst.region }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="存储容量">{{ attrs.storageGb ? `${attrs.storageGb} GB` : "—" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="保留期">{{ attrs.retentionDays ? `${attrs.retentionDays} 天` : "—" }}</ElDescriptionsItem>
           <ElDescriptionsItem label="计费起始">{{ fmt(inst.billingStart) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="创建时间">{{ fmt(inst.createdAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="资源版本">{{ inst.version }}</ElDescriptionsItem>
@@ -101,6 +136,25 @@ const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按�
     </ElTabs>
 
     <a class="detail-back" href="#" @click.prevent="router.push('/instances')">← 返回实例列表</a>
+
+    <AttributeEditDialog
+      v-model="quotaVisible"
+      :sdk="sdk"
+      :resource-id="id"
+      title="调整配额"
+      :fields="quotaFields"
+      :attributes="attrs"
+      @saved="onAttrsSaved"
+    />
+    <AttributeEditDialog
+      v-model="retentionVisible"
+      :sdk="sdk"
+      :resource-id="id"
+      title="修改保留期"
+      :fields="retentionFields"
+      :attributes="attrs"
+      @saved="onAttrsSaved"
+    />
   </section>
 </template>
 

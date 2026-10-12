@@ -1,0 +1,13 @@
+# staging overrides for svc-openapi (values merge on top of the chart defaults).
+image:
+  tag: v0.1.0   # immutable release tag stamped by CI
+replicas: 2
+# M-6 dual-AZ topology (00§4.4 P2): replicas hard-spread across AZs so
+# losing one AZ does not take the service down.
+topology:
+  zoneSpread: true
+
+# Production mode: services refuse to start without their secrets
+# (pkg-go/runmode; README「生产必需配置」) and never seed demo data.
+extraEnv:
+  EULER_ENV: staging

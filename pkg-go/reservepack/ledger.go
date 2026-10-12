@@ -75,6 +75,16 @@ func (l *Ledger) Purchase(packID string, accountID int64, productCode, skuCode s
 	if _, ok, err := l.store.GetPack(packID); err != nil {
 		return Pack{}, Entry{}, err
 	} else if ok {
+		// A concurrent purchase under this very order key may have committed
+		// between the key lookup above and this read. The pack row and its
+		// PURCHASE entry commit together, so the key is visible now: answer
+		// the replay instead of calling our own purchase someone else's.
+		if prior, found, ferr := l.store.FindByIdempotencyKey(packID, orderKey); ferr != nil {
+			return Pack{}, Entry{}, ferr
+		} else if found {
+			p, _, gerr := l.store.GetPack(packID)
+			return p, prior, gerr
+		}
 		return Pack{}, Entry{}, fmt.Errorf("%w: %s", ErrPackExists, packID)
 	}
 
@@ -102,6 +112,20 @@ func (l *Ledger) Purchase(packID string, accountID int64, productCode, skuCode s
 		CreatedAt:      now,
 	}
 	if err := l.store.Apply(entry, pack, 0); err != nil {
+		// A concurrent Purchase created the pack between the checks above and
+		// this insert (uk_pack / the memory store's version guard report that
+		// as a version conflict; uk_idem as a duplicate entry). If it was the
+		// SAME order key, this call is a replay and answers like one; if it was
+		// another order, the pack exists — not a retryable conflict.
+		if errors.Is(err, ErrVersionConflict) || errors.Is(err, ErrDuplicateEntry) {
+			if prior, ok, ferr := l.store.FindByIdempotencyKey(packID, orderKey); ferr == nil && ok {
+				p, _, gerr := l.store.GetPack(packID)
+				return p, prior, gerr
+			}
+			if _, ok, gerr := l.store.GetPack(packID); gerr == nil && ok {
+				return Pack{}, Entry{}, fmt.Errorf("%w: %s", ErrPackExists, packID)
+			}
+		}
 		return Pack{}, Entry{}, err
 	}
 	return pack, entry, nil
@@ -372,7 +396,14 @@ func (l *Ledger) SweepExpired(accountID int64) ([]string, error) {
 		key := fmt.Sprintf("expire:%s:%s", p.PackID, now.Format("2006-01-02"))
 		if _, _, err := l.Expire(p.PackID, key); err != nil {
 			// A concurrent consume may have exhausted the pack first; that is fine.
-			if err == ErrPackExpired || err == ErrPackTerminal {
+			// (Expire wraps its sentinels, so compare with errors.Is.)
+			if errors.Is(err, ErrPackExpired) || errors.Is(err, ErrPackTerminal) {
+				continue
+			}
+			// A pack that kept losing its optimistic-lock race to concurrent
+			// writers is retried on the next sweep; it must not abort the sweep
+			// of every other pack on the account.
+			if errors.Is(err, ErrVersionConflict) {
 				continue
 			}
 			return expired, err

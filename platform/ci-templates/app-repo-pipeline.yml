@@ -1,9 +1,17 @@
 # Application repository CI pipeline (08-devops-delivery.md §5.3).
 #
-# This pipeline runs in every SERVICE repo (svc-*, rc-*, console-bff). It builds,
-# tests, scans, and publishes the container image, then triggers the manifest
-# repo to update the Helm chart version. The manifest repo's own pipeline
+# This pipeline runs once per Go SERVICE of the monorepo (svc-*, console-bff,
+# alert-center, ...): include it with SERVICE set to the service directory
+# (and MAIN when the main binary is not cmd/server). It builds, tests, scans,
+# and publishes the container image, then triggers the manifest repo to update
+# the Helm chart version. The manifest repo's own pipeline
 # (manifest-repo-pipeline.yml) is the last gate before ArgoCD applies.
+#
+#   include:
+#     - local: platform/ci-templates/app-repo-pipeline.yml
+#   variables:
+#     SERVICE: services/svc-iam
+#     MAIN: web-auth
 #
 # Trigger: every MR + main push. Image tag = commit SHA (immutable); the manifest
 # repo bumps the chart's image.tag on merge via the trigger job.
@@ -15,6 +23,15 @@ variables:
   GO_IMAGE: golang:1.26.6
   # harbor.internal/cloudplatform/<svc> — set per-service in CI/CD settings
   IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  # Service directory relative to the repository root (REQUIRED), e.g.
+  # services/svc-order. Each service is its own Go module with
+  # `replace ... => ../../pkg-go`, so it is built from the repo root.
+  SERVICE: ""
+  # cmd/<MAIN> becomes the image entrypoint /app/app; every other cmd/* is
+  # shipped as /app/<dir> (svc-iam: MAIN=web-auth, plus /app/verify).
+  MAIN: server
+  # The one service Dockerfile (Go 1.26 builder, distroless runtime).
+  DOCKERFILE: services/_tmpl-go/deploy/Dockerfile
 
 # ---------------------------------------------------------------------------
 # Verify: go vet + go test (the service's own + the shared pkg-go replace).
@@ -23,6 +40,8 @@ verify:vet:
   stage: verify
   image: $GO_IMAGE
   script:
+    - test -n "$SERVICE" || { echo "SERVICE (e.g. services/svc-order) is required" >&2; exit 1; }
+    - cd "$SERVICE"
     - go vet ./...
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -32,13 +51,16 @@ verify:test:
   stage: verify
   image: $GO_IMAGE
   script:
+    - cd "$SERVICE"
     - go test -race -count=1 ./...   # -race needs cgo; CI runner has gcc
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
 
 # ---------------------------------------------------------------------------
-# Build: multi-stage Dockerfile (the service's cmd/server) → distroless image.
+# Build: multi-stage Dockerfile (every cmd/* of the service, cmd/$MAIN as the
+# entrypoint) → distroless image. Context = repository root so the service's
+# `replace ../../pkg-go` resolves inside the build.
 # ---------------------------------------------------------------------------
 build:image:
   stage: build
@@ -46,9 +68,14 @@ build:image:
     name: gcr.io/kaniko-project/executor:debug
     entrypoint: [""]
   script:
+    - test -n "$SERVICE" || { echo "SERVICE (e.g. services/svc-order) is required" >&2; exit 1; }
     - /kaniko/executor
         --context="$CI_PROJECT_DIR"
-        --dockerfile="Dockerfile"
+        --dockerfile="$CI_PROJECT_DIR/$DOCKERFILE"
+        --build-arg="SERVICE=$SERVICE"
+        --build-arg="MAIN=$MAIN"
+        --build-arg="GO_IMAGE=$GO_IMAGE"
+        --build-arg="GIT_SHA=$CI_COMMIT_SHORT_SHA"
         --destination="$IMAGE"
         --cache=true
   rules:
@@ -60,7 +87,8 @@ build:image:
 scan:trivy:
   stage: scan
   image:
-    name: aquasec/trivy:latest
+    # Pinned (supply chain): a moving :latest tag lets a registry push change what CI runs.
+    name: aquasec/trivy:0.74.0
     entrypoint: [""]
   script:
     - trivy image --exit-code 1 --severity HIGH,CRITICAL "$IMAGE"
@@ -87,13 +115,14 @@ publish:tag:
 # ---------------------------------------------------------------------------
 trigger:manifest:
   stage: trigger
-  image: curlimages/curl:latest
+  # Pinned (supply chain): a moving :latest tag lets a registry push change what CI runs.
+  image: curlimages/curl:8.22.0
   script:
     - |
       curl -X POST --fail
         -F "token=$MANIFEST_TRIGGER_TOKEN"
         -F "ref=main"
-        -F "variables[SVC]=$CI_PROJECT_NAME"
+        -F "variables[SVC]=${SERVICE##*/}"
         -F "variables[IMAGE_TAG]=$CI_COMMIT_SHORT_SHA"
         "$CI_API_V4_URL/projects/$MANIFEST_PROJECT_ID/trigger/pipeline"
   needs: ["publish:tag"]

@@ -152,7 +152,7 @@ func statusFromCode(code int) TicketStatus {
 }
 
 // ticketColumns is the ticket projection, in scanTicket's order.
-const ticketColumns = `ticket_id, account_id, category, priority, status,
+const ticketColumns = `ticket_id, account_id, category, title, priority, status,
 	sla_deadline, assignee, contact, client_token, version, created_at, updated_at`
 
 // Create persists a new ticket and its first message.
@@ -189,10 +189,10 @@ func (s *sqlStore) Create(t *Ticket) error {
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO ticket
-			   (ticket_id, account_id, category, priority, status, sla_deadline,
+			   (ticket_id, account_id, category, title, priority, status, sla_deadline,
 			    assignee, contact, client_token, version, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			t.TicketID, t.AccountID, t.Category, priority, status, sla,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.TicketID, t.AccountID, t.Category, nullableString(t.Title), priority, status, sla,
 			nullableString(t.Assignee), nullableString(t.Contact), t.ClientToken, t.Version,
 			t.CreatedAt.UTC(), t.UpdatedAt.UTC()); err != nil {
 			if storage.IsDuplicateKey(err) {
@@ -293,7 +293,7 @@ func (s *sqlStore) ListByAccount(accountID int64) ([]*Ticket, error) {
 	return tickets, nil
 }
 
-// Reply appends a message and moves the ticket to WAITING_REPLY.
+// Reply appends a message and moves the ticket per statusAfterReply.
 func (s *sqlStore) Reply(accountID int64, ticketID string, msg Message, now time.Time) (*Ticket, error) {
 	return s.transition(accountID, ticketID, now, func(ctx context.Context, tx *sql.Tx, t *Ticket) error {
 		if t.Status == StatusClosed {
@@ -303,7 +303,7 @@ func (s *sqlStore) Reply(accountID int64, ticketID string, msg Message, now time
 			return err
 		}
 		t.Messages = append(t.Messages, msg)
-		return s.updateTicket(ctx, tx, t, StatusWaitingReply, now)
+		return s.updateTicket(ctx, tx, t, statusAfterReply(t.Status, msg.FromUser), now)
 	})
 }
 
@@ -436,15 +436,17 @@ func scanTicket(sc rowScanner) (*Ticket, error) {
 		t         Ticket
 		priority  int
 		status    int
+		title     sql.NullString
 		sla       sql.NullTime
 		assignee  sql.NullString
 		contact   sql.NullString
 		clientTok string
 	)
-	if err := sc.Scan(&t.TicketID, &t.AccountID, &t.Category, &priority, &status, &sla,
+	if err := sc.Scan(&t.TicketID, &t.AccountID, &t.Category, &title, &priority, &status, &sla,
 		&assignee, &contact, &clientTok, &t.Version, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
+	t.Title = title.String
 	t.Priority = priorityFromCode(priority)
 	t.Status = statusFromCode(status)
 	t.Assignee = assignee.String

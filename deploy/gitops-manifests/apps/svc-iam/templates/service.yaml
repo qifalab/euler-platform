@@ -26,9 +26,14 @@ spec:
   selector:
     app.kubernetes.io/name: {{ .Chart.Name }}
   ports:
+    # web-auth (console/account auth, /internal/authz/check)
     - port: {{ .Values.service.port }}
       targetPort: {{ .Values.service.targetPort }}
       name: http
+    # verify (/internal/openapi/verify, eu-auth forward-auth)
+    - port: {{ .Values.verify.port }}
+      targetPort: {{ .Values.verify.port }}
+      name: verify
 ---
 
 # --- PodDisruptionBudget ---------------------------------------------------

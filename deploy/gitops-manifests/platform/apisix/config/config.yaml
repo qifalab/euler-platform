@@ -12,7 +12,21 @@
 
 apisix:
   node_listen: 9080
+  # Custom plugins (eu-auth / eu-authorize / eu-audit). APISIX loads a plugin
+  # with require("apisix.plugins.<name>"), so with this search path the module
+  # must live at /opt/eu-plugins/apisix/plugins/<name>.lua — that is where
+  # platform/apisix/apisix-deployment.yaml mounts the apisix-eu-plugins
+  # ConfigMap. (extra_lua_path is an apisix.* key; at the top level of this
+  # file it is ignored and the plugins never load.)
+  extra_lua_path: "/opt/eu-plugins/?.lua"
   enable_admin: false          # Admin API only on the control-plane instances
+  # Status API (GET /status liveness, GET /status/ready readiness — 503 until
+  # every worker has loaded config from etcd). It is the kubelet probe target
+  # in apisix-deployment.yaml; /apisix/status on 9080 only exists when the
+  # node-status plugin is exposed through public-api, which it is not.
+  status:
+    ip: "0.0.0.0"
+    port: 7085
   # No Dashboard in any environment: changes go through ADC CLI + GitOps MR
   # review (04§3.9), so the cluster state always matches Git.
   enable_control: true
@@ -27,6 +41,15 @@ apisix:
         disk_size: 1G
         disk_path: /tmp/disk_cache_one
         cache_levels: "1:2"
+  # Trust store for the gateway's outbound TLS: the platform CA from
+  # cert-manager (platform/middleware/tls.yaml), mounted by
+  # apisix-deployment.yaml. APISIX renders it as lua_ssl_trusted_certificate
+  # (eu-audit verifies the Kafka brokers against it) and
+  # proxy_ssl_trusted_certificate (https upstreams, see nginx_config). It is
+  # the ONLY trusted CA — a public-CA upstream would fail verification — and
+  # APISIX refuses to start when the file is missing.
+  ssl:
+    ssl_trusted_certificate: /opt/eu-secrets/platform-ca/ca.crt
 
 deployment:
   role: data_plane
@@ -78,6 +101,20 @@ discovery:
 nginx_config:
   worker_processes: auto
   error_log_level: warn
+  # Environment variables the Lua workers may read (nginx drops all others).
+  # EULER_INTERNAL_TOKEN is injected upstream by eu-auth after authentication.
+  envs:
+    - EULER_INTERNAL_TOKEN
+    # SCRAM password of eu-audit's Kafka user (plugins/eu-audit.lua).
+    - EULER_KAFKA_SASL_PASSWORD
+  # Verify the certificate of every https upstream (APISIX 3.9 honours
+  # upstream.tls.verify for kafka upstreams only). The name checked is
+  # $upstream_host (proxy_ssl_name; nginx_config.http.proxy_ssl_server_name is
+  # on by default), so a pass_host: pass route is verified against the
+  # client's Host — the MinIO sell certificate (minio-sell-tls) carries
+  # euoss.api.euler.emoera.com for the openapi-euoss-data route.
+  http_server_location_configuration_snippet: |
+    proxy_ssl_verify on;
   http:
     lua_shared_dict:
       # eu-authorize L1 decision cache (07§3.5, 30s TTL).
@@ -86,12 +123,16 @@ nginx_config:
       prometheus-metrics: 20m
 
 plugins:
+  # This list REPLACES APISIX's default plugin set: a plugin that is not
+  # listed here cannot be used by any route (the route is rejected), so every
+  # plugin referenced from routes/*.yaml must appear below.
   # Order here does not set execution order — that comes from each plugin's
   # priority field. Listed in chain order for readability (07§5):
   #   ip-restriction → limit-req → eu-auth → eu-authorize → eu-audit → upstream
   - real-ip
   - request-id
   - ip-restriction
+  - uri-blocker          # blocks MinIO's admin/metrics paths on the S3 data plane
   - limit-req
   - limit-count
   - eu-auth              # custom: CPS1 signature / JWT authentication
@@ -110,8 +151,3 @@ plugin_attr:
     export_addr:
       ip: 0.0.0.0
       port: 9091          # scraped by Prometheus (05§7.2)
-
-# Custom plugins live on a mounted path; the ConfigMap in
-# platform/apisix/apisix-deployment.yaml projects them here.
-apisix_lua_home: /usr/local/apisix
-extra_lua_path: "/opt/eu-plugins/?.lua"

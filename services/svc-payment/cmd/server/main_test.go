@@ -28,30 +28,86 @@ func payData(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	return env.Data
 }
 
-func TestRechargeRequiresIdempotencyKey(t *testing.T) {
+const testChannelSecret = "test-channel-secret"
+
+// newTestPaymentServer is the demo server with a channel secret configured.
+func newTestPaymentServer() *paymentServer {
 	ps := newInMemoryPaymentServer()
-	w := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", `{"amountMinor":100}`)
-	if w.Code != 400 {
-		t.Fatalf("want 400 without idempotency key, got %d: %s", w.Code, w.Body.String())
+	ps.channelSecret = []byte(testChannelSecret)
+	return ps
+}
+
+// doRecharge posts a recharge for account 100123 carrying sig (if non-empty).
+func doRecharge(t *testing.T, ps *paymentServer, body, sig string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/payment/recharge", strings.NewReader(body))
+	r.Header.Set(accountIDHeader, "100123")
+	if sig != "" {
+		r.Header.Set(channelSignatureHeader, sig)
+	}
+	w := httptest.NewRecorder()
+	ps.handleRecharge(w, r)
+	return w
+}
+
+func validSig(amount int64, outTradeNo string) string {
+	return signRecharge([]byte(testChannelSecret), 100123, amount, outTradeNo)
+}
+
+// Regression: any caller with an account header could credit itself any
+// amount. Without a configured channel, recharge is refused outright.
+func TestRechargeRefusedWithoutChannelSecret(t *testing.T) {
+	ps := newInMemoryPaymentServer()
+	ps.channelSecret = nil
+	if w := doRecharge(t, ps, `{"amountMinor":100,"outTradeNo":"ch-001"}`, validSig(100, "ch-001")); w.Code != 403 {
+		t.Fatalf("want 403 when no channel is configured, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRechargeOutTradeNoAsIdempotencyKey(t *testing.T) {
-	ps := newInMemoryPaymentServer()
-	w := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", `{"amountMinor":100,"outTradeNo":"ch-001"}`)
+func TestRechargeRequiresValidChannelSignature(t *testing.T) {
+	ps := newTestPaymentServer()
+	cases := map[string]string{
+		"no signature":       "",
+		"garbage":            "not-hex",
+		"other amount":       validSig(1, "ch-001"),
+		"other trade number": validSig(100000, "ch-999"),
+		"other secret":       signRecharge([]byte("guess"), 100123, 100000, "ch-001"),
+	}
+	for name, sig := range cases {
+		if w := doRecharge(t, ps, `{"amountMinor":100000,"outTradeNo":"ch-001"}`, sig); w.Code != 403 {
+			t.Errorf("%s: want 403, got %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	bal, _ := ps.ledger.Balance(100123)
+	if amountToMinor(bal.Available) != 50_000 {
+		t.Fatalf("balance changed by unsigned recharges: %d", amountToMinor(bal.Available))
+	}
+}
+
+func TestRechargeRequiresOutTradeNo(t *testing.T) {
+	ps := newTestPaymentServer()
+	w := doRecharge(t, ps, `{"amountMinor":100,"idempotencyKey":"idem-1"}`, validSig(100, ""))
+	if w.Code != 400 {
+		t.Fatalf("want 400 without outTradeNo, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRechargeSignedSucceeds(t *testing.T) {
+	ps := newTestPaymentServer()
+	w := doRecharge(t, ps, `{"amountMinor":100,"outTradeNo":"ch-001"}`, validSig(100, "ch-001"))
 	if w.Code != 200 {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestRechargeDuplicateIsIdempotentSuccess(t *testing.T) {
-	ps := newInMemoryPaymentServer()
-	body := `{"amountMinor":100,"idempotencyKey":"idem-1"}`
-	first := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", body)
+	ps := newTestPaymentServer()
+	// Same channel transaction, different client idempotency keys: still one credit.
+	first := doRecharge(t, ps, `{"amountMinor":100,"outTradeNo":"ch-dup","idempotencyKey":"a"}`, validSig(100, "ch-dup"))
 	if first.Code != 200 {
 		t.Fatalf("first recharge: %d %s", first.Code, first.Body.String())
 	}
-	second := doPost(t, ps.handleRecharge, "/api/v1/payment/recharge", body)
+	second := doRecharge(t, ps, `{"amountMinor":100,"outTradeNo":"ch-dup","idempotencyKey":"b"}`, validSig(100, "ch-dup"))
 	if second.Code != 200 {
 		t.Fatalf("replay should be 200, got %d: %s", second.Code, second.Body.String())
 	}

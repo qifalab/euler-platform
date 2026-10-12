@@ -80,3 +80,46 @@ func TestAggregateRejectsWindowOutsideHour(t *testing.T) {
 		}
 	}
 }
+
+// Usage metered for a resource with no expected billable hours (the lifecycle
+// says it never ran) is a full discrepancy, not a perfect match.
+func TestReconcileActualWithoutExpectation(t *testing.T) {
+	got := Reconcile("res-ghost", 0, 5)
+	if got.DiffRatio != 1 {
+		t.Fatalf("DiffRatio = %v, want 1", got.DiffRatio)
+	}
+	if !got.NeedsBackfill || !got.NeedsAlert {
+		t.Fatalf("metered-but-never-ran must alert: %+v", got)
+	}
+	if z := Reconcile("res-idle", 0, 0); z.DiffRatio != 0 || z.NeedsAlert {
+		t.Fatalf("nothing expected, nothing metered: %+v", z)
+	}
+}
+
+// Two readings for the SAME window under different record ids (a collector
+// that derives its own id, or a re-collection with a new one) are one minute
+// of usage: the later reading replaces the earlier, it is not added to it.
+func TestAggregateDedupesByWindowNotRecordID(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 30, 0, 0, time.UTC)
+	a := NewAggregator(func() time.Time { return now })
+	hour := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
+	first := UsageRecord{RecordID: "collector-a-0001", ResourceID: "r-1", MeteringItem: "cpu",
+		Quantity: MustParseQuantity("1"), WindowStart: hour.Add(5 * time.Minute)}
+	second := first
+	second.RecordID = "collector-b-0001"
+	second.Quantity = MustParseQuantity("1.5")
+	other := first
+	other.RecordID = "collector-a-0002"
+	other.WindowStart = hour.Add(6 * time.Minute)
+
+	h, err := a.Aggregate([]UsageRecord{first, second, other}, hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.TotalQuantity.String() != "2.5" {
+		t.Fatalf("total = %s, want 2.5 (1.5 for the corrected window + 1)", h.TotalQuantity)
+	}
+	if h.WindowsSeen != 2 {
+		t.Fatalf("windows seen = %d, want 2", h.WindowsSeen)
+	}
+}

@@ -4,8 +4,10 @@
  *
  * 实现《02-frontend-architecture.md》「账号中心视图 — 找回密码流程」一节：
  * 邮箱校验 → 验证码校验 → 重置密码 → 回到登录。
- * 验证码由后端下发并在后端比对（前端绝不比对验证码）；后端接口未上线时,
- * 提交会得到「暂未开放」提示。
+ * 验证码由 svc-iam 下发并在后端比对（前端绝不比对验证码）：
+ *   POST /api/auth/forgot/send-code — 恒返回 200（不暴露邮箱是否已注册）
+ *   POST /api/auth/forgot/reset     — 400 Auth.InvalidCode（验证码错误/过期）、429（过于频繁）
+ * 调用与错误文案见 ../forgot.ts。
  */
 import { reactive, ref, computed, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
@@ -20,6 +22,8 @@ import {
   type FormInstance,
   type FormRules,
 } from "element-plus";
+import { isValidLoginEmail, validatePassword } from "../validation";
+import { CODE_SENT_MESSAGE, forgotErrorMessage, isInvalidCode, resetPassword, sendResetCode } from "../forgot";
 
 const router = useRouter();
 
@@ -53,19 +57,24 @@ const canResend = computed(() => countdown.value === 0);
 const emailRules: FormRules = {
   email: [
     { required: true, message: "请输入邮箱地址", trigger: "blur" },
-    { type: "email", message: "邮箱格式不正确", trigger: ["blur", "change"] },
+    {
+      // Same rule as svc-iam's validLoginEmail (validation.ts).
+      validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+        if (value && !isValidLoginEmail(value)) callback(new Error("邮箱格式不正确"));
+        else callback();
+      },
+      trigger: ["blur", "change"],
+    },
   ],
 };
 
 const resetRules: FormRules = {
   code: [
     { required: true, message: "请输入验证码", trigger: "blur" },
-    { len: 6, message: "验证码为 6 位数字", trigger: "blur" },
+    { pattern: /^\d{6}$/, message: "验证码为 6 位数字", trigger: "blur" },
   ],
-  password: [
-    { required: true, message: "请输入新密码", trigger: "blur" },
-    { min: 8, max: 20, message: "密码长度 8-20 位", trigger: "blur" },
-  ],
+  // Same bounds as svc-iam (8-128, measured in UTF-8 bytes).
+  password: [{ required: true, validator: validatePassword, trigger: "blur" }],
   confirm: [
     { required: true, message: "请再次输入密码", trigger: "blur" },
     {
@@ -104,40 +113,18 @@ onBeforeUnmount(() => {
   }
 });
 
-/** 统一调用找回密码后端接口；接口尚未实现时抛出「暂未开放」。 */
-async function forgotApi(path: string, body: Record<string, unknown>): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(path, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new Error("网络异常，请稍后再试");
-  }
-  if (res.status === 404 || res.status === 405 || res.status === 501) {
-    throw new Error("找回密码功能暂未开放，请联系管理员重置密码");
-  }
-  const payload = await res.json().catch(() => ({} as { Code?: string; Message?: string }));
-  if (!res.ok || (payload.Code && payload.Code !== "OK")) {
-    throw new Error(payload.Message ?? "请求失败，请稍后再试");
-  }
-}
-
 async function handleSendCode() {
   const valid = await emailFormRef.value?.validate().catch(() => false);
   if (!valid) return;
   sending.value = true;
   try {
-    // 验证码由 svc-iam 下发到注册邮箱；是否已注册也由后端判断。
-    await forgotApi("/api/auth/forgot/send-code", { email: emailForm.email });
+    // 验证码由 svc-iam 下发到注册邮箱；接口恒返回成功，不暴露邮箱是否已注册。
+    await sendResetCode(emailForm.email);
     startCountdown();
     active.value = 1;
-    ElMessage.success("验证码已发送至邮箱");
+    ElMessage.success(CODE_SENT_MESSAGE);
   } catch (e) {
-    ElMessage.error((e as Error).message);
+    ElMessage.error(forgotErrorMessage(e));
   } finally {
     sending.value = false;
   }
@@ -146,11 +133,11 @@ async function handleSendCode() {
 async function handleResend() {
   if (!canResend.value) return;
   try {
-    await forgotApi("/api/auth/forgot/send-code", { email: emailForm.email });
+    await sendResetCode(emailForm.email);
     startCountdown();
-    ElMessage.success("验证码已发送至邮箱");
+    ElMessage.success(CODE_SENT_MESSAGE);
   } catch (e) {
-    ElMessage.error((e as Error).message);
+    ElMessage.error(forgotErrorMessage(e));
   }
 }
 
@@ -160,18 +147,16 @@ async function handleReset() {
   resetting.value = true;
   try {
     // 验证码校验在后端完成；前端只透传。
-    await forgotApi("/api/auth/forgot/reset", {
-      email: emailForm.email,
-      code: resetForm.code,
-      password: resetForm.password,
-    });
+    await resetPassword(emailForm.email, resetForm.code, resetForm.password);
     active.value = 2;
     ElMessage.success("密码已重置");
     setTimeout(() => {
       router.push("/login");
     }, 800);
   } catch (e) {
-    ElMessage.error((e as Error).message);
+    // 验证码错误/过期：清空验证码，留在本步，用户可重新获取。
+    if (isInvalidCode(e)) resetForm.code = "";
+    ElMessage.error(forgotErrorMessage(e));
   } finally {
     resetting.value = false;
   }
@@ -257,7 +242,7 @@ function goLogin() {
           <ElInput
             v-model="resetForm.password"
             type="password"
-            placeholder="8-20 位新密码"
+            placeholder="8-128 位新密码"
             show-password
             size="large"
           />

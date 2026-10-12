@@ -17,12 +17,12 @@ import (
 // # Ids: the schema decides, not the client
 //
 // V1 declares org_project.project_id as a 号段-issued BIGINT (04§6.6), while the
-// phase-1 handler minted UUIDs and even accepted a client-supplied id. A UUID has
-// no representation in that column, so this store issues the id from
-// account_db.id_sequence and writes it back through the pointer the port now
-// takes. A numeric client-supplied id is honoured (it is a valid key); anything
-// else is replaced by a server-issued id rather than silently stored as garbage
-// or rejected after the caller already built a response around it.
+// phase-1 handler minted UUIDs and even accepted a client-supplied id. This store
+// always issues the id from account_db.id_sequence and writes it back through the
+// pointer the port takes. A client-supplied id is never used, numeric or not:
+// project_id is the table's global primary key, so honouring one let a tenant
+// take an id the allocator would later hand to another tenant's create (which
+// then failed as a "name conflict").
 //
 // # Account ids are numbers in the schema, strings in the service
 //
@@ -92,21 +92,65 @@ func numericAccountID(raw string) (int64, error) {
 // projectIDString converts a stored numeric id into the string the API uses.
 func projectIDString(id int64) string { return strconv.FormatInt(id, 10) }
 
-// CreateProject inserts a project. The store owns p.ProjectID: a non-numeric
-// value (a phase-1 UUID, or empty) is replaced by a 号段 id.
+// noProject is the "self" of a project that does not exist yet (a create):
+// allocator ids start at 1, so no parent chain can reach it.
+const noProject int64 = -1
+
+// parseParent converts a parent id from the API; a non-numeric one cannot name
+// any project in this schema.
+func parseParent(raw string) (int64, error) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("%w: parent project not found", errInvalidParent)
+	}
+	return id, nil
+}
+
+// checkParentTx validates parent as the parent of self within the account: it
+// must exist in that account, must not be self, and walking up from it must not
+// reach self (that would close a cycle). The walk is bounded by maxProjectDepth.
+func checkParentTx(ctx context.Context, tx *sql.Tx, acct, self, parent int64) error {
+	if parent == self {
+		return fmt.Errorf("%w: a project cannot be its own parent", errInvalidParent)
+	}
+	cur := parent
+	for depth := 0; depth < maxProjectDepth; depth++ {
+		var next sql.NullInt64
+		err := tx.QueryRowContext(ctx,
+			`SELECT parent_id FROM org_project WHERE project_id = ? AND account_id = ?`,
+			cur, acct).Scan(&next)
+		if errors.Is(err, sql.ErrNoRows) {
+			if depth == 0 {
+				return fmt.Errorf("%w: parent project not found", errInvalidParent)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("org: read ancestor %d: %w", cur, err)
+		}
+		if !next.Valid {
+			return nil
+		}
+		if next.Int64 == self {
+			return fmt.Errorf("%w: the parent is a descendant of this project", errInvalidParent)
+		}
+		cur = next.Int64
+	}
+	return fmt.Errorf("%w: project tree is deeper than %d levels", errInvalidParent, maxProjectDepth)
+}
+
+// CreateProject inserts a project. The store owns p.ProjectID: whatever the
+// caller put there is replaced by a 号段 id.
 func (s *sqlStore) CreateProject(p *project) error {
 	acct, err := numericAccountID(p.AccountID)
 	if err != nil {
 		return err
 	}
-	if _, convErr := strconv.ParseInt(p.ProjectID, 10, 64); convErr != nil {
-		p.ProjectID = projectIDString(s.newID())
-	}
 	var parent any
+	var parentID int64
 	if p.ParentID != "" {
-		parentID, err := strconv.ParseInt(p.ParentID, 10, 64)
-		if err != nil {
-			return fmt.Errorf("org: parent project id must be numeric: %q", p.ParentID)
+		if parentID, err = parseParent(p.ParentID); err != nil {
+			return err
 		}
 		parent = parentID
 	}
@@ -114,19 +158,32 @@ func (s *sqlStore) CreateProject(p *project) error {
 	ctx, cancel := context.WithTimeout(context.Background(), statementTimeout)
 	defer cancel()
 
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO org_project (project_id, account_id, name, parent_id, status, version)
-		 VALUES (?, ?, ?, ?, 1, 0)`,
-		p.ProjectID, acct, p.Name, parent); err != nil {
-		// The migration comment on uk_acc_name says it plainly: project names are
-		// unique per account so a create retry cannot build a second project. The
-		// duplicate is reported as "already exists" — the port's own signal for
-		// that case — rather than as a driver error.
-		if storage.IsDuplicateKey(err) {
-			return errProjectExists
+	id := s.newID()
+	err = storage.Tx(ctx, s.db, func(tx *sql.Tx) error {
+		if parent != nil {
+			if err := checkParentTx(ctx, tx, acct, noProject, parentID); err != nil {
+				return err
+			}
 		}
-		return fmt.Errorf("org: create project %s: %w", p.ProjectID, err)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO org_project (project_id, account_id, name, parent_id, status, version)
+			 VALUES (?, ?, ?, ?, 1, 0)`,
+			id, acct, p.Name, parent); err != nil {
+			// The migration comment on uk_acc_name says it plainly: project names
+			// are unique per account so a create retry cannot build a second
+			// project. The id is the allocator's, so a duplicate here is that
+			// name rule — the port's "already exists".
+			if storage.IsDuplicateKey(err) {
+				return errProjectExists
+			}
+			return fmt.Errorf("org: create project %d: %w", id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
+	p.ProjectID = projectIDString(id)
 	return nil
 }
 
@@ -248,9 +305,12 @@ func (s *sqlStore) UpdateProject(accountRaw, projectRaw string, name *string, pa
 			if *parentID == "" {
 				nextParent = sql.NullInt64{}
 			} else {
-				parent, err := strconv.ParseInt(*parentID, 10, 64)
+				parent, err := parseParent(*parentID)
 				if err != nil {
-					return fmt.Errorf("org: parent project id must be numeric: %q", *parentID)
+					return err
+				}
+				if err := checkParentTx(ctx, tx, acct, pid, parent); err != nil {
+					return err
 				}
 				nextParent = sql.NullInt64{Int64: parent, Valid: true}
 			}
@@ -263,6 +323,11 @@ func (s *sqlStore) UpdateProject(accountRaw, projectRaw string, name *string, pa
 			  WHERE project_id = ? AND account_id = ? AND version = ?`,
 			nextName.String, nullableInt(nextParent), version+1, pid, acct, version)
 		if err != nil {
+			// uk_acc_name: renaming onto another project's name is the same
+			// conflict a duplicate create is, not a server failure.
+			if storage.IsDuplicateKey(err) {
+				return errProjectExists
+			}
 			return fmt.Errorf("org: update project %s: %w", projectRaw, err)
 		}
 		return storage.Affected(res, nil)
@@ -274,6 +339,12 @@ func (s *sqlStore) UpdateProject(accountRaw, projectRaw string, name *string, pa
 // The uk_resource index — one resource belongs to exactly one project — is what
 // the memory store enforces with a map; here the row itself is the arbiter, so two
 // concurrent moves cannot both win and leave the resource in two projects.
+//
+// uk_resource is global (resource_id alone), so every read and write of the
+// membership row is scoped by account_id: unscoped, a tenant could move another
+// tenant's resource row into its own project, and the mismatch error echoed the
+// other tenant's project id. A resource whose row belongs to another account is
+// errResourceNotFound — the same answer as for any id the caller cannot see.
 func (s *sqlStore) MoveResource(accountRaw, resourceID, fromProjectID, toProjectID string) error {
 	acct, err := numericAccountID(accountRaw)
 	if err != nil {
@@ -308,13 +379,18 @@ func (s *sqlStore) MoveResource(accountRaw, resourceID, fromProjectID, toProject
 
 		var current int64
 		err := tx.QueryRowContext(ctx,
-			`SELECT project_id FROM org_project_resource WHERE resource_id = ? FOR UPDATE`,
-			resourceID).Scan(&current)
+			`SELECT project_id FROM org_project_resource
+			  WHERE resource_id = ? AND account_id = ? FOR UPDATE`,
+			resourceID, acct).Scan(&current)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			_, err := tx.ExecContext(ctx,
 				`INSERT INTO org_project_resource (resource_id, project_id, account_id)
 				 VALUES (?, ?, ?)`, resourceID, to, acct)
+			if storage.IsDuplicateKey(err) {
+				// Registered under another account: not this caller's to see.
+				return errResourceNotFound
+			}
 			if err != nil {
 				return fmt.Errorf("org: register resource %s: %w", resourceID, err)
 			}
@@ -323,11 +399,11 @@ func (s *sqlStore) MoveResource(accountRaw, resourceID, fromProjectID, toProject
 			return fmt.Errorf("org: read resource %s: %w", resourceID, err)
 		}
 		if current != from {
-			return fmt.Errorf("org: resource %s is in project %d, not %s", resourceID, current, fromProjectID)
+			return fmt.Errorf("%w: resource %s is in project %d, not %s", errResourceConflict, resourceID, current, fromProjectID)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE org_project_resource SET project_id = ? WHERE resource_id = ?`,
-			to, resourceID); err != nil {
+			`UPDATE org_project_resource SET project_id = ? WHERE resource_id = ? AND account_id = ?`,
+			to, resourceID, acct); err != nil {
 			return fmt.Errorf("org: move resource %s: %w", resourceID, err)
 		}
 		return nil

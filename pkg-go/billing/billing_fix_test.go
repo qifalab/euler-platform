@@ -50,3 +50,28 @@ func TestShortfallChargesStillReconcileInSummary(t *testing.T) {
 		t.Fatalf("corrupted charge must stay unreconciled: %+v", badBill)
 	}
 }
+
+// An expired coupon pool used to be deducted like a live one: the waterfall
+// ignored ExpireAt, so credit forfeited at its deadline still paid bills.
+func TestExpiredPoolsAreNotDeducted(t *testing.T) {
+	e := newEngine()
+	pools := []Pool{
+		{Source: SourceCoupon, Ref: "expired", Available: amt("10"), ExpireAt: settleAt.Add(-time.Minute)},
+		{Source: SourceCoupon, Ref: "at-deadline", Available: amt("10"), ExpireAt: settleAt},
+		{Source: SourceCoupon, Ref: "live", Available: amt("1"), ExpireAt: settleAt.Add(time.Hour)},
+		{Source: SourceBalance, Available: amt("100")},
+	}
+	// 10 core-hours × 0.25 = 2.5: live coupon 1, cash 1.5; expired pools nothing.
+	s, err := e.Settle(usage("10", 100), amt("0.25"), "euecs", "snap-1", pools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range s.Charge.Deductions {
+		if d.Ref == "expired" || d.Ref == "at-deadline" {
+			t.Fatalf("expired pool %q was deducted %s", d.Ref, d.Amount)
+		}
+	}
+	if s.Charge.PayAmount.String() != "1.5" || !s.Charge.Reconciles() {
+		t.Fatalf("cash = %s (deductions %+v), want 1.5", s.Charge.PayAmount, s.Charge.Deductions)
+	}
+}

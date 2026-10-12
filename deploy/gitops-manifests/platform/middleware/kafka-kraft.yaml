@@ -10,6 +10,44 @@
 # KRaft over ZK for exactly this reason). Each broker is also a controller, so
 # 3 brokers = 3 controllers = a quorum that survives one AZ gone.
 #
+# Transport security (07§4; PKI in tls.yaml). There is no PLAINTEXT listener:
+#   :9092 CLIENT      SASL_SSL — every client (APISIX eu-audit, services): TLS
+#                     server auth under the platform CA plus SCRAM-SHA-512
+#                     credentials, provisioned by the kafka-scram-users Job.
+#   :9095 INTERNAL    SSL, client certificate required — inter-broker
+#                     replication and the kafka-scram-users Job.
+#   :9093 CONTROLLER  SSL, client certificate required — KRaft quorum.
+# INTERNAL and CONTROLLER trust only kafka-internal-ca (tls.yaml), and
+# network-policies.yaml admits only the brokers and that Job to those ports.
+#
+# Authorization: KRaft StandardAuthorizer, deny unless an ACL allows. Super
+# users are the brokers and the admin Job (by certificate); a SCRAM user gets
+# exactly the ACLs the kafka-scram-users Job grants: apisix-audit may WRITE /
+# DESCRIBE cloud.sys.audit.action, the optional kafka-ops operator login may
+# DESCRIBE topic metadata.
+#
+# Image contract (bitnami/kafka:3.7.0): the rendered server.properties is
+# mounted as the image's $KAFKA_CONF_FILE (/opt/bitnami/kafka/config/
+# server.properties). When that file exists the entrypoint (setup.sh) skips
+# its env-driven validation and config generation, so KAFKA_CFG_* variables
+# are NOT used here; it only formats the KRaft storage (kafka-storage.sh
+# format --ignore-formatted, a no-op on a formatted volume) with the cluster
+# ID from meta.properties or, on first boot, KAFKA_KRAFT_CLUSTER_ID. A new
+# image tag means re-checking that contract.
+#
+# Per-environment prerequisite — Secret kafka-kraft-cluster-id (namespace
+# mw-mq, key cluster-id, never in Git): the ONE cluster ID every broker
+# formats with. Without it each broker would invent its own and never join
+# the quorum, so the pods refuse to start instead. Create it once per cluster:
+#   kubectl -n mw-mq run kafka-uuid --rm -it --restart=Never \
+#     --image=bitnami/kafka:3.7.0 --command -- \
+#     /opt/bitnami/kafka/bin/kafka-storage.sh random-uuid     # prints the ID
+#   kubectl -n mw-mq create secret generic kafka-kraft-cluster-id \
+#     --from-literal=cluster-id=<that ID>
+# and never change it: formatted brokers keep their ID (init-config refuses
+# to start on a mismatch), while a fresh volume would take the new one and
+# split the cluster.
+#
 # Topic names MUST NOT carry env identifiers (C2/S8); env isolation is by
 # cluster. That policy lives in pkg-go/event (the topic constants); this
 # manifest only carries the broker topology.
@@ -32,9 +70,53 @@ data:
     # container below (they must differ per pod; KRaft has no ZooKeeper to
     # hand them out). The init container derives node.id from the pod ordinal.
     controller.quorum.voters=1@kafka-0.kafka-headless.mw-mq:9093,2@kafka-1.kafka-headless.mw-mq:9093,3@kafka-2.kafka-headless.mw-mq:9093
-    listeners=PLAINTEXT://:9092,CONTROLLER://:9093
-    listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-    inter.broker.listener.name=PLAINTEXT
+    # Listeners: see the header. advertised.listeners differs per pod and is
+    # appended by the init container below.
+    listeners=CLIENT://:9092,INTERNAL://:9095,CONTROLLER://:9093
+    listener.security.protocol.map=CLIENT:SASL_SSL,INTERNAL:SSL,CONTROLLER:SSL
+    inter.broker.listener.name=INTERNAL
+    controller.listener.names=CONTROLLER
+    # TLS material: the cert-manager Secrets mounted by the StatefulSet, read
+    # as PEM (tls-combined.pem = PKCS#8 key + chain, ca.crt = issuing root).
+    ssl.keystore.type=PEM
+    ssl.truststore.type=PEM
+    # Brokers verify the peer's name when they dial INTERNAL / CONTROLLER (the
+    # Kafka default, stated so it is never relaxed by accident).
+    ssl.endpoint.identification.algorithm=https
+    # CLIENT: platform-CA server certificate. No client certificate (the
+    # SASL_SSL default) — SCRAM authenticates the client.
+    listener.name.client.ssl.keystore.location=/etc/kafka/tls/client/tls-combined.pem
+    # INTERNAL / CONTROLLER: mutual TLS under kafka-internal-ca. A broker uses
+    # the same keystore and truststore when it dials these listeners itself.
+    listener.name.internal.ssl.keystore.location=/etc/kafka/tls/internal/tls-combined.pem
+    listener.name.internal.ssl.truststore.location=/etc/kafka/tls/internal/ca.crt
+    listener.name.internal.ssl.client.auth=required
+    listener.name.controller.ssl.keystore.location=/etc/kafka/tls/internal/tls-combined.pem
+    listener.name.controller.ssl.truststore.location=/etc/kafka/tls/internal/ca.crt
+    listener.name.controller.ssl.client.auth=required
+    # SCRAM-SHA-512 on CLIENT. Credentials live in the KRaft metadata log
+    # (written by the kafka-scram-users Job); the broker's login module holds
+    # none, as inter-broker traffic does not use SASL.
+    sasl.enabled.mechanisms=SCRAM-SHA-512
+    listener.name.client.scram-sha-512.sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required;
+    # Authorization: deny unless an ACL allows (ACLs live in the metadata log;
+    # the kafka-scram-users Job writes them). The principal is the SCRAM user
+    # on CLIENT (User:apisix-audit) and the client certificate's full subject
+    # DN on INTERNAL / CONTROLLER (DEFAULT mapping, stated so it is never
+    # changed by accident). Super users: the brokers (kafka-internal-tls,
+    # CN=kafka-broker — replication and quorum requests) and the admin Job
+    # (kafka-admin-tls, CN=kafka-admin), both issued by kafka-internal-ca only.
+    # No SCRAM user can take these names: a SCRAM user is a Secret key, and a
+    # Secret key cannot contain '='.
+    authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer
+    allow.everyone.if.no.acl.found=false
+    ssl.principal.mapping.rules=DEFAULT
+    super.users=User:CN=kafka-broker;User:CN=kafka-admin
+    # Data and KRaft metadata on the PVC (volumeClaimTemplates "data", mounted
+    # at /bitnami/kafka). A subdirectory rather than the volume root: a fresh
+    # ext4 root holds lost+found, which Kafka refuses as a log dir. It is also
+    # the image's KAFKA_DATA_DIR, where the entrypoint looks for meta.properties.
+    log.dirs=/bitnami/kafka/data
     # min.insync.replicas=2 + replication.factor=3 = tolerate one broker (one
     # AZ) down and still ack writes. This is the P2 AZ-loss contract in Kafka
     # terms (00§4.4 point 3): a client tolerates one AZ gone.
@@ -91,12 +173,40 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: kafka
+      # The image runs as UID 1001; fsGroup makes the fresh PVC writable for
+      # it (OnRootMismatch: no recursive chown of 1Ti on every start).
+      securityContext:
+        runAsUser: 1001
+        runAsNonRoot: true
+        fsGroup: 1001
+        fsGroupChangePolicy: OnRootMismatch
       initContainers:
-        - name: init-node-id
+        - name: init-config
           image: busybox:1.36
           command: ["/bin/sh", "-c"]
           args:
             - |
+              set -eu
+              # Shared KRaft cluster ID (Secret kafka-kraft-cluster-id, see the
+              # header). An empty or malformed value would make the entrypoint
+              # generate a random ID for this pod alone (or fail its argument
+              # parsing), so refuse to start instead. Kafka cluster IDs are
+              # 22 base64url characters and never start with '-'.
+              if ! printf '%s' "$KAFKA_KRAFT_CLUSTER_ID" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_-]{21}$'; then
+                echo "Secret kafka-kraft-cluster-id/cluster-id is not a Kafka cluster ID (kafka-storage.sh random-uuid)" >&2
+                exit 1
+              fi
+              # A formatted volume must belong to this cluster: a changed
+              # Secret would otherwise only show once a new volume formats
+              # with the new ID and its broker cannot join.
+              META=/bitnami/kafka/data/meta.properties
+              if [ -f "$META" ]; then
+                FORMATTED="$(sed -n 's/^cluster\.id=//p' "$META")"
+                if [ "$FORMATTED" != "$KAFKA_KRAFT_CLUSTER_ID" ]; then
+                  echo "$META has cluster.id=${FORMATTED}, Secret kafka-kraft-cluster-id has ${KAFKA_KRAFT_CLUSTER_ID}" >&2
+                  exit 1
+                fi
+              fi
               # node.id = ordinal + 1 (KRaft node ids are 1-based). Derive
               # from the hostname suffix so each pod gets a unique id without
               # a sidecar or a per-pod StatefulSet slice.
@@ -107,11 +217,23 @@ spec:
               ORDINAL=${HOSTNAME##*-}
               NODE_ID=$((ORDINAL + 1))
               echo "node.id=${NODE_ID}" >> /config/server.properties
+              # Advertise the pod's stable headless-Service name: it is the
+              # name kafka-tls / kafka-internal-tls carry, so clients and
+              # peer brokers pass TLS hostname verification.
+              ADV_HOST="${HOSTNAME}.kafka-headless.mw-mq.svc"
+              echo "advertised.listeners=CLIENT://${ADV_HOST}:9092,INTERNAL://${ADV_HOST}:9095" >> /config/server.properties
+          env:
+            - name: KAFKA_KRAFT_CLUSTER_ID
+              valueFrom:
+                secretKeyRef: { name: kafka-kraft-cluster-id, key: cluster-id }
           volumeMounts:
             - name: config-template
               mountPath: /etc/kafka
             - name: config
               mountPath: /config
+            - name: data
+              mountPath: /bitnami/kafka
+              readOnly: true
       containers:
         - name: kafka
           image: bitnami/kafka:3.7.0
@@ -122,16 +244,30 @@ spec:
               name: controller
             - containerPort: 9094
               name: metrics
+            - containerPort: 9095
+              name: internal
           env:
-            - name: KAFKA_CFG_PROCESS_ROLES
-              value: "broker,controller"
-            - name: ALLOW_PLAINTEXT_LISTENER
-              value: "yes"
+            # Used by the entrypoint only to format a volume that has no
+            # meta.properties yet (see the header).
+            - name: KAFKA_KRAFT_CLUSTER_ID
+              valueFrom:
+                secretKeyRef: { name: kafka-kraft-cluster-id, key: cluster-id }
           volumeMounts:
+            # Only the rendered file: mounting the whole emptyDir over
+            # /opt/bitnami/kafka/config hid the image's log4j.properties and
+            # the rest of its config dir.
             - name: config
-              mountPath: /opt/bitnami/kafka/config
+              mountPath: /opt/bitnami/kafka/config/server.properties
+              subPath: server.properties
+            # Volume root; Kafka's log.dirs is the data/ subdirectory.
             - name: data
-              mountPath: /bitnami/kafka/data
+              mountPath: /bitnami/kafka
+            - name: tls-client
+              mountPath: /etc/kafka/tls/client
+              readOnly: true
+            - name: tls-internal
+              mountPath: /etc/kafka/tls/internal
+              readOnly: true
           resources:
             # 8C16G (09§3.4). Metering/audit throughput is bursty; requests
             # set to keep a broker from being starved during backfill.
@@ -152,6 +288,19 @@ spec:
             name: kafka-kraft-config
         - name: config
           emptyDir: {}
+        # Whole-Secret mounts (no subPath), so a renewed certificate lands in
+        # place; Kafka picks it up on the next broker restart (tls.yaml).
+        - name: tls-client
+          secret:
+            secretName: kafka-tls
+            items:
+              - { key: tls-combined.pem, path: tls-combined.pem }
+        - name: tls-internal
+          secret:
+            secretName: kafka-internal-tls
+            items:
+              - { key: tls-combined.pem, path: tls-combined.pem }
+              - { key: ca.crt, path: ca.crt }
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -189,6 +338,8 @@ spec:
       name: client
     - port: 9093
       name: controller
+    - port: 9095
+      name: internal
 ---
 apiVersion: v1
 kind: Service
@@ -201,3 +352,139 @@ spec:
   ports:
     - port: 9092
       name: client
+---
+# SCRAM credentials, topics and ACLs for the CLIENT listener (:9092 SASL_SSL).
+#
+# KRaft keeps SCRAM credentials and ACLs in the metadata log, so they are
+# written through the cluster itself: this Job logs in on the INTERNAL
+# listener with the kafka-admin-tls client certificate (mTLS — the one
+# non-broker identity kafka-internal-ca issues, a super user) and
+#   1. upserts every user in the kafka-scram-users Secret;
+#   2. creates the audit topic cloud.sys.audit.action (auto-create is off):
+#      16 partitions keyed by account_id, 90 days (04§5.4), replication 3,
+#      min.insync.replicas 2 — re-asserting the two configs on every run but
+#      never touching the partition count of an existing topic (that would
+#      remap account_id keys and break per-tenant ordering);
+#   3. grants apisix-audit WRITE + DESCRIBE on that topic and nothing else.
+#      The topic is the eu-audit plugin's default (routes set no other) and
+#      pkg-go/event SysAuditAction; a new SCRAM user has no access at all
+#      until its ACLs are added here;
+#   4. if the Secret holds a kafka-ops user (optional; the operators' login
+#      in tools/*-failover-drill.md), grants it DESCRIBE + DESCRIBE_CONFIGS
+#      on all topics: metadata only, it cannot read or write records.
+# It runs on every Argo CD sync and every step is idempotent, so a password
+# rotation is: update the Secret, sync, then update the client's copy.
+#
+# kafka-scram-users (namespace mw-mq, created per environment, never in Git):
+# one key per SCRAM user, value = that user's password. The gateway's audit
+# producer is user apisix-audit (routes/*.yaml eu-audit sasl.user); its
+# password is ALSO stored in mw-gateway/kafka-apisix-audit (key password).
+# Optional key kafka-ops: the operators' read-only login (step 4).
+# Passwords must not contain , = [ or ] (kafka-configs' SCRAM syntax);
+# `openssl rand -hex 32` is a safe generator. Removing a key here does NOT
+# delete the user or its ACLs: kafka-configs --alter --delete-config
+# SCRAM-SHA-512 and kafka-acls --remove do.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-scram-users
+  namespace: mw-mq
+  annotations:
+    # After the brokers (-5), before the gateway (0) that logs in with these.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  backoffLimit: 10                        # brokers may still be forming the quorum
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-scram-users
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        cloud.platform/pool: services
+      containers:
+        - name: kafka-configs
+          image: bitnami/kafka:3.7.0      # same build as the brokers
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              shopt -s nullglob
+              cat > /tmp/admin.properties <<'PROPS'
+              security.protocol=SSL
+              ssl.keystore.type=PEM
+              ssl.keystore.location=/etc/kafka/admin-tls/tls-combined.pem
+              ssl.truststore.type=PEM
+              ssl.truststore.location=/etc/kafka/admin-tls/ca.crt
+              PROPS
+              BOOTSTRAP=kafka-0.kafka-headless.mw-mq.svc:9095,kafka-1.kafka-headless.mw-mq.svc:9095,kafka-2.kafka-headless.mw-mq.svc:9095
+              n=0
+              for f in /etc/kafka/scram-users/*; do
+                user="$(basename "$f")"
+                pass="$(cat "$f")"
+                case "$pass" in
+                  "" | *[],=[]*)
+                    echo "kafka-scram-users/${user}: password is empty or contains , = [ ]" >&2
+                    exit 1 ;;
+                esac
+                /opt/bitnami/kafka/bin/kafka-configs.sh --bootstrap-server "$BOOTSTRAP" \
+                  --command-config /tmp/admin.properties --alter \
+                  --entity-type users --entity-name "$user" \
+                  --add-config "SCRAM-SHA-512=[iterations=8192,password=${pass}]"
+                n=$((n + 1))
+              done
+              if [ "$n" -eq 0 ]; then
+                echo "kafka-scram-users holds no users" >&2
+                exit 1
+              fi
+              echo "upserted ${n} SCRAM-SHA-512 user(s)"
+              BIN=/opt/bitnami/kafka/bin
+              AUDIT_TOPIC=cloud.sys.audit.action
+              AUDIT_CONFIGS=min.insync.replicas=2,retention.ms=7776000000   # 90 days
+              # Configs are set by the alter right after, on new and existing
+              # topics alike.
+              "$BIN/kafka-topics.sh" --bootstrap-server "$BOOTSTRAP" \
+                --command-config /tmp/admin.properties \
+                --create --if-not-exists --topic "$AUDIT_TOPIC" \
+                --partitions 16 --replication-factor 3
+              "$BIN/kafka-configs.sh" --bootstrap-server "$BOOTSTRAP" \
+                --command-config /tmp/admin.properties --alter \
+                --entity-type topics --entity-name "$AUDIT_TOPIC" \
+                --add-config "$AUDIT_CONFIGS"
+              # Adding an ACL that already exists is a no-op.
+              "$BIN/kafka-acls.sh" --bootstrap-server "$BOOTSTRAP" \
+                --command-config /tmp/admin.properties --add \
+                --allow-principal User:apisix-audit \
+                --operation Write --operation Describe \
+                --topic "$AUDIT_TOPIC" --resource-pattern-type literal
+              echo "topic ${AUDIT_TOPIC} and its ACLs in place"
+              if [ -f /etc/kafka/scram-users/kafka-ops ]; then
+                "$BIN/kafka-acls.sh" --bootstrap-server "$BOOTSTRAP" \
+                  --command-config /tmp/admin.properties --add \
+                  --allow-principal User:kafka-ops \
+                  --operation Describe --operation DescribeConfigs \
+                  --topic '*' --resource-pattern-type literal
+                echo "kafka-ops: read-only topic metadata ACLs in place"
+              fi
+          volumeMounts:
+            - name: admin-tls
+              mountPath: /etc/kafka/admin-tls
+              readOnly: true
+            - name: scram-users
+              mountPath: /etc/kafka/scram-users
+              readOnly: true
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1", memory: 512Mi }
+      volumes:
+        - name: admin-tls
+          secret:
+            secretName: kafka-admin-tls
+            items:
+              - { key: tls-combined.pem, path: tls-combined.pem }
+              - { key: ca.crt, path: ca.crt }
+        - name: scram-users
+          secret:
+            secretName: kafka-scram-users

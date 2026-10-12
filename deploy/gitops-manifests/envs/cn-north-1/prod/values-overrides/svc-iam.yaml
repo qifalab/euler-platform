@@ -6,3 +6,17 @@ replicas: 3
 # losing one AZ does not take the service down.
 topology:
   zoneSpread: true
+
+# Production mode: services refuse to start without their secrets
+# (pkg-go/runmode; README「生产必需配置」) and never seed demo data. web-auth
+# now persists to account_db: EULER_DB_DSN, EULER_KMS_MASTER_KEY and
+# EULER_IDENTITY_PEPPER are required (Secret euler-platform-secrets);
+# EULER_SVC_NOTIFY_URL comes from the chart default.
+extraEnv:
+  EULER_ENV: prod
+  # Refresh cookie scope for account→console SSO (web-auth
+  # EULER_COOKIE_DOMAIN; unset = host-only).
+  EULER_COOKIE_DOMAIN: ".euler.emoera.com"
+  # Registration needs the code mailed by POST /api/auth/register/send-code
+  # (web-auth register.go; unset = the code is optional).
+  EULER_REGISTER_REQUIRE_EMAIL_CODE: "1"

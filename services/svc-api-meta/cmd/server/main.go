@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/httpmw"
+	"github.com/qifalab/euler-platform/runmode"
 )
 
 func main() {
@@ -40,6 +41,9 @@ func main() {
 		httpAddr = flag.String("http", ":9201", "HTTP listen address")
 	)
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -53,7 +57,11 @@ func main() {
 	// validate against: in-memory metadata would forget the surface between
 	// restarts, so where it lives is worth a log line.
 	slog.Info("svc-api-meta action repo ready", "persistent", persistentActionRepo(repo))
-	store := newMetaStoreWith(repo)
+	store, err := newMetaStoreFor(repo)
+	if err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
 	registry := newRegistryStore()
 
 	mux := http.NewServeMux()
@@ -131,4 +139,9 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	// TODO(scaffold): expose RED metrics via prometheus/client_golang.
 	// FORBIDDEN as labels: account_id, resource_id (high cardinality — 05§7.2).
 	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

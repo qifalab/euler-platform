@@ -56,11 +56,18 @@ type tag struct {
 type orgStore interface {
 	// CreateProject takes a pointer because the store owns the project id: the
 	// schema's key is a 号段-issued BIGINT (04§6.6), so the persistent store
-	// assigns one and the caller must see it. The in-memory store keeps whatever
-	// id the caller supplied.
+	// assigns one and the caller must see it; the in-memory store assigns a
+	// UUID. A caller-supplied id is never used — project_id is the table's
+	// global primary key, so honouring it let one tenant squat ids another
+	// tenant's creates would need. Names are unique per account
+	// (errProjectExists); the parent must be a project of the same account
+	// (errInvalidParent).
 	CreateProject(p *project) error
 	GetProject(accountID, projectID string) (project, error)
 	ListProjects(accountID string) ([]project, error)
+	// UpdateProject renames and/or reparents. A rename onto another project's
+	// name is errProjectExists; a parent that is missing, another account's,
+	// the project itself or one of its descendants is errInvalidParent.
 	UpdateProject(accountID, projectID string, name *string, parentID *string) error
 
 	MoveResource(accountID, resourceID, fromProjectID, toProjectID string) error
@@ -97,18 +104,77 @@ var (
 	errProjectNotFound = errors.New("org: project not found")
 	errTagNotFound     = errors.New("org: tag not found")
 	errProjectExists   = errors.New("org: project already exists")
+	// errInvalidParent: parent_id is not a project of the caller's account, is
+	// the project itself, or would close a cycle in the tree.
+	errInvalidParent = errors.New("org: invalid parent project")
+	// errResourceNotFound: the resource is not one the caller's account can
+	// see (its membership row belongs to another account).
+	errResourceNotFound = errors.New("org: resource not found")
+	// errResourceConflict: the move's from-project is not where the resource is.
+	errResourceConflict = errors.New("org: resource move conflict")
 )
+
+// maxProjectDepth bounds the ancestor walk that validates a parent link: the
+// schema keeps the tree shallow (no arbitrary-depth cross-shard JOINs), and a
+// bound keeps a corrupted chain from looping forever.
+const maxProjectDepth = 32
 
 // --- memStore: projects ------------------------------------------------------
 
 func (s *memStore) CreateProject(p *project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.projects[projKey(p.AccountID, p.ProjectID)]; ok {
+	if s.nameTakenLocked(p.AccountID, p.Name, "") {
 		return errProjectExists
 	}
+	id := uuid.NewString()
+	if err := s.checkParentLocked(p.AccountID, id, p.ParentID); err != nil {
+		return err
+	}
+	p.ProjectID = id
 	s.projects[projKey(p.AccountID, p.ProjectID)] = *p
 	return nil
+}
+
+// nameTakenLocked is the in-memory uk_acc_name: is name used by another of the
+// account's projects (other than except)?
+func (s *memStore) nameTakenLocked(accountID, name, except string) bool {
+	for _, q := range s.projects {
+		if q.AccountID == accountID && q.Name == name && q.ProjectID != except {
+			return true
+		}
+	}
+	return false
+}
+
+// checkParentLocked validates parentID as the parent of projectID: it must be
+// a project of the same account, not the project itself, and not one of its
+// descendants (walking up from the parent must not reach projectID).
+func (s *memStore) checkParentLocked(accountID, projectID, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	if parentID == projectID {
+		return fmt.Errorf("%w: a project cannot be its own parent", errInvalidParent)
+	}
+	cur := parentID
+	for depth := 0; depth < maxProjectDepth; depth++ {
+		p, ok := s.projects[projKey(accountID, cur)]
+		if !ok {
+			if depth == 0 {
+				return fmt.Errorf("%w: parent project not found", errInvalidParent)
+			}
+			return nil
+		}
+		if p.ParentID == "" {
+			return nil
+		}
+		if p.ParentID == projectID {
+			return fmt.Errorf("%w: the parent is a descendant of this project", errInvalidParent)
+		}
+		cur = p.ParentID
+	}
+	return fmt.Errorf("%w: project tree is deeper than %d levels", errInvalidParent, maxProjectDepth)
 }
 
 func (s *memStore) GetProject(accountID, projectID string) (project, error) {
@@ -143,9 +209,15 @@ func (s *memStore) UpdateProject(accountID, projectID string, name *string, pare
 		return errProjectNotFound
 	}
 	if name != nil {
+		if s.nameTakenLocked(accountID, *name, projectID) {
+			return errProjectExists
+		}
 		p.Name = *name
 	}
 	if parentID != nil {
+		if err := s.checkParentLocked(accountID, projectID, *parentID); err != nil {
+			return err
+		}
 		p.ParentID = *parentID
 	}
 	s.projects[key] = p
@@ -175,7 +247,7 @@ func (s *memStore) MoveResource(accountID, resourceID, fromProjectID, toProjectI
 		return nil
 	}
 	if current != fromProjectID {
-		return fmt.Errorf("org: resource %s is in project %s, not %s", resourceID, current, fromProjectID)
+		return fmt.Errorf("%w: resource %s is in project %s, not %s", errResourceConflict, resourceID, current, fromProjectID)
 	}
 	s.resources[key] = toProjectID
 	return nil
@@ -265,6 +337,31 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]string{"Code": code, "Message": msg})
 }
 
+// writeStoreErr maps a store error onto the API. Only the sentinels are the
+// caller's errors; anything else is a storage failure whose text (driver
+// messages, internal ids) is logged, never returned.
+func writeStoreErr(w http.ResponseWriter, op string, err error) {
+	switch {
+	case errors.Is(err, errProjectNotFound):
+		writeErr(w, http.StatusNotFound, "Project.NotFound", "project not found")
+	case errors.Is(err, errProjectExists):
+		writeErr(w, http.StatusConflict, "Project.AlreadyExists", "a project with this name already exists")
+	case errors.Is(err, errInvalidAccount):
+		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "account id must be numeric")
+	case errors.Is(err, errInvalidParent):
+		writeErr(w, http.StatusBadRequest, "Project.InvalidParent", err.Error())
+	case errors.Is(err, errResourceNotFound):
+		writeErr(w, http.StatusNotFound, "Resource.NotFound", "resource not found")
+	case errors.Is(err, errResourceConflict):
+		writeErr(w, http.StatusConflict, "Resource.MoveConflict", err.Error())
+	case errors.Is(err, errTagNotFound):
+		writeErr(w, http.StatusNotFound, "Tag.NotFound", "tag not found")
+	default:
+		slog.Error("org store failure", "op", op, "err", err)
+		writeErr(w, http.StatusInternalServerError, "Common.InternalError", "internal error")
+	}
+}
+
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
@@ -279,6 +376,8 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 // --- Projects ----------------------------------------------------------------
 
 type createProjectReq struct {
+	// ProjectID is accepted for compatibility and ignored: ids are always
+	// issued by the store (see orgStore.CreateProject).
 	ProjectID string `json:"project_id"`
 	Name      string `json:"name"`
 	ParentID  string `json:"parent_id"`
@@ -307,20 +406,9 @@ func (s *orgService) handleProjects(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "name is required")
 			return
 		}
-		pid := req.ProjectID
-		if pid == "" {
-			pid = uuid.NewString()
-		}
-		p := project{ProjectID: pid, AccountID: acct, Name: req.Name, ParentID: req.ParentID}
+		p := project{AccountID: acct, Name: req.Name, ParentID: req.ParentID}
 		if err := s.store.CreateProject(&p); err != nil {
-			// A malformed account/parent id is the caller's error, not a
-			// conflict; everything else on this path is the name-uniqueness
-			// refusal the DDL's uk_acc_name encodes.
-			if errors.Is(err, errInvalidAccount) {
-				writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", err.Error())
-				return
-			}
-			writeErr(w, http.StatusConflict, "Project.AlreadyExists", err.Error())
+			writeStoreErr(w, "create project", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, p)
@@ -328,7 +416,7 @@ func (s *orgService) handleProjects(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		projects, err := s.store.ListProjects(acct)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "Common.InternalError", err.Error())
+			writeStoreErr(w, "list projects", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
@@ -363,15 +451,19 @@ func (s *orgService) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "nothing to update")
 			return
 		}
-		if err := s.store.UpdateProject(acct, id, req.Name, req.ParentID); err != nil {
-			if errors.Is(err, errProjectNotFound) {
-				writeErr(w, http.StatusNotFound, "Project.NotFound", err.Error())
-				return
-			}
-			writeErr(w, http.StatusInternalServerError, "Common.InternalError", err.Error())
+		if req.Name != nil && *req.Name == "" {
+			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "name must not be empty")
 			return
 		}
-		p, _ := s.store.GetProject(acct, id)
+		if err := s.store.UpdateProject(acct, id, req.Name, req.ParentID); err != nil {
+			writeStoreErr(w, "update project", err)
+			return
+		}
+		p, err := s.store.GetProject(acct, id)
+		if err != nil {
+			writeStoreErr(w, "get project", err)
+			return
+		}
 		writeJSON(w, http.StatusOK, p)
 
 	default:
@@ -423,12 +515,7 @@ func (s *orgService) handleResourceMove(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := s.store.MoveResource(acct, req.ResourceID, req.FromProjectID, to); err != nil {
-		switch {
-		case errors.Is(err, errProjectNotFound):
-			writeErr(w, http.StatusNotFound, "Project.NotFound", err.Error())
-		default:
-			writeErr(w, http.StatusConflict, "Resource.MoveConflict", err.Error())
-		}
+		writeStoreErr(w, "move resource", err)
 		return
 	}
 
@@ -478,7 +565,7 @@ func (s *orgService) handleTags(w http.ResponseWriter, r *http.Request) {
 		}
 		t := tag{AccountID: acct, Key: req.Key, Value: req.Value}
 		if err := s.store.PutTag(t); err != nil {
-			writeErr(w, http.StatusInternalServerError, "Common.InternalError", err.Error())
+			writeStoreErr(w, "put tag", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, t)
@@ -486,7 +573,7 @@ func (s *orgService) handleTags(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		tags, err := s.store.ListTags(acct)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "Common.InternalError", err.Error())
+			writeStoreErr(w, "list tags", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tags": tags})
@@ -505,11 +592,7 @@ func (s *orgService) handleTags(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.DeleteTag(acct, key); err != nil {
-			if errors.Is(err, errTagNotFound) {
-				writeErr(w, http.StatusNotFound, "Tag.NotFound", err.Error())
-				return
-			}
-			writeErr(w, http.StatusInternalServerError, "Common.InternalError", err.Error())
+			writeStoreErr(w, "delete tag", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"deleted": key})

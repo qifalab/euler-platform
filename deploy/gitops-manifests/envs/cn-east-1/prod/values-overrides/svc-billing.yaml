@@ -9,3 +9,8 @@ image:
 replicas: 0   # cold standby
 topology:
   zoneSpread: false   # single-AZ remote site
+
+# Production mode: services refuse to start without their secrets
+# (pkg-go/runmode; README「生产必需配置」) and never seed demo data.
+extraEnv:
+  EULER_ENV: prod

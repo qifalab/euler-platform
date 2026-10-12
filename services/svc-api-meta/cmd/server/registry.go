@@ -19,16 +19,16 @@ import (
 
 // RegistryApp mirrors the JSON the console shell expects (02§4.1 API example).
 type RegistryApp struct {
-	AppCode      string         `json:"appCode"`
-	AppTitle     string         `json:"appTitle"`
-	ProductCodes []string       `json:"productCodes"`
-	ActiveRules  []string       `json:"activeRules"`
-	EntryURL     string         `json:"entryUrl"`
-	Version      string         `json:"version"`
-	KeepAlive    bool           `json:"keepAlive"`
-	Preload      bool           `json:"preload"`
-	Status       string         `json:"status"`
-	Gray         *RegistryGray  `json:"gray,omitempty"`
+	AppCode      string        `json:"appCode"`
+	AppTitle     string        `json:"appTitle"`
+	ProductCodes []string      `json:"productCodes"`
+	ActiveRules  []string      `json:"activeRules"`
+	EntryURL     string        `json:"entryUrl"`
+	Version      string        `json:"version"`
+	KeepAlive    bool          `json:"keepAlive"`
+	Preload      bool          `json:"preload"`
+	Status       string        `json:"status"`
+	Gray         *RegistryGray `json:"gray,omitempty"`
 }
 
 type RegistryGray struct {
@@ -39,9 +39,9 @@ type RegistryGray struct {
 
 // Registry is the full response: { apps, revision, ttl }.
 type Registry struct {
-	Apps    []RegistryApp `json:"apps"`
-	Revision int          `json:"revision"`
-	TTL      int          `json:"ttl"`
+	Apps     []RegistryApp `json:"apps"`
+	Revision int           `json:"revision"`
+	TTL      int           `json:"ttl"`
 }
 
 // registryStore is the in-memory registry (MySQL + Nacos in production).
@@ -57,12 +57,24 @@ func newRegistryStore() *registryStore {
 // seedRegistry returns the canonical phase-1 sub-app set. EntryURLs point at
 // the dev servers; production swaps these for versioned static-domain entries
 // (https://static.euler.emoera.com/apps/{app}/{ver}/index.html).
+//
+// The set must cover every sub-app the console shell's built-in fallback
+// (console-base/src/registry.ts) lists: the shell prefers this registry when it
+// answers, so an app missing here is a 404 in the console even though the
+// fallback knows it.
 func seedRegistry() Registry {
 	return Registry{
-		Revision: 2,
+		Revision: 3,
 		TTL:      300,
 		Apps: []RegistryApp{
 			{AppCode: "console-ecs", AppTitle: "云服务器 ECS", ProductCodes: []string{"euecs"}, ActiveRules: []string{"/euecs"}, EntryURL: "http://localhost:5174/", Version: "0.1.0", KeepAlive: true, Preload: true, Status: "online"},
+			{AppCode: "console-eci", AppTitle: "弹性容器实例 ECI", ProductCodes: []string{"eueci"}, ActiveRules: []string{"/eueci"}, EntryURL: "http://localhost:5183/", Version: "0.1.0", KeepAlive: true, Preload: false, Status: "online"},
+			{AppCode: "console-lb", AppTitle: "负载均衡 SLB", ProductCodes: []string{"eulb"}, ActiveRules: []string{"/eulb"}, EntryURL: "http://localhost:5184/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-autoscaling", AppTitle: "弹性伸缩 AS", ProductCodes: []string{"euas"}, ActiveRules: []string{"/euas"}, EntryURL: "http://localhost:5185/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-backup", AppTitle: "云备份", ProductCodes: []string{"eubackup"}, ActiveRules: []string{"/eubackup"}, EntryURL: "http://localhost:5186/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-redis", AppTitle: "云数据库 Redis", ProductCodes: []string{"euredis"}, ActiveRules: []string{"/euredis"}, EntryURL: "http://localhost:5187/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-kafka", AppTitle: "消息队列 Kafka", ProductCodes: []string{"eukafka"}, ActiveRules: []string{"/eukafka"}, EntryURL: "http://localhost:5188/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
+			{AppCode: "console-logservice", AppTitle: "日志服务", ProductCodes: []string{"eulog"}, ActiveRules: []string{"/eulog"}, EntryURL: "http://localhost:5189/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 			{AppCode: "console-storage", AppTitle: "对象存储 OSS", ProductCodes: []string{"euoss"}, ActiveRules: []string{"/euoss"}, EntryURL: "http://localhost:5176/", Version: "0.1.0", KeepAlive: true, Preload: false, Status: "online"},
 			{AppCode: "console-network", AppTitle: "专有网络 VPC", ProductCodes: []string{"euvpc", "eueip"}, ActiveRules: []string{"/euvpc", "/eueip"}, EntryURL: "http://localhost:5177/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},
 			{AppCode: "console-database", AppTitle: "云数据库 RDS", ProductCodes: []string{"eurds"}, ActiveRules: []string{"/eurds"}, EntryURL: "http://localhost:5178/", Version: "0.1.0", KeepAlive: false, Preload: false, Status: "online"},

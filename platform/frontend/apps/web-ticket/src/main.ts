@@ -6,7 +6,7 @@ import "@eu/tokens/style.css";
 import "@eu/ui/style.css";
 import App from "./App.vue";
 import { router } from "./router";
-import { inWujieSandbox } from "@eu/wujie-bridge";
+import { bootstrapSubApp } from "@eu/wujie-bridge";
 
 let app: VueApp | null = null;
 async function mount(el?: HTMLElement | string) {
@@ -15,4 +15,6 @@ async function mount(el?: HTMLElement | string) {
   app = createApp(App); app.use(router); app.use(ElementPlus); app.mount(root);
 }
 export async function unmount() { if (app) { app.unmount(); app = null; } }
-if (!inWujieSandbox()) { document.addEventListener("DOMContentLoaded", () => void mount()); }
+// Wujie drives mount/unmount via __WUJIE_MOUNT/__WUJIE_UNMOUNT; standalone
+// self-mounts once the DOM is ready.
+bootstrapSubApp(() => mount(), unmount);

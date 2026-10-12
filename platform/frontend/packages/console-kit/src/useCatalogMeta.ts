@@ -2,10 +2,13 @@
  * useCatalogMeta — catalogue-driven purchase metadata (02§7, M-6).
  * Regions / zones / images / placement come from svc-catalog so no client
  * hardcodes a region list: opening a new region is a catalogue row, not a
- * frontend release. These endpoints are anonymous-safe public metadata (dev
- * proxy / gateway injects identity, but the payload carries no tenant data).
+ * frontend release. The payload carries no tenant data, but the console
+ * gateway requires a JWT on /api/v1/catalog/*, so every call goes through an
+ * auth-wired @eu/sdk client (a bare fetch sent no Authorization and 401'd).
  */
 import { ref } from "vue";
+import { createSDK, type SDK } from "@eu/sdk";
+import { subAppAuthOptions } from "@eu/wujie-bridge";
 
 export interface CatalogZone {
   zoneId: string;
@@ -34,18 +37,38 @@ export interface CatalogPlacement {
 
 const CATALOG_BASE = "/api/v1/catalog";
 
-async function getJSON<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { "X-Requested-With": "XMLHttpRequest" } });
-  const body = (await res.json()) as { Code?: string; Message?: string; Data?: T };
-  if (!res.ok || (typeof body.Code === "string" && body.Code !== "OK")) {
-    throw new Error(body.Message || `目录服务请求失败 (${res.status})`);
-  }
-  return (body.Data ?? (body as T)) as T;
-}
+/** The part of an @eu/sdk client the catalogue calls need. */
+export type CatalogClient = Pick<SDK, "get">;
+
+let client: CatalogClient | null = null;
 
 // Module-level region cache: the top-bar selector and every BuyWizard in one
 // app share a single /regions round-trip; a failure clears it so a retry refetches.
 let regionsCache: Promise<CatalogRegion[]> | null = null;
+
+/**
+ * Inject the SDK the catalogue calls use. Sub-apps need not call this: the
+ * default client reads the shell's live token through the Wujie bridge
+ * (subAppAuthOptions). The shell itself is not inside the sandbox, so it must
+ * pass its own auth-store-wired SDK here before anything (RegionSelector)
+ * loads metadata. Passing null restores the default.
+ */
+export function setCatalogClient(sdk: CatalogClient | null): void {
+  client = sdk;
+  regionsCache = null;
+}
+
+function catalogClient(): CatalogClient {
+  if (!client) client = createSDK({ baseURL: "", ...subAppAuthOptions() });
+  return client;
+}
+
+async function getJSON<T>(path: string): Promise<T> {
+  // The SDK attaches the bearer token, replays once after a 401 refresh,
+  // unwraps the {Code, Data} envelope and throws on Code != OK.
+  const res = await catalogClient().get<T>(path);
+  return res.data;
+}
 
 export function fetchRegions(): Promise<CatalogRegion[]> {
   if (!regionsCache) {

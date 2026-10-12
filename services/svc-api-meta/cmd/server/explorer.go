@@ -41,9 +41,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/qifalab/euler-platform/cps1"
 	"github.com/qifalab/euler-platform/errors"
-	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/identifier"
 )
 
@@ -68,35 +68,35 @@ func serviceNamespace(productCode string) string {
 
 // explorerRequest is the POST /api/v1/apimeta/explorer body.
 type explorerRequest struct {
-	ProductCode string            `json:"product_code"`
-	ActionName  string            `json:"action_name"`
-	Method      string            `json:"method"`
-	Path        string            `json:"path"`
-	Query       map[string]string `json:"query"`
-	Headers     map[string]string `json:"headers"`
-	Body        string            `json:"body"`
-	AK          string            `json:"ak"`
-	SK          string            `json:"sk"`
-	SecurityToken string          `json:"security_token"`
-	Region      string            `json:"region"`
+	ProductCode   string            `json:"product_code"`
+	ActionName    string            `json:"action_name"`
+	Method        string            `json:"method"`
+	Path          string            `json:"path"`
+	Query         map[string]string `json:"query"`
+	Headers       map[string]string `json:"headers"`
+	Body          string            `json:"body"`
+	AK            string            `json:"ak"`
+	SK            string            `json:"sk"`
+	SecurityToken string            `json:"security_token"`
+	Region        string            `json:"region"`
 }
 
 // signatureMaterial is the signed output the Explorer renders so a user can see
 // exactly what would be sent on the wire. It mirrors cps1.SignedRequest plus the
 // canonical pieces a debugger needs.
 type signatureMaterial struct {
-	Method      string            `json:"method"`
-	Host        string            `json:"host"`
-	Path        string            `json:"path"`
-	Query       map[string]string `json:"query"`
-	Body        string            `json:"body"`
-	Region      string            `json:"region"`
-	Service     string            `json:"service"`
-	Date        string            `json:"date"` // x-cps-date value
-	Authorization string          `json:"authorization"`
-	SignedHeaders string          `json:"signed_headers"`
-	Signature     string          `json:"signature"`
-	Headers     map[string]string `json:"headers"` // all x-cps-* + host to attach
+	Method        string            `json:"method"`
+	Host          string            `json:"host"`
+	Path          string            `json:"path"`
+	Query         map[string]string `json:"query"`
+	Body          string            `json:"body"`
+	Region        string            `json:"region"`
+	Service       string            `json:"service"`
+	Date          string            `json:"date"` // x-cps-date value
+	Authorization string            `json:"authorization"`
+	SignedHeaders string            `json:"signed_headers"`
+	Signature     string            `json:"signature"`
+	Headers       map[string]string `json:"headers"` // all x-cps-* + host to attach
 }
 
 // upstreamResult is the optional proxied response when a target is configured.
@@ -110,8 +110,8 @@ type upstreamResult struct {
 // explorerResponse is the full Explorer payload.
 type explorerResponse struct {
 	Signature signatureMaterial `json:"signature"`
-	Executed  bool             `json:"executed"` // whether a live call was made
-	Upstream  *upstreamResult  `json:"upstream,omitempty"`
+	Executed  bool              `json:"executed"` // whether a live call was made
+	Upstream  *upstreamResult   `json:"upstream,omitempty"`
 }
 
 // handleExplorer signs (and optionally proxies) a product API call.
@@ -152,8 +152,29 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	if method == "" {
 		method = "GET"
 	}
+	if !allowedExplorerMethods[method] {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "unsupported method"))
+		return
+	}
 	if req.Path == "" {
 		req.Path = "/"
+	}
+	// The path is appended to the configured upstream. It must be a plain
+	// absolute path: "@evil:8080/x" used to turn the upstream base into a
+	// userinfo prefix and send the signed request (and the response back to
+	// the caller) to any host — SSRF into the cluster.
+	if !validExplorerPath(req.Path) {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "path must be an absolute path without authority, query or fragment"))
+		return
+	}
+	// req.Path is the escaped wire form ("/a%20b"). The gateway unescapes the
+	// path before verifying (svc-iam verify: url.PathUnescape), so the signature
+	// must cover the decoded path — signing the escaped text would make the
+	// canonical URI encode the '%' a second time.
+	signPath, err := url.PathUnescape(req.Path)
+	if err != nil {
+		writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest, "path contains an invalid percent-escape"))
+		return
 	}
 	if req.Region == "" {
 		req.Region = "cn-north-1"
@@ -166,9 +187,16 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	// the routing subdomain so a user cannot sign against a different host than
 	// the gateway routes (the host IS part of the canonical string — getting it
 	// wrong is the most common signing failure, so we own it here).
+	// Only protocol headers (x-cps-*) and content negotiation are taken from
+	// the caller. Anything else — X-Euler-Account-Id, X-Euler-Internal-Token,
+	// Host, hop-by-hop headers — would otherwise ride the live call into the
+	// upstream with the platform's network position.
 	hdrs := make(map[string]string, len(req.Headers)+3)
 	for k, v := range req.Headers {
-		hdrs[k] = v
+		lk := strings.ToLower(strings.TrimSpace(k))
+		if strings.HasPrefix(lk, cps1.HeaderPrefix) || lk == "content-type" || lk == "accept" {
+			hdrs[lk] = v
+		}
 	}
 	hdrs["host"] = host
 	hdrs[cps1.HeaderDate] = at.Format("20060102T150405Z")
@@ -185,7 +213,7 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	signed, err := cps1.Sign(cps1.Request{
 		Method:  method,
 		Host:    host,
-		Path:    req.Path,
+		Path:    signPath,
 		Query:   query,
 		Headers: hdrs,
 		Body:    []byte(req.Body),
@@ -220,21 +248,49 @@ func (s *actionStore) handleExplorer(w http.ResponseWriter, r *http.Request) {
 	target := explorerTarget(req.ProductCode)
 	if target != "" {
 		out.Executed = true
-		out.Upstream = executeSigned(r.Context(), target, method, req.Path, query, signed.Headers, []byte(req.Body))
+		out.Upstream = executeSigned(r.Context(), target, method, req.Path, query, signed, []byte(req.Body))
 	}
 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// explorerNonce returns a stable nonce per request id, so the same Explorer call
-// produces the same signature (useful for diffing). cps1.Sign requires a nonce
-// be present; we derive one rather than generate random bytes so the output is
-// reproducible in a debug session.
-func explorerNonce(r *http.Request) string {
-	if rid := httpmw.RequestIDFromContext(r.Context()); rid != "" {
-		return "explorer-" + rid
+// explorerNonce returns a fresh random nonce. It used to be derived from the
+// (client-influenced) request id; a nonce is an anti-replay value and must not
+// be predictable or caller-chosen.
+func explorerNonce(_ *http.Request) string {
+	return "explorer-" + uuid.NewString()
+}
+
+// allowedExplorerMethods are the verbs an OpenAPI Action is called with.
+var allowedExplorerMethods = map[string]bool{"GET": true, "POST": true, "PUT": true, "DELETE": true, "HEAD": true}
+
+// validExplorerPath accepts an absolute path made of RFC 3986 path characters
+// only — no scheme, authority ("//", "@"), backslash, query or fragment. A '%'
+// must start a well-formed escape ("%XX"): the path is the escaped wire form,
+// sent as typed and unescaped once by the gateway.
+func validExplorerPath(p string) bool {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || len(p) > 1024 {
+		return false
 	}
-	return "explorer-" + r.RemoteAddr
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '%':
+			if i+2 >= len(p) || !isHex(p[i+1]) || !isHex(p[i+2]) {
+				return false
+			}
+			i += 2
+		case strings.IndexByte("/-._~!$&'()*+,;=:", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 // explorerTarget resolves a per-product upstream base URL. Env override
@@ -251,7 +307,17 @@ func explorerTarget(productCode string) string {
 // explorerHTTPClient is the upstream client for live Explorer calls: a bounded
 // timeout so a hung upstream cannot pin an Explorer request indefinitely
 // (never http.DefaultClient, which has no timeout).
-var explorerHTTPClient = &http.Client{Timeout: 10 * time.Second}
+// Redirects are not followed: a 3xx from the upstream must not become a hop to
+// an arbitrary host carrying the signed headers.
+var explorerHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// maxExplorerResponse caps how much of the upstream body is echoed back.
+const maxExplorerResponse = 1 << 20
 
 // executeSigned performs the signed HTTP request against a configured target and
 // captures the response for display. A transport error becomes a structured
@@ -259,24 +325,55 @@ var explorerHTTPClient = &http.Client{Timeout: 10 * time.Second}
 // an unreachable upstream is exactly the kind of thing the Explorer exists to
 // surface without masking. The caller's request context bounds the call so a
 // disconnected client cancels the upstream fetch.
-func executeSigned(ctx context.Context, target, method, path string, query url.Values, headers map[string]string, body []byte) *upstreamResult {
-	u := strings.TrimRight(target, "/") + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
+//
+// The request carries exactly what was signed: the x-cps-* headers, the
+// Authorization header (cps1 returns it separately from Headers), and the
+// signed routing host as the Host header — the gateway routes and verifies by
+// Host, so dialing the target with the target's own host name would fail
+// verification even with a correct signature.
+func executeSigned(ctx context.Context, target, method, wirePath string, query url.Values, signed cps1.SignedRequest, body []byte) *upstreamResult {
+	// Build the URL structurally from the configured base so the caller's
+	// path can only ever extend the base path — never change scheme or host.
+	base, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		return &upstreamResult{Error: "explorer target is misconfigured"}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, strings.NewReader(string(body)))
+	decoded, err := url.PathUnescape(wirePath)
+	if err != nil {
+		return &upstreamResult{Error: "path contains an invalid percent-escape"}
+	}
+	u := *base
+	u.User = nil
+	// Path is the decoded form; RawPath keeps the caller's escaping so "%20"
+	// goes out once instead of being re-escaped to "%2520" (an empty RawPath
+	// makes url.URL escape the '%' itself).
+	u.Path = strings.TrimRight(base.Path, "/") + decoded
+	u.RawPath = strings.TrimRight(base.EscapedPath(), "/") + wirePath
+	u.RawQuery = query.Encode()
+	u.Fragment = ""
+	if u.Host != base.Host {
+		return &upstreamResult{Error: "refusing to call a host other than the configured target"}
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), strings.NewReader(string(body)))
 	if err != nil {
 		return &upstreamResult{Error: "build request: " + err.Error()}
 	}
-	for k, v := range headers {
+	for k, v := range signed.Headers {
+		if strings.EqualFold(k, "host") {
+			// The signed host is the routing subdomain. It travels as the Host
+			// header only; the dial target stays u.Host, fixed above.
+			req.Host = v
+			continue
+		}
 		req.Header.Set(k, v)
 	}
+	req.Header.Set("Authorization", signed.Authorization)
 	resp, err := explorerHTTPClient.Do(req)
 	if err != nil {
 		return &upstreamResult{Error: "upstream unreachable: " + err.Error()}
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxExplorerResponse))
 	rh := make(map[string]string)
 	for k := range resp.Header {
 		rh[k] = resp.Header.Get(k)

@@ -1,4 +1,4 @@
-# Runtime env for alert-engine, projected as a ConfigMap and consumed by the
+# Runtime env for alert-center, projected as a ConfigMap and consumed by the
 # Deployment via envFrom (08-devops §4.3). Keys are env-var names so a single
 # ConfigMap is both the operator-visible config surface and the container env.
 apiVersion: v1
@@ -14,3 +14,7 @@ data:
   PORT: {{ .Values.service.port | quote }}
   NACOS_NAMESPACE: {{ .Values.env.NACOS_NAMESPACE | quote }}
   SERVICE_GROUP: {{ .Values.env.SERVICE_GROUP | quote }}
+  # Non-secret runtime settings (EULER_ENV, downstream URLs, ...).
+  {{- range $k, $v := .Values.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

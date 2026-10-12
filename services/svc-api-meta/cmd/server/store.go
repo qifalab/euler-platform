@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/qifalab/euler-platform/errors"
@@ -28,65 +29,75 @@ const accountIDHeader = "X-Euler-Account-Id"
 
 // Action is the stored metadata for one OpenAPI Action.
 type Action struct {
-	ID          string          `json:"id"`          // {product}.{Action}, e.g. euecs.CreateInstance
+	ID          string          `json:"id"`           // {product}.{Action}, e.g. euecs.CreateInstance
 	ProductCode string          `json:"product_code"` // euecs / euoss / ...
 	ActionName  string          `json:"action_name"`  // CreateInstance
 	Version     string          `json:"version"`      // e.g. "2026-08-01"
 	ParamSchema json.RawMessage `json:"param_schema"` // parameter schema (JSON)
-	ErrorCodes  []string        `json:"error_codes"`  // error codes this Action may return
-	UpdatedBy   string          `json:"updated_by"`   // account_id that last registered
-	UpdatedAt   string          `json:"updated_at"`   // RFC3339
+	// ResponseSchema describes the Data object of the success envelope
+	// (JSON Schema, like ParamSchema). Optional and additive: omitted when the
+	// registrant declared none.
+	ResponseSchema json.RawMessage `json:"response_schema,omitempty"`
+	ErrorCodes     []string        `json:"error_codes"` // error codes this Action may return
+	UpdatedBy      string          `json:"updated_by"`  // account_id that last registered
+	UpdatedAt      string          `json:"updated_at"`  // RFC3339
 }
 
-// actionStore wires the metadata handlers to the Action repository. The demo
-// seed runs only for the in-memory repo: writing the demo Actions into a shared
-// openapi_meta would claim product surface that the real services register
-// themselves at startup.
+// actionStore wires the metadata handlers to the Action repository.
 type actionStore struct {
 	repo actionRepo
 }
 
 func newMetaStore() *actionStore {
-	s := newMetaStoreWith(newMemActionRepo())
-	s.seedActions()
+	s, err := newMetaStoreFor(newMemActionRepo())
+	if err != nil {
+		panic(err) // the in-memory repo never fails an upsert
+	}
 	return s
 }
 
-// newMetaStoreWith wires a repo. Tests use it to run the handlers against
-// whichever backend they are exercising.
+// newMetaStoreFor is main()'s constructor: it wires whichever repo
+// newActionRepo picked and upserts the built-in catalogue into it, in both
+// modes. main() used to call newMetaStoreWith directly, so the in-memory mode
+// came up with an empty catalogue; later the seed was skipped for a persistent
+// openapi_meta, which left the Explorer and the OpenAPI reference empty
+// whenever EULER_DB_DSN was set — the svc-openapi facade does not register its
+// Actions itself, the catalogue is their registration.
+//
+// The seed is idempotent and safe to run from every replica at every
+// startup: it upserts under the natural key (one row per product+Action, see
+// sqlActionRepo.Upsert), so a built-in entry replaces a stale row of the same
+// Action and never adds a second one, and it never deletes — Actions other
+// products registered through POST /internal/actions are left as they are.
+func newMetaStoreFor(repo actionRepo) (*actionStore, error) {
+	s := newMetaStoreWith(repo)
+	if err := s.seedActions(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// newMetaStoreWith wires a repo without seeding. Tests use it to run the
+// handlers against whichever backend they are exercising.
 func newMetaStoreWith(repo actionRepo) *actionStore {
 	return &actionStore{repo: repo}
 }
 
-// seedActions registers a representative slice of the phase-1 product API
-// surface so the Explorer and docs have real Actions to show before the
-// services register their own (03§9.4 rule ①: a route is not mounted until its
-// metadata is registered here). These mirror the OpenAPI Actions the gateway
-// actually routes for euecs/euoss/euvpc.
-func (s *actionStore) seedActions() {
-	seed := []Action{
-		{ID: "euecs.RunInstances", ProductCode: "euecs", ActionName: "RunInstances", Version: "2026-08-01",
-			ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceType","ImageId"],"properties":{"InstanceType":{"type":"string","description":"spec code, e.g. s2.large"},"ImageId":{"type":"string"},"InstanceName":{"type":"string"},"ChargeType":{"type":"string","enum":["Prepaid","Postpaid"]}}}`),
-			ErrorCodes:  []string{"euecs.InvalidInstanceType", "euecs.QuotaExceeded", "euecs.InsufficientBalance"}},
-		{ID: "euecs.DescribeInstances", ProductCode: "euecs", ActionName: "DescribeInstances", Version: "2026-08-01",
-			ParamSchema: json.RawMessage(`{"type":"object","properties":{"InstanceIds":{"type":"array","items":{"type":"string"}},"PageNumber":{"type":"integer"},"PageSize":{"type":"integer"}}}`),
-			ErrorCodes:  []string{"euecs.InstanceNotFound"}},
-		{ID: "euecs.StartInstance", ProductCode: "euecs", ActionName: "StartInstance", Version: "2026-08-01",
-			ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceId"],"properties":{"InstanceId":{"type":"string"}}}`),
-			ErrorCodes:  []string{"euecs.InstanceNotFound", "euecs.IncorrectStatus"}},
-		{ID: "euoss.CreateBucket", ProductCode: "euoss", ActionName: "CreateBucket", Version: "2026-08-01",
-			ParamSchema: json.RawMessage(`{"type":"object","required":["BucketName"],"properties":{"BucketName":{"type":"string"},"StorageClass":{"type":"string","enum":["Standard","IA","Archive"]}}}`),
-			ErrorCodes:  []string{"euoss.BucketAlreadyExists", "euoss.InvalidBucketName"}},
-		{ID: "euvpc.CreateVpc", ProductCode: "euvpc", ActionName: "CreateVpc", Version: "2026-08-01",
-			ParamSchema: json.RawMessage(`{"type":"object","required":["CidrBlock"],"properties":{"CidrBlock":{"type":"string"},"VpcName":{"type":"string"}}}`),
-			ErrorCodes:  []string{"euvpc.InvalidCidrBlock", "euvpc.QuotaExceeded"}},
-	}
-	for _, a := range seed {
-		a.UpdatedBy = "system-seed"
+// seedUpdatedBy is the updated_by of the built-in catalogue's rows.
+const seedUpdatedBy = "system-seed"
+
+// seedActions registers the OpenAPI surface the svc-openapi facade serves
+// (catalogue.go) so the Explorer and docs describe the real Actions before
+// anything registers its own (03§9.4 rule ①: a route is not mounted until its
+// metadata is registered here).
+func (s *actionStore) seedActions() error {
+	for _, a := range facadeCatalogue() {
+		a.UpdatedBy = seedUpdatedBy
 		if err := s.repo.Upsert(&a); err != nil {
-			panic(fmt.Sprintf("seed action %s failed: %v", a.ID, err))
+			return fmt.Errorf("register built-in action %s: %w", a.ID, err)
 		}
 	}
+	return nil
 }
 
 // id builds the canonical Action id: {product}.{Action} (identifier convention).
@@ -123,15 +134,19 @@ func accountIDFromRequest(r *http.Request) string {
 	return r.Header.Get(accountIDHeader)
 }
 
+// requestID reads the trace id the httpmw.RequestID middleware set on the
+// response header, so the envelope's RequestId matches X-Euler-TraceId. Get
+// canonicalizes the key: Go stores it as "X-Euler-Traceid", so indexing the
+// header map with "X-Euler-TraceId" never matched.
+func requestID(w http.ResponseWriter) string {
+	return w.Header().Get("X-Euler-TraceId")
+}
+
 // writeJSON renders a success response with the standard body
 // { "RequestId": ..., "Code": "OK", "Data": ... }.
 func writeJSON(w http.ResponseWriter, status int, data any) {
-	rid := ""
-	if v, ok := w.Header()["X-Euler-TraceId"]; ok && len(v) > 0 {
-		rid = v[0]
-	}
 	body := map[string]any{
-		"RequestId": rid,
+		"RequestId": requestID(w),
 		"Code":      "OK",
 		"Data":      data,
 	}
@@ -143,12 +158,8 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 // writeError renders the platform error body { RequestId, Code, Message, Data }
 // per errorsx (03§9.3).
 func writeError(w http.ResponseWriter, e *errorsx.Error) {
-	rid := ""
-	if v, ok := w.Header()["X-Euler-TraceId"]; ok && len(v) > 0 {
-		rid = v[0]
-	}
 	body := map[string]any{
-		"RequestId": rid,
+		"RequestId": requestID(w),
 		"Code":      e.Code,
 		"Message":   e.Message,
 	}
@@ -159,11 +170,28 @@ func writeError(w http.ResponseWriter, e *errorsx.Error) {
 
 // registerRequest is the POST /internal/actions body.
 type registerRequest struct {
-	ProductCode string          `json:"product_code"`
-	ActionName  string          `json:"action_name"`
-	Version     string          `json:"version"`
-	ParamSchema json.RawMessage `json:"param_schema"`
-	ErrorCodes  []string        `json:"error_codes"`
+	ProductCode    string          `json:"product_code"`
+	ActionName     string          `json:"action_name"`
+	Version        string          `json:"version"`
+	ParamSchema    json.RawMessage `json:"param_schema"`
+	ResponseSchema json.RawMessage `json:"response_schema"`
+	ErrorCodes     []string        `json:"error_codes"`
+}
+
+// errorCodePattern is the OpenAPI error vocabulary: PascalCase segments joined
+// by dots ({Reason}.{Detail}, e.g. InvalidInstanceId.NotFound, QuotaExceeded)
+// — what the svc-openapi facade answers with.
+var errorCodePattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)*$`)
+
+// validErrorCode accepts an OpenAPI code, or one prefixed with the registering
+// product (euecs.InvalidInstanceType, the form earlier registrations used) —
+// never another product's prefix.
+func validErrorCode(product, code string) bool {
+	rest, prefixed := strings.CutPrefix(code, product+".")
+	if prefixed {
+		code = rest
+	}
+	return errorCodePattern.MatchString(code)
 }
 
 func (s *actionStore) handleRegisterAction(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +204,7 @@ func (s *actionStore) handleRegisterAction(w http.ResponseWriter, r *http.Reques
 
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, errorsx.ErrInvalidParameter.WithRequestID(r.Header.Get("X-Euler-TraceId")))
+		writeError(w, errorsx.ErrInvalidParameter)
 		return
 	}
 	if req.ProductCode == "" || req.ActionName == "" {
@@ -192,28 +220,34 @@ func (s *actionStore) handleRegisterAction(w http.ResponseWriter, r *http.Reques
 	if req.Version == "" {
 		req.Version = "2026-08-11"
 	}
-	// A registered action can only return registered error codes; normalize
-	// their format and reject unregistered ones (03§9.3 CI gate, enforced here
-	// for phase-1).
+	// A registered action can only return registered error codes; check
+	// their format (03§9.3 CI gate, enforced here for phase-1): the OpenAPI
+	// vocabulary (InvalidInstanceId.NotFound), or a code prefixed with this
+	// product — never another product's.
 	for _, c := range req.ErrorCodes {
-		if !strings.HasPrefix(c, req.ProductCode+".") {
+		if !validErrorCode(req.ProductCode, c) {
 			writeError(w, errorsx.New("Common.InvalidParameter", errorsx.StatusBadRequest,
-				fmt.Sprintf("error code %q must be prefixed with %q", c, req.ProductCode+".")))
+				fmt.Sprintf("error code %q must be an OpenAPI code such as InvalidInstanceId.NotFound (PascalCase segments joined by dots), optionally prefixed with %q",
+					c, req.ProductCode+".")))
 			return
 		}
 	}
 	if req.ParamSchema == nil {
 		req.ParamSchema = json.RawMessage(`{}`)
 	}
+	if string(req.ResponseSchema) == "null" {
+		req.ResponseSchema = nil // explicit null = none declared
+	}
 
 	a := Action{
-		ID:          actionID(req.ProductCode, req.ActionName),
-		ProductCode: req.ProductCode,
-		ActionName:  req.ActionName,
-		Version:     req.Version,
-		ParamSchema: req.ParamSchema,
-		ErrorCodes:  req.ErrorCodes,
-		UpdatedBy:   acct,
+		ID:             actionID(req.ProductCode, req.ActionName),
+		ProductCode:    req.ProductCode,
+		ActionName:     req.ActionName,
+		Version:        req.Version,
+		ParamSchema:    req.ParamSchema,
+		ResponseSchema: req.ResponseSchema,
+		ErrorCodes:     req.ErrorCodes,
+		UpdatedBy:      acct,
 	}
 	saved, err := s.register(a)
 	if err != nil {

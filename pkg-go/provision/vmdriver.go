@@ -33,6 +33,17 @@
 // VMDriver{} (no cluster client) returns ErrDriverNotReady from every method:
 // a catalogue entry bound to the VM driver without a configured cluster must
 // fail at dispatch, not strand an order in CREATING until timeout.
+//
+// # Surviving a restart
+//
+// Query, Delete and CollectUsage receive only a resource id, so the driver
+// keeps resource id → VirtualMachine coordinates in memory. A restarted
+// process starts with none: before SpecSource, Delete then answered "never
+// applied here" and returned success without deleting anything — the
+// compensation and the release reported a VM reclaimed while it kept running
+// (and kept its disks). A driver built with NewVMDriverWithSpecs rebuilds a
+// missing entry from the spec the control plane persisted when it applied the
+// resource (svc-orchestrator: provision_task.params_json).
 package provision
 
 import (
@@ -114,6 +125,18 @@ type VMClient interface {
 	Delete(namespace, name string) error
 }
 
+// SpecSource is the durable record of what was applied: the control plane
+// persists every spec it hands Apply (svc-orchestrator records it in
+// provision_task), and the VM driver reads it back to rebuild the resource id
+// → VirtualMachine coordinates a restart dropped.
+type SpecSource interface {
+	// AppliedSpec returns the spec last applied for resourceID; ok is false
+	// when nothing was ever recorded for it. A lookup failure is an error,
+	// never "not found": treating an unreachable store as "never applied"
+	// would make Delete report success without deleting.
+	AppliedSpec(resourceID string) (spec Spec, ok bool, err error)
+}
+
 // vmDriverState carries everything the pointer-free VMDriver value needs:
 // value receivers keep VMDriver{} constructible (registered as a plain struct
 // value), while all instances built by NewVMDriver share one state.
@@ -127,6 +150,9 @@ type vmDriverState struct {
 	// lastCollect maps resourceID → last usage-collection instant, so each
 	// CollectUsage call reports exactly the window since the previous one.
 	lastCollect map[string]time.Time
+	// specs, when set, rebuilds a refs entry the process does not hold (it
+	// was applied before a restart, or by another replica).
+	specs SpecSource
 }
 
 type vmRef struct {
@@ -137,7 +163,17 @@ type vmRef struct {
 
 // NewVMDriver builds a VM driver against a KubeVirt API client. now is
 // injectable for deterministic tests; nil means time.Now.
+//
+// The driver only knows the VMs this process applied; production wiring uses
+// NewVMDriverWithSpecs so a restart does not orphan them.
 func NewVMDriver(client VMClient, now func() time.Time) VMDriver {
+	return NewVMDriverWithSpecs(client, now, nil)
+}
+
+// NewVMDriverWithSpecs builds a VM driver that rebuilds the coordinates of a
+// resource it did not apply itself (a restart, another replica) from specs.
+// A nil specs behaves like NewVMDriver.
+func NewVMDriverWithSpecs(client VMClient, now func() time.Time, specs SpecSource) VMDriver {
 	if now == nil {
 		now = time.Now
 	}
@@ -146,7 +182,42 @@ func NewVMDriver(client VMClient, now func() time.Time) VMDriver {
 		now:         now,
 		refs:        make(map[string]vmRef),
 		lastCollect: make(map[string]time.Time),
+		specs:       specs,
 	}}
+}
+
+// refFor returns the cluster coordinates of a resource: the in-memory entry
+// Apply recorded, or one rebuilt from the persisted spec. ok is false when the
+// resource was never applied (as far as any record shows). Caller holds
+// state.mu.
+func (d VMDriver) refFor(resourceID string) (vmRef, bool, error) {
+	if ref, ok := d.state.refs[resourceID]; ok {
+		return ref, true, nil
+	}
+	if d.state.specs == nil {
+		return vmRef{}, false, nil
+	}
+	spec, ok, err := d.state.specs.AppliedSpec(resourceID)
+	if err != nil {
+		return vmRef{}, false, fmt.Errorf("provision: look up applied spec for %s: %w", resourceID, err)
+	}
+	if !ok || spec.ResourceID != resourceID || spec.ProductCode == "" {
+		// A record for another resource (or one too damaged to place) names
+		// no VM of this resource: the same as no record.
+		return vmRef{}, false, nil
+	}
+	ref := refFromSpec(spec)
+	d.state.refs[resourceID] = ref
+	return ref, true, nil
+}
+
+// refFromSpec derives the cluster coordinates exactly as Apply does.
+func refFromSpec(spec Spec) vmRef {
+	return vmRef{
+		Namespace: CRNamespace(spec.ProductCode),
+		Name:      CRName(spec.ResourceID),
+		Spec:      spec,
+	}
 }
 
 // Type identifies the driver.
@@ -253,25 +324,27 @@ func (d VMDriver) Apply(spec Spec) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	d.state.refs[spec.ResourceID] = vmRef{
-		Namespace: CRNamespace(spec.ProductCode),
-		Name:      CRName(spec.ResourceID),
-		Spec:      spec,
-	}
+	d.state.refs[spec.ResourceID] = refFromSpec(spec)
 	return statusFrom(spec.ResourceID, obs, d.state.now()), nil
 }
 
 // Delete reclaims the VM and its disks. Deleting an unknown or already-deleted
-// resource succeeds — saga compensation retries this.
+// resource succeeds — saga compensation retries this. "Unknown" means no
+// record anywhere: a resource applied before a restart is found through the
+// SpecSource and really deleted, and a SpecSource failure is an error, never a
+// silent success.
 func (d VMDriver) Delete(resourceID string) error {
 	if err := d.notReady(); err != nil {
 		return err
 	}
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
-	ref, ok := d.state.refs[resourceID]
+	ref, ok, err := d.refFor(resourceID)
+	if err != nil {
+		return err
+	}
 	if !ok {
-		return nil // never applied here; either already gone or not ours
+		return nil // never applied; either already gone or not ours
 	}
 	if err := d.state.client.Delete(ref.Namespace, ref.Name); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
@@ -288,7 +361,10 @@ func (d VMDriver) Query(resourceID string) (Status, error) {
 	}
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
-	ref, ok := d.state.refs[resourceID]
+	ref, ok, err := d.refFor(resourceID)
+	if err != nil {
+		return Status{}, err
+	}
 	if !ok {
 		return Status{}, ErrNotFound
 	}
@@ -313,7 +389,10 @@ func (d VMDriver) CollectUsage(resourceID string) ([]UsagePoint, error) {
 	}
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
-	ref, ok := d.state.refs[resourceID]
+	ref, ok, err := d.refFor(resourceID)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -356,15 +435,15 @@ func (d VMDriver) CollectUsage(resourceID string) ([]UsagePoint, error) {
 	}
 	return []UsagePoint{
 		{
-			MeteringItem: meteringCPUItem,
-			Quantity:     decimalRate(cpuCores*seconds, usageSecondsHour),
-			WindowStart:  windowStart,
+			MeteringItem:  meteringCPUItem,
+			Quantity:      decimalRate(cpuCores*seconds, usageSecondsHour),
+			WindowStart:   windowStart,
 			WindowSeconds: int(seconds),
 		},
 		{
-			MeteringItem: meteringMemItem,
-			Quantity:     decimalRate(memGB*seconds, usageSecondsHour),
-			WindowStart:  windowStart,
+			MeteringItem:  meteringMemItem,
+			Quantity:      decimalRate(memGB*seconds, usageSecondsHour),
+			WindowStart:   windowStart,
 			WindowSeconds: int(seconds),
 		},
 	}, nil
@@ -383,7 +462,7 @@ func decimalRate(num, den int64) string {
 		return "0"
 	}
 	whole := num / den
-	frac := ((num % den) * 1_000_000 + den/2) / den
+	frac := ((num%den)*1_000_000 + den/2) / den
 	return fmt.Sprintf("%d.%06d", whole, frac)
 }
 
@@ -408,6 +487,10 @@ type memoryVM struct {
 	vmiExists    bool
 	vmiReady     bool
 	observations int
+	// guestIP is the current VMI's address: assigned once when the guest
+	// becomes Ready and kept for that guest's lifetime (a pod IP does not
+	// change while the pod lives). A new guest (Halted → Always) gets a new one.
+	guestIP string
 }
 
 // NewMemoryVMClient builds an empty in-memory KubeVirt control loop.
@@ -436,11 +519,13 @@ func (c *MemoryVMClient) Apply(vm VirtualMachine) (VMObserved, error) {
 		existing.vmiExists = false
 		existing.vmiReady = false
 		existing.observations = 0
+		existing.guestIP = ""
 	} else if !existing.vmiExists {
 		// Halted → Always: kubevirt starts a fresh guest.
 		existing.vmiExists = true
 		existing.vmiReady = false
 		existing.observations = 0
+		existing.guestIP = ""
 	}
 	return c.observe(existing), nil
 }
@@ -481,8 +566,13 @@ func (c *MemoryVMClient) observe(v *memoryVM) VMObserved {
 		Generation:  v.generation,
 	}
 	if v.vmiReady {
-		c.seq++
-		obs.GuestIP = fmt.Sprintf("10.244.%d.%d", 1+c.seq/254, 1+c.seq%254)
+		// Assign once per guest: minting an address on every observation made
+		// the endpoint change on every Query.
+		if v.guestIP == "" {
+			c.seq++
+			v.guestIP = fmt.Sprintf("10.244.%d.%d", 1+c.seq/254, 1+c.seq%254)
+		}
+		obs.GuestIP = v.guestIP
 	}
 	return obs
 }

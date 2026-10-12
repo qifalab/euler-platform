@@ -184,3 +184,136 @@ func TestShortBlobRejected(t *testing.T) {
 		t.Fatalf("expected ErrCiphertextShort, got %v", err)
 	}
 }
+
+func TestLoadMasterKeyFromEnv(t *testing.T) {
+	t.Setenv(MasterKeyEnv, "")
+	if ok, err := New().LoadMasterKeyFromEnv(PurposeAK); ok || err != nil {
+		t.Fatalf("unset: ok=%v err=%v", ok, err)
+	}
+	t.Setenv(MasterKeyEnv, "c2hvcnQ=") // "short"
+	if _, err := New().LoadMasterKeyFromEnv(PurposeAK); err == nil {
+		t.Fatal("short root key accepted")
+	}
+	// Same root + purpose in two processes must decrypt each other's data
+	// (the whole point: survive restarts, agree across replicas).
+	t.Setenv(MasterKeyEnv, "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	a, b := New(), New()
+	for _, k := range []*KMS{a, b} {
+		if ok, err := k.LoadMasterKeyFromEnv(PurposeAK); !ok || err != nil {
+			t.Fatalf("load: %v %v", ok, err)
+		}
+	}
+	blob, ver, err := a.Encrypt(PurposeAK, []byte("sk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.Decrypt(PurposeAK, blob, ver); err != nil || string(got) != "sk" {
+		t.Fatalf("cross-process decrypt: %q %v", got, err)
+	}
+	// Purposes are separated.
+	c := New()
+	_, _ = c.LoadMasterKeyFromEnv(PurposeUser)
+	if _, err := c.Decrypt(PurposeUser, blob, ver); err == nil {
+		t.Fatal("a PurposeAK ciphertext decrypted under PurposeUser")
+	}
+}
+
+// F5 — master-key rotation: data sealed under a retired version keeps opening
+// (EULER_KMS_MASTER_KEY_PREVIOUS) while new sealing uses the current version.
+func TestLoadMasterKeyFromEnvWithPreviousVersions(t *testing.T) {
+	const (
+		rootV1 = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" // "0123456789abcdef0123456789abcdef"
+		rootV2 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWY=" // "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+		rootV3 = "enl4d3Z1dHNycXBvbm1sa2ppaGdmZWRjYmEwMTIzNDU="
+	)
+	// Before the rotation: everything is sealed under v1.
+	t.Setenv(MasterKeyEnv, rootV1)
+	t.Setenv(MasterKeyVersionEnv, "")
+	t.Setenv(MasterKeyPreviousEnv, "")
+	old := New()
+	if ok, err := old.LoadMasterKeyFromEnv(PurposeAK); !ok || err != nil {
+		t.Fatalf("load v1: %v %v", ok, err)
+	}
+	sealedV1, ver, err := old.Encrypt(PurposeAK, []byte("sealed-under-v1"))
+	if err != nil || ver != 1 {
+		t.Fatalf("seal v1: ver=%d err=%v", ver, err)
+	}
+
+	// After: v3 is current, v1 and v2 are retired.
+	t.Setenv(MasterKeyEnv, rootV3)
+	t.Setenv(MasterKeyVersionEnv, "3")
+	t.Setenv(MasterKeyPreviousEnv, " 1:"+rootV1+" , 2:"+rootV2+" ")
+	k := New()
+	if ok, err := k.LoadMasterKeyFromEnv(PurposeAK); !ok || err != nil {
+		t.Fatalf("load with previous: %v %v", ok, err)
+	}
+	if got, err := k.Decrypt(PurposeAK, sealedV1, 1); err != nil || string(got) != "sealed-under-v1" {
+		t.Fatalf("v1 ciphertext after rotation: %q %v", got, err)
+	}
+	blob, ver, err := k.Encrypt(PurposeAK, []byte("fresh"))
+	if err != nil || ver != 3 {
+		t.Fatalf("new sealing must use the current version: ver=%d err=%v", ver, err)
+	}
+	if got, err := k.Decrypt(PurposeAK, blob, 3); err != nil || string(got) != "fresh" {
+		t.Fatalf("current round trip: %q %v", got, err)
+	}
+	// Without the previous list the v1 ciphertext is unreadable — the list
+	// is what keeps old data alive.
+	t.Setenv(MasterKeyPreviousEnv, "")
+	bare := New()
+	if _, err := bare.LoadMasterKeyFromEnv(PurposeAK); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bare.Decrypt(PurposeAK, sealedV1, 1); err == nil {
+		t.Fatal("a retired version decrypted without being configured")
+	}
+}
+
+func TestLoadMasterKeyFromEnvRejectsBadPreviousList(t *testing.T) {
+	const (
+		cur  = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWY="
+		prev = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	)
+	cases := map[string]struct{ current, version, previous string }{
+		"previous without current":  {"", "", "1:" + prev},
+		"missing separator":         {cur, "2", prev},
+		"non-numeric version":       {cur, "2", "one:" + prev},
+		"zero version":              {cur, "2", "0:" + prev},
+		"empty key":                 {cur, "2", "1:"},
+		"not base64":                {cur, "2", "1:!!not-base64!!"},
+		"short key":                 {cur, "2", "1:c2hvcnQ="},
+		"duplicate previous":        {cur, "3", "1:" + prev + ",1:" + prev},
+		"same version as current":   {cur, "2", "2:" + prev},
+		"newer than current":        {cur, "2", "5:" + prev},
+		"empty entry (stray comma)": {cur, "2", "1:" + prev + ","},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(MasterKeyEnv, tc.current)
+			t.Setenv(MasterKeyVersionEnv, tc.version)
+			t.Setenv(MasterKeyPreviousEnv, tc.previous)
+			k := New()
+			if _, err := k.LoadMasterKeyFromEnv(PurposeAK); err == nil {
+				t.Fatal("accepted")
+			}
+			// Nothing was half-registered.
+			if _, _, err := k.Encrypt(PurposeAK, []byte("x")); err == nil {
+				t.Fatal("a rejected configuration left a usable key behind")
+			}
+		})
+	}
+}
+
+func TestAddMasterKeyRejectsDuplicateVersion(t *testing.T) {
+	k := New()
+	if err := k.GenerateMasterKey(PurposeUser, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.GenerateMasterKey(PurposeUser, 1); err == nil {
+		t.Fatal("a second key under the same version was accepted")
+	}
+	// Versions are per purpose.
+	if err := k.GenerateMasterKey(PurposeAK, 1); err != nil {
+		t.Fatal(err)
+	}
+}

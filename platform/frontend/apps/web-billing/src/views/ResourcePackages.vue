@@ -2,10 +2,10 @@
 /** Resource packs — 资源包抵扣账本 (M-4.1, 09-roadmap §4.3).
  *  Wired to console-bff /console/reservepacks (fan-out svc-billing). */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PriceText, PageHeader } from "@eu/ui";
+import { formatTime } from "@eu/console-kit";
 
-const sdk = createSDK({ baseURL: "" });
 const packs = ref<Pack[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -47,8 +47,8 @@ onMounted(load);
             <td><PriceText :amount-decimal="p.faceValue" /></td>
             <td><PriceText :amount-decimal="p.remaining" /></td>
             <td>{{ p.status }}</td>
-            <td>{{ p.purchasedAt }}</td>
-            <td>{{ p.expireAt || "永不过期" }}</td>
+            <td>{{ formatTime(p.purchasedAt) }}</td>
+            <td>{{ p.expireAt ? formatTime(p.expireAt) : "永不过期" }}</td>
           </tr>
         </tbody>
       </table>

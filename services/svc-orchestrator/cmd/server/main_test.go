@@ -28,7 +28,7 @@ type fulfillData struct {
 // TestFulfillIdempotent verifies a retried fulfill for an already-fulfilled
 // order returns the existing resourceId with 200 rather than a 409.
 func TestFulfillIdempotent(t *testing.T) {
-	s := newStore()
+	s := newTestStore(paid(42, "euecs", "euecs.s2.large"))
 	req := fulfillRequest{OrderID: 42, OrderNo: "SO42", ProductCode: "euecs", Region: "cn-north-1", SpecCode: "euecs.s2.large"}
 
 	rec1 := doFulfill(t, s, req)
@@ -55,7 +55,7 @@ func TestFulfillIdempotent(t *testing.T) {
 // TestReleaseWalksStateMachine verifies release ends in RELEASED via the legal
 // RELEASING → RELEASED path and calls the driver.
 func TestReleaseWalksStateMachine(t *testing.T) {
-	s := newStore()
+	s := newTestStore(paid(7, "euecs", "euecs.s2.large"))
 	rec := doFulfill(t, s, fulfillRequest{OrderID: 7, ProductCode: "euecs", Region: "cn-north-1"})
 	var d fulfillData
 	_ = json.Unmarshal(rec.Body.Bytes(), &d)

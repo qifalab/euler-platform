@@ -99,11 +99,11 @@ func (s *sqlActionRepo) Upsert(a *Action) error {
 	label := nullableLabel(a.Version)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE api_action
-		    SET param_schema_json = ?, error_codes_json = ?, api_version_label = ?,
-		        updated_by = ?, updated_at = ?
+		    SET param_schema_json = ?, response_schema_json = ?, error_codes_json = ?,
+		        api_version_label = ?, updated_by = ?, updated_at = ?
 		  WHERE product_code = ? AND action_name = ?`,
-		string(a.ParamSchema), marshalErrorCodes(a.ErrorCodes), label, a.UpdatedBy,
-		time.Now().UTC(), a.ProductCode, a.ActionName)
+		string(a.ParamSchema), nullableJSON(a.ResponseSchema), marshalErrorCodes(a.ErrorCodes), label,
+		a.UpdatedBy, time.Now().UTC(), a.ProductCode, a.ActionName)
 	if err != nil {
 		return fmt.Errorf("apimeta: update action %s: %w", a.ID, err)
 	}
@@ -113,10 +113,10 @@ func (s *sqlActionRepo) Upsert(a *Action) error {
 
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO api_action
-		   (product_code, action_name, api_version_label, param_schema_json, error_codes_json,
-		    version, status, updated_by)
-		 VALUES (?, ?, ?, ?, ?, 1, 1, ?)`,
-		a.ProductCode, a.ActionName, label, string(a.ParamSchema),
+		   (product_code, action_name, api_version_label, param_schema_json, response_schema_json,
+		    error_codes_json, version, status, updated_by)
+		 VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
+		a.ProductCode, a.ActionName, label, string(a.ParamSchema), nullableJSON(a.ResponseSchema),
 		marshalErrorCodes(a.ErrorCodes), a.UpdatedBy); err != nil { // action_id comes from AUTO_INCREMENT (V3)
 		if storage.IsDuplicateKey(err) {
 			// uk_product_action_version: a concurrent register won the insert.
@@ -132,11 +132,11 @@ func (s *sqlActionRepo) Upsert(a *Action) error {
 func (s *sqlActionRepo) updateOnce(ctx context.Context, a *Action, label any) error {
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE api_action
-		    SET param_schema_json = ?, error_codes_json = ?, api_version_label = ?,
-		        updated_by = ?, updated_at = ?
+		    SET param_schema_json = ?, response_schema_json = ?, error_codes_json = ?,
+		        api_version_label = ?, updated_by = ?, updated_at = ?
 		  WHERE product_code = ? AND action_name = ?`,
-		string(a.ParamSchema), marshalErrorCodes(a.ErrorCodes), label, a.UpdatedBy,
-		time.Now().UTC(), a.ProductCode, a.ActionName); err != nil {
+		string(a.ParamSchema), nullableJSON(a.ResponseSchema), marshalErrorCodes(a.ErrorCodes), label,
+		a.UpdatedBy, time.Now().UTC(), a.ProductCode, a.ActionName); err != nil {
 		return fmt.Errorf("apimeta: update action %s (after insert race): %w", a.ID, err)
 	}
 	return nil
@@ -152,7 +152,7 @@ func (s *sqlActionRepo) Get(id string) (*Action, bool, error) {
 
 	a, err := scanAction(s.db.QueryRowContext(ctx,
 		`SELECT product_code, action_name, api_version_label, param_schema_json,
-		        error_codes_json, updated_by, updated_at
+		        response_schema_json, error_codes_json, updated_by, updated_at
 		   FROM api_action
 		  WHERE product_code = ? AND action_name = ?
 		  ORDER BY version DESC LIMIT 1`, product, action))
@@ -170,7 +170,7 @@ func (s *sqlActionRepo) List(product string) ([]*Action, error) {
 	defer cancel()
 
 	query := `SELECT product_code, action_name, api_version_label, param_schema_json,
-	         error_codes_json, updated_by, updated_at
+	         response_schema_json, error_codes_json, updated_by, updated_at
 	    FROM api_action`
 	args := []any{}
 	if product != "" {
@@ -204,16 +204,20 @@ func scanAction(sc interface{ Scan(...any) error }) (*Action, error) {
 		a         Action
 		label     sql.NullString
 		schema    []byte
+		response  []byte
 		codes     []byte
 		updatedBy sql.NullString
 		updatedAt time.Time
 	)
-	if err := sc.Scan(&a.ProductCode, &a.ActionName, &label, &schema, &codes, &updatedBy, &updatedAt); err != nil {
+	if err := sc.Scan(&a.ProductCode, &a.ActionName, &label, &schema, &response, &codes, &updatedBy, &updatedAt); err != nil {
 		return nil, err
 	}
 	a.ID = actionID(a.ProductCode, a.ActionName)
 	a.Version = label.String
 	a.ParamSchema = json.RawMessage(schema)
+	if len(response) > 0 { // NULL: none registered (V4)
+		a.ResponseSchema = json.RawMessage(response)
+	}
 	if err := json.Unmarshal(codes, &a.ErrorCodes); err != nil {
 		return nil, fmt.Errorf("apimeta: action %s error codes: %w", a.ID, err)
 	}
@@ -233,6 +237,14 @@ func marshalErrorCodes(codes []string) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+// nullableJSON stores an undeclared schema as SQL NULL.
+func nullableJSON(v json.RawMessage) any {
+	if len(v) == 0 {
+		return nil
+	}
+	return string(v)
 }
 
 func nullableLabel(v string) any {

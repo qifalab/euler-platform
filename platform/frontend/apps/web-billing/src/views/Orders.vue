@@ -1,20 +1,23 @@
 <script setup lang="ts">
 /** Orders list (02§1.2 billing center). Wired to svc-order GET /api/v1/orders. */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PageHeader } from "@eu/ui";
+import { formatTime } from "@eu/console-kit";
 import { useProductLabels } from "@/useProductLabels";
+import { orderAmountsView, type OrderAmountsView } from "@/couponView";
 
-const sdk = createSDK({ baseURL: "" });
 // 产品名来自 svc-catalog /api/v1/catalog/products(模块级缓存,加载后响应式更新)。
 const { label } = useProductLabels();
 
 interface OrderRow {
   orderId: string; orderNo: string; type: string; state: string;
   productCode: string; payableAmount: string; createdAt: string; version: number;
+  /** 原价 / 优惠券抵扣(元);payableAmount = 应付现金 = listAmount − couponDeduction。 */
+  listAmount?: string; couponDeduction?: string; couponIds?: string[] | null;
 }
 interface OrderView {
-  orderNo: string; productCode: string; type: string; amount: string;
+  orderNo: string; productCode: string; type: string; amounts: OrderAmountsView;
   state: string; created: string;
 }
 
@@ -28,11 +31,6 @@ const stateLabels: Record<string, string> = {
   PENDING_PAYMENT: "待支付", PAID: "已支付", FULFILLING: "履约中",
   COMPLETED: "已完成", CANCELLED: "已取消", REFUNDING: "退款中", REFUNDED: "已退款",
 };
-/** payableAmount arrives as a yuan-decimal string (pricing.Amount.String). */
-function toYuan(raw: string): string {
-  const n = Number(raw);
-  return Number.isFinite(n) ? n.toFixed(2) : raw;
-}
 
 onMounted(async () => {
   try {
@@ -41,9 +39,9 @@ onMounted(async () => {
       orderNo: o.orderNo,
       productCode: o.productCode,
       type: typeLabels[o.type] ?? o.type,
-      amount: toYuan(o.payableAmount),
+      amounts: orderAmountsView(o),
       state: stateLabels[o.state] ?? o.state,
-      created: o.createdAt,
+      created: formatTime(o.createdAt),
     }));
   } catch (e) {
     error.value = (e as Error).message;
@@ -60,11 +58,16 @@ onMounted(async () => {
     <p v-if="loading" class="orders-loading">加载中…</p>
     <div v-else-if="orders.length" class="orders-table-card">
       <table class="orders-table">
-        <thead><tr><th>订单号</th><th>产品</th><th>类型</th><th>金额</th><th>状态</th><th>下单时间</th></tr></thead>
+        <thead><tr><th>订单号</th><th>产品</th><th>类型</th><th>原价</th><th>优惠券抵扣</th><th>实付金额</th><th>状态</th><th>下单时间</th></tr></thead>
         <tbody>
           <tr v-for="o in orders" :key="o.orderNo">
             <td>{{ o.orderNo }}</td><td>{{ label(o.productCode) }}</td><td>{{ o.type }}</td>
-            <td>¥{{ o.amount }}</td>
+            <td>{{ o.amounts.list === "—" ? "—" : `¥${o.amounts.list}` }}</td>
+            <td :class="{ 'coupon-deduct': o.amounts.deduction !== '—' }">
+              {{ o.amounts.deduction === "—" ? "—" : `-¥${o.amounts.deduction}` }}
+              <span v-if="o.amounts.couponCount" class="coupon-count">({{ o.amounts.couponCount }} 张券)</span>
+            </td>
+            <td class="amount-payable">{{ o.amounts.payable === "—" ? "—" : `¥${o.amounts.payable}` }}</td>
             <td :class="{ 'state-pending': o.state === '待支付' }">{{ o.state }}</td>
             <td>{{ o.created }}</td>
           </tr>
@@ -96,4 +99,7 @@ onMounted(async () => {
 .orders-table tbody tr:hover { background: var(--eu-color-brand-soft); }
 .orders-table tbody tr:last-child td { border-bottom: none; }
 .state-pending { color: var(--eu-color-warning-text); font-weight: 500; }
+.coupon-deduct { color: var(--eu-color-success); }
+.coupon-count { font-size: 12px; color: var(--eu-text-secondary); }
+.amount-payable { font-weight: 500; }
 </style>

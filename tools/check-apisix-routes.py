@@ -10,6 +10,10 @@ semantic, and every one of them is silent in production.
   * an action_prefix that does not match the route's product lets a caller
     name another product's action
   * a product code outside the eu-prefixed set violates 01§1.1 D0
+  * a plugin missing from config.yaml's `plugins:` list (which REPLACES the
+    APISIX default set) makes every route that uses it fail to load
+  * a route that can forward /internal/* exposes a service-to-service
+    endpoint (e.g. svc-payment's /internal/payment/consume) to the internet
 
 Run: python tools/check-apisix-routes.py
 """
@@ -32,8 +36,29 @@ PLUGIN_PRIORITY = {"eu-auth": 2500, "eu-authorize": 2400, "eu-audit": 2300}
 # Routes that legitimately carry no authentication, with the reason.
 AUTH_EXEMPT = {
     "console-auth": "mints the session; cannot require a session to obtain one",
+    "console-auth-session": "refresh/session/logout: svc-iam authenticates the refresh cookie / bearer itself",
     "openapi-euoss-data": "S3 data plane uses MinIO SigV4, documented exemption (04§3.2)",
 }
+
+# Catch-all routes allowed to forward /internal/* because their upstream is
+# not a platform service (no /internal contract behind them).
+INTERNAL_EXEMPT = {
+    "openapi-euoss-data": "MinIO S3 data plane; /internal/... is a path-style bucket key there",
+}
+
+
+def excludes_internal(route):
+    """True when the route's vars reject /internal/* (["uri", "!", "~~", re])."""
+    for cond in route.get("vars") or []:
+        if (isinstance(cond, list) and len(cond) == 4 and cond[0] == "uri"
+                and cond[1] == "!" and cond[2] in ("~~", "~*")
+                and re.match(cond[3], "/internal/x")):
+            return True
+    return False
+
+
+# The data-plane config whose `plugins:` list replaces APISIX's defaults.
+CONFIG = "deploy/gitops-manifests/platform/apisix/config/config.yaml"
 
 
 def load_routes(path):
@@ -54,6 +79,16 @@ def check_route(route, path, problems):
     # 2. Signature mode must bind region and service to the route, since they
     #    feed the derived signing key and must never come from client input.
     auth = plugins.get("eu-auth") or {}
+    # Anonymous mode establishes no identity: only exact-path, GET/HEAD-only
+    # public routes may use it, and never with an authorization plugin.
+    if auth.get("mode") == "anonymous":
+        methods = set(route.get("methods") or [])
+        if not methods or not methods <= {"GET", "HEAD"}:
+            problems.append("{}: eu-auth anonymous mode must be GET/HEAD only".format(where))
+        if any("*" in u for u in (route.get("uris") or [route.get("uri", "")])):
+            problems.append("{}: eu-auth anonymous mode must use exact paths".format(where))
+        if "eu-authorize" in plugins:
+            problems.append("{}: eu-authorize on an anonymous route".format(where))
     if auth.get("mode") == "signature":
         if not auth.get("region"):
             problems.append("{}: eu-auth signature mode missing region".format(where))
@@ -115,10 +150,30 @@ def check_route(route, path, problems):
     if not ({"limit-req", "limit-count"} & set(plugins)):
         problems.append("{}: no rate limiting configured".format(where))
 
-    # 7. Per-AK limiting must key on the header the auth plugin injects.
+    # 7. Per-AK limiting must key on the header the auth plugin injects:
+    #    X-Euler-Ak-Id (nginx var http_x_euler_ak_id) is set by eu-auth in
+    #    signature mode only — jwt mode carries no AK. Keying on it anywhere
+    #    else collapses every caller into one shared (empty-key) bucket.
     lc = plugins.get("limit-count") or {}
-    if lc.get("key") == "http_x_eu_ak_id" and "eu-auth" not in plugins:
-        problems.append("{}: limits on X-Euler-Ak-Id but eu-auth never sets it".format(where))
+    if lc.get("key") == "http_x_euler_ak_id" and auth.get("mode") != "signature":
+        problems.append("{}: limits on X-Euler-Ak-Id but eu-auth (signature mode) never sets it".format(where))
+    # Same for the per-account key: X-Euler-Account-Id only exists after eu-auth.
+    if lc.get("key") == "http_x_euler_account_id" and "eu-auth" not in plugins:
+        problems.append("{}: limits on X-Euler-Account-Id but eu-auth never sets it".format(where))
+
+    # 8. /internal/* is service-to-service only (svc-iam verify/authz,
+    #    svc-payment consume/refund, ...): no route may name it, and a
+    #    prefix route broad enough to cover it must exclude it via vars.
+    uris = list(route.get("uris") or []) + ([route["uri"]] if route.get("uri") else [])
+    for u in uris:
+        if u.startswith("/internal"):
+            problems.append("{}: routes service-internal path '{}'".format(where, u))
+        elif (u.endswith("*") and "/internal/".startswith(u[:-1])
+              and rid not in INTERNAL_EXEMPT and not excludes_internal(route)):
+            problems.append(
+                "{}: catch-all uri '{}' would forward /internal/*; add vars "
+                "[\"uri\", \"!\", \"~~\", \"^/internal(/|$)\"]".format(where, u)
+            )
 
 
 def check_product_codes(routes, path, problems):
@@ -147,12 +202,21 @@ def main():
 
     problems = []
     total_routes = 0
+    with open(CONFIG, encoding="utf-8") as fh:
+        enabled = set((yaml.safe_load(fh) or {}).get("plugins") or [])
     for path in files:
         routes = load_routes(path)
         total_routes += len(routes)
         for route in routes:
             check_route(route, path, problems)
         check_product_codes(routes, path, problems)
+        with open(path, encoding="utf-8") as fh:
+            rules = (yaml.safe_load(fh) or {}).get("global_rules") or []
+        for item in list(routes) + list(rules):
+            for name in sorted(item.get("plugins") or {}):
+                if name not in enabled:
+                    problems.append("{}:{}: plugin '{}' is not enabled in {}".format(
+                        path.split("/")[-1], item.get("id"), name, CONFIG))
 
     for p in problems:
         print("  FAIL  {}".format(p))

@@ -3,7 +3,7 @@
 import { ref, onMounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { PageHeader } from "@eu/ui";
-import { fetchListings, sdk, categoryLabel, bpsPercent, type ListingDTO } from "@/marketplace";
+import { fetchListings, sdk, categoryLabel, bpsPercent, formatDate, type ListingDTO } from "@/marketplace";
 
 const queue = ref<ListingDTO[]>([]);
 const loading = ref(true);
@@ -57,7 +57,7 @@ onMounted(() => void load());
             <td>{{ categoryLabel(l.category) }}</td>
             <td>{{ bpsPercent(l.partnerRateBps) }}</td>
             <td class="rv-url">{{ l.openapiUrl }}</td>
-            <td>{{ l.createdAt ? l.createdAt.slice(0, 10) : "" }}</td>
+            <td>{{ formatDate(l.createdAt) }}</td>
             <td class="rv-actions">
               <button class="rv-btn approve" @click="review(l, true)">通过</button>
               <button class="rv-btn reject" @click="review(l, false)">驳回</button>

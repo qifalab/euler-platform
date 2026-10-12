@@ -225,6 +225,12 @@ func arnMatch(pattern, target string) bool {
 // wildcardMatch implements glob matching with "*" (any run, including empty)
 // and "?" (exactly one character). It is iterative with backtracking, so it
 // does not blow the stack on adversarial patterns.
+//
+// A "*" in the pattern is ALWAYS a wildcard, even when the target has a
+// literal "*" at the same position. Testing literal equality first consumed
+// the pattern's "*" as a plain character without recording a backtrack
+// point, so "a*" failed to match "a*b" and a Deny on ".../secret/*" missed
+// "secret/*x" — an explicit Deny silently switched off.
 func wildcardMatch(pattern, s string) bool {
 	var (
 		pi, si   int
@@ -233,13 +239,13 @@ func wildcardMatch(pattern, s string) bool {
 	)
 	for si < len(s) {
 		switch {
-		case pi < len(pattern) && (pattern[pi] == '?' || pattern[pi] == s[si]):
-			pi++
-			si++
 		case pi < len(pattern) && pattern[pi] == '*':
 			starIdx = pi
 			matchIdx = si
 			pi++
+		case pi < len(pattern) && (pattern[pi] == '?' || pattern[pi] == s[si]):
+			pi++
+			si++
 		case starIdx >= 0:
 			pi = starIdx + 1
 			matchIdx++
@@ -266,16 +272,24 @@ func wildcardMatch(pattern, s string) bool {
 // undecidable condition must not grant (fail closed), while a Deny with an
 // undecidable condition must still deny — treating it as "not matched" would
 // silently switch the Deny off, which is fail-open on the guard rail.
+//
+// The unknown-operator check runs over the WHOLE block before any known
+// operator is evaluated: Go map iteration order is random, so deciding inside
+// a single pass made the verdict depend on which operator came first (a Deny
+// whose known condition failed before the unknown one was reached was
+// switched off on some calls and not others).
 func matchConditions(cond map[string]map[string]flexList, ctx map[string]string, effect Effect) bool {
 	if len(cond) == 0 {
 		return true
 	}
-	for op, kv := range cond {
+	for op := range cond {
 		if !knownConditionOp(op) {
 			// Undecidable: Deny statements match (deny wins on doubt);
 			// Allow statements do not (never grant on doubt).
 			return effect == EffectDeny
 		}
+	}
+	for op, kv := range cond {
 		for key, wantVals := range kv {
 			gotVal, present := ctx[key]
 			if !evalCondition(op, gotVal, present, wantVals) {

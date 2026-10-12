@@ -2,10 +2,20 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "node:path";
 
-// Sub-app build config (02§3.4): externals sharing — Vue/Element Plus/@eu/*
-// are NOT bundled here; the base injects single instances via props. The
-// sub-app shims resolve them from injected shared deps in Wujie mode, or from
-// its own node_modules in standalone mode (degradation path).
+// Sub-app build config (02§3.4). How the shared deps (Vue / Element Plus /
+// @eu/*) are handled is decided by SHARED_EXTERNALS below.
+// Externals sharing (02§6.5) is opt-in: EU_SHARED_EXTERNALS=1 leaves the
+// shared deps as bare imports for a host that supplies them through an import
+// map. No deployment provides one (not the Wujie shell, not this index.html),
+// so such a build fails in the browser ("Failed to resolve module specifier
+// 'vue'"). By default they are bundled — Wujie runs every sub-app in its own
+// iframe realm, so a bundled Vue is never shared with the shell anyway.
+const SHARED_EXTERNALS = [
+  "vue", "vue-router", "element-plus",
+  "@eu/tokens", "@eu/ui", "@eu/console-kit", "@eu/sdk", "@eu/wujie-bridge",
+];
+const external = process.env.EU_SHARED_EXTERNALS === "1" ? SHARED_EXTERNALS : [];
+
 export default defineConfig({
   plugins: [vue()],
   base: "/",
@@ -14,10 +24,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      external: [
-        "vue", "vue-router", "element-plus",
-        "@eu/tokens", "@eu/ui", "@eu/console-kit", "@eu/sdk", "@eu/wujie-bridge",
-      ],
+      external,
       output: {
         entryFileNames: "assets/index.js",
         assetFileNames: "assets/[name][extname]",
@@ -55,6 +62,12 @@ export default defineConfig({
       },
       // Order creation/payment → svc-order (03§4.2.2).
       "/api/v1/orders": {
+        target: "http://localhost:9204",
+        changeOrigin: true,
+        configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")),
+      },
+      // Checkout coupons (优惠券) → svc-order.
+      "/api/v1/coupons": {
         target: "http://localhost:9204",
         changeOrigin: true,
         configure: (p) => p.on("proxyReq", (r) => r.setHeader("X-Euler-Account-Id", "100123")),

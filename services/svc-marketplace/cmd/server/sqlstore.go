@@ -214,7 +214,7 @@ func (s *sqlStore) CreateSettlement(r *SettlementRecord) error {
 		r.SettlementID, r.OrderID, r.ListingID, r.PartnerID, r.Gross.String(),
 		r.PartnerRateBps, r.Partner.String(), r.Platform.String(), r.SettledAt.UTC()); err != nil {
 		if storage.IsDuplicateKey(err) {
-			return fmt.Errorf("marketplace: order %s already settled", r.OrderID)
+			return fmt.Errorf("%w: %s", errAlreadySettled, r.OrderID)
 		}
 		return fmt.Errorf("marketplace: create settlement %d: %w", r.SettlementID, err)
 	}

@@ -17,6 +17,11 @@ import (
 // same rule). Handlers map it to 409.
 var ErrRuleConflict = errors.New("monitor: rule version conflict")
 
+// ErrRuleNotFound is returned by Delete when (account, id) names no rule — an
+// unknown id or another account's rule, which are indistinguishable on
+// purpose. Handlers map it to 404 Monitor.RuleNotFound.
+var ErrRuleNotFound = errors.New("monitor: rule not found")
+
 // ruleRepo is the persistence boundary for alert rules (alert_rule,
 // 03§4.4.1/§4.4.5). svc-monitor writes, alert-engine evaluates from the same
 // rows — which is exactly why the rules cannot live in a process map: an
@@ -40,6 +45,8 @@ type ruleRepo interface {
 	// Save applies the caller's edit under the optimistic lock: the UPDATE
 	// matches only at expectedVersion, and zero matches is ErrRuleConflict.
 	Save(rule *AlertRule, expectedVersion int) error
+	// Delete removes the account's rule; ErrRuleNotFound when (account, id)
+	// matched no row (never deleted, already deleted, or another account's).
 	Delete(acct, id int64) error
 }
 
@@ -97,6 +104,14 @@ func (s *memRuleRepo) ByNaturalKey(acct int64, product, rtype, metric string) (*
 func (s *memRuleRepo) Create(rule *AlertRule) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// uk_acc_rule, as the SQL repo enforces it: a second rule on the same
+	// natural key is the lost race the handler re-reads and updates.
+	for _, r := range s.rules {
+		if r.AccountID == rule.AccountID && r.ProductCode == rule.ProductCode &&
+			r.ResourceType == rule.ResourceType && r.Metric == rule.Metric {
+			return ErrRuleConflict
+		}
+	}
 	s.seq++
 	rule.RuleID = s.seq
 	s.rules[rule.RuleID] = *rule
@@ -119,7 +134,7 @@ func (s *memRuleRepo) Delete(acct, id int64) error {
 	defer s.mu.Unlock()
 	r, ok := s.rules[id]
 	if !ok || r.AccountID != acct {
-		return nil // deleting an unknown rule is already the desired state
+		return ErrRuleNotFound
 	}
 	delete(s.rules, id)
 	return nil
@@ -268,9 +283,19 @@ func (s *sqlRuleRepo) Delete(acct, id int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM alert_rule WHERE rule_id = ? AND account_id = ?`, id, acct); err != nil {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM alert_rule WHERE rule_id = ? AND account_id = ?`, id, acct)
+	if err != nil {
 		return fmt.Errorf("monitor: delete rule %d: %w", id, err)
+	}
+	// The DELETE's own row count decides (no read-then-delete race): zero rows
+	// is the memory repo's ErrRuleNotFound.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("monitor: delete rule %d: %w", id, err)
+	}
+	if n == 0 {
+		return ErrRuleNotFound
 	}
 	return nil
 }

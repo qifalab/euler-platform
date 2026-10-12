@@ -491,9 +491,11 @@ type Coupon struct {
 	CapAmount Amount
 	ExpireAt  time.Time
 	// Scope restricts what the coupon may offset: product codes, charge types,
-	// or SKUs. An empty slice means unrestricted on that dimension.
+	// or SKUs (t_coupon.scope_json). An empty slice means unrestricted on that
+	// dimension.
 	ProductCodes []string
 	ChargeTypes  []ChargeType
+	SKUCodes     []string
 	Status       int // 0未用 1部分使用 2用尽 3过期
 }
 
@@ -515,6 +517,9 @@ func (c Coupon) usable(t time.Time, req Request) bool {
 	if len(c.ChargeTypes) > 0 && !containsCharge(c.ChargeTypes, req.ChargeType) {
 		return false
 	}
+	if len(c.SKUCodes) > 0 && !contains(c.SKUCodes, req.SKUCode) {
+		return false
+	}
 	switch c.kind() {
 	case KindVoucher:
 		return !c.RemainValue.IsZero() && !c.RemainValue.IsNegative()
@@ -532,6 +537,16 @@ func (c Coupon) usable(t time.Time, req Request) bool {
 		return false
 	}
 }
+
+// Usable is the exported form of usable: whether the coupon may participate in
+// req at t (status, expiry, product/charge-type/SKU scope and well-formed kind
+// fields). It says nothing about the amount — a 满减券 below its threshold is
+// still "usable"; ApplyCoupons decides what each coupon actually deducts.
+func (c Coupon) Usable(t time.Time, req Request) bool { return c.usable(t, req) }
+
+// EffectiveKind is the coupon's kind with the phase-1 default applied (an
+// empty Kind is a VOUCHER).
+func (c Coupon) EffectiveKind() CouponKind { return c.kind() }
 
 // kind resolves the coupon kind, defaulting the phase-1 rows (no kind) to
 // VOUCHER.
@@ -651,7 +666,7 @@ func (e Engine) Calculate(req Request, rules []PricingRule, promos []Promotion, 
 	// → 满减券 (best single, threshold against the post-③a amount) → 代金券
 	// (multiple, expiry-ascending). Quoting computes the intent to consume; the
 	// order service commits it transactionally at payment time.
-	couponUses, couponTotal := applyCoupons(coupons, req, afterPromo)
+	couponUses, couponTotal := applyCoupons(coupons, req, afterPromo, 0)
 
 	payable := afterPromo.Sub(couponTotal)
 	if payable.IsNegative() {
@@ -730,7 +745,10 @@ func bestPromotion(promos []Promotion, req Request, list Amount) (string, Amount
 //
 // Quoting never mutates the coupons (TestQuotingDoesNotSpendCoupons): the
 // returned CouponUse list is the intent the order service commits at payment.
-func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUse, Amount) {
+//
+// quantum > 0 rounds the one computed deduction (the 折扣券's share) half-up
+// to a multiple of quantum; see ApplyCoupons. Calculate passes 0.
+func applyCoupons(coupons []Coupon, req Request, outstanding Amount, quantum Amount) ([]CouponUse, Amount) {
 	if outstanding.IsZero() || outstanding.IsNegative() {
 		return nil, 0
 	}
@@ -758,7 +776,7 @@ func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUs
 		if c.kind() != KindRate {
 			continue
 		}
-		d := rateDiscount(c, remaining)
+		d := rateDiscount(c, remaining, quantum)
 		// Tie-break on CouponID so the outcome is independent of input order.
 		if d > bestRateDiscount || (d == bestRateDiscount && d > 0 && c.CouponID < bestRate.CouponID) {
 			bestRate, bestRateDiscount = c, d
@@ -821,6 +839,10 @@ func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUs
 			return false
 		case ej.IsZero():
 			return true
+		case ei.Equal(ej):
+			// Same expiry: tie-break on CouponID, exactly as for the
+			// no-expiry case, so the split is independent of input order.
+			return vouchers[i].CouponID < vouchers[j].CouponID
 		default:
 			return ei.Before(ej)
 		}
@@ -843,18 +865,51 @@ func applyCoupons(coupons []Coupon, req Request, outstanding Amount) ([]CouponUs
 // rateDiscount computes the discount a RATE coupon yields on the outstanding
 // amount: the un-retained share, capped by CapAmount (when set) and by the
 // outstanding itself. Half-up rounding at the last decimal place, consistent
-// with the rest of the money arithmetic (MulRate).
-func rateDiscount(c Coupon, outstanding Amount) Amount {
+// with the rest of the money arithmetic (MulRate); with quantum > 0 the share
+// is then rounded half-up to a multiple of quantum, and a cap that is not a
+// multiple of quantum is honoured by rounding it down (never above the cap).
+func rateDiscount(c Coupon, outstanding Amount, quantum Amount) Amount {
 	retained := outstanding.MulRate(c.RateBasisPoints)
 	d := outstanding.Sub(retained)
 	if d.IsNegative() {
 		return 0
 	}
+	if quantum > 0 {
+		d = (d + quantum/2) / quantum * quantum
+	}
 	if c.CapAmount > 0 && d > c.CapAmount {
 		d = c.CapAmount
+		if quantum > 0 {
+			d = d / quantum * quantum
+		}
 	}
 	if d > outstanding {
 		d = outstanding
 	}
 	return d
+}
+
+// ApplyCoupons is stage ③ (券抵扣) of Calculate on its own: given the
+// outstanding amount after ①目录价 and ②促销, it returns which of the coupons
+// deduct how much, in consumption order, and the total — under exactly the
+// rules Calculate applies (one best 折扣券, then one best 满减券 measured on the
+// post-折扣 amount, then 代金券 stacking by expiry ascending with CouponID as the
+// tie-break; scope, expiry and status via Usable; only coupons owned by
+// req.AccountID; the total never exceeds outstanding).
+//
+// The order plane uses it to price coupons the customer selected at checkout
+// on top of the catalogue's quote. quantum is the settlement unit the result
+// must be expressed in (10_000 micro = 1 分 for orders, whose amounts are
+// DECIMAL(…,2)): the 折扣券 share is the only computed deduction, and it is
+// rounded half-up to a multiple of quantum, so with a quantum-aligned
+// outstanding and quantum-aligned coupon values every deduction is aligned.
+// quantum <= 0 applies no rounding (Calculate's behaviour).
+//
+// Like Calculate it never mutates the coupons: the result is the intent the
+// caller commits (reserves, then consumes at payment).
+func ApplyCoupons(coupons []Coupon, req Request, outstanding Amount, quantum Amount) ([]CouponUse, Amount) {
+	if quantum < 0 {
+		quantum = 0
+	}
+	return applyCoupons(coupons, req, outstanding, quantum)
 }

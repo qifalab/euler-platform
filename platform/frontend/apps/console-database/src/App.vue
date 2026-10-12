@@ -3,14 +3,16 @@
  * console-database — RDS instance list (EURDS / MySQL), the database category
  * sub-app (02§7.2 list-page pattern). Demonstrates the declarative ResourceTable
  * from @eu/console-kit with unified StatusBadge, polling on transitional
- * states (Restoring), and EmptyGuide when empty.
+ * lifecycle states (CREATING/UPGRADING/RELEASING...), and EmptyGuide when empty.
+ * Create flow: #/eurds/buy (RdsBuy).
  */
-import { computed, h, onMounted, onUnmounted, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElButton } from "element-plus";
-import { ResourceTable, useResourceTable } from "@eu/console-kit";
+import { ResourceTable, useResourceTable, paginate, isTransitionalState, formatTime, attributesOf } from "@eu/console-kit";
 import { StatusBadge, EmptyGuide, PageHeader } from "@eu/ui";
-import { createSDK, type EuError } from "@eu/sdk";
+import { sdk } from "./sdk";
 import InstanceDetail from "./views/InstanceDetail.vue";
+import RdsBuy from "./views/RdsBuy.vue";
 import "@eu/tokens/style.css";
 
 // Internal hash routing (no vue-router instance in this sub-app, mirroring the
@@ -27,42 +29,51 @@ const detailInstanceId = computed(() => {
   return m ? decodeURIComponent(m[1]) : null;
 });
 const showDetail = computed(() => detailInstanceId.value !== null);
+/** Create page: #/eurds/buy. */
+const showBuy = computed(() => /^#\/eurds\/buy(?:[/?]|$)/.test(hashRoute.value));
+function goBuy() {
+  location.hash = "#/eurds/buy";
+}
 
 type InstanceRow = Record<string, unknown>;
 
-// In the real build @eu/sdk is generated from OpenAPI; here a typed fetcher.
-const sdk = createSDK({ baseURL: "" });
-
-// Real fetcher: console-bff /console/resources filtered to eurds. The BFF
-// returns the shared Resource shape; the list maps SpecCode to the spec
-// column (engine-specific fields await the svc-rds list endpoint).
-const { rows, loading, columns, page, pageSize, total, setPage } = useResourceTable<InstanceRow>({
-  api: async () => {
-    const res = await sdk.get<InstanceRow[]>("/console/resources");
+// Real fetcher: the orchestrator's resource records filtered to eurds. They
+// carry the customer attributes set at creation (name, engineVersion); the
+// resource id / SKU remain the fallback.
+const { rows, loading, error, columns, page, pageSize, total, setPage, refresh } = useResourceTable<InstanceRow>({
+  api: async (params, signal) => {
+    const res = await sdk.get<InstanceRow[]>("/api/v1/orchestrator/resources", { signal });
     const items = (res.data ?? [])
-      .filter((r) => r.ProductCode === "eurds")
-      .map((r) => ({
-        instanceId: r.ResourceId,
-        instanceName: r.ResourceId,
-        engine: r.SpecCode,
-        spec: r.SpecCode,
-        region: r.Region,
-        status: String(r.State ?? "").charAt(0).toUpperCase() + String(r.State ?? "").slice(1).toLowerCase(),
-        createdTime: (r.CreatedAt as string) || "—",
-        expiredTime: (r.ExpiredAt as string) || "—",
-      }));
-    return { items, total: items.length };
+      .filter((r) => r.productCode === "eurds")
+      .map((r) => {
+        const attrs = attributesOf(r);
+        return {
+          instanceId: r.resourceId,
+          instanceName: attrs.name || r.resourceId,
+          engine: attrs.engineVersion ? `MySQL ${attrs.engineVersion}` : "—",
+          spec: r.specCode,
+          region: r.region,
+          status: String(r.state ?? "").charAt(0).toUpperCase() + String(r.state ?? "").slice(1).toLowerCase(),
+          createdTime: formatTime(r.createdAt as string | undefined),
+          expiredTime: formatTime(r.expiredAt as string | undefined),
+        };
+      });
+    // The endpoint returns every resource: page client-side, total = full count.
+    return paginate(items, params);
   },
   columns: [
     { key: "instanceId", title: "资源ID/名称", link: (r) => `#/eurds/instances/${r.instanceId}` },
     { key: "status", title: "状态" },
+    { key: "engine", title: "引擎" },
     { key: "spec", title: "规格" },
     { key: "region", title: "地域" },
     { key: "createdTime", title: "创建时间" },
     { key: "expiredTime", title: "到期时间" },
     { key: "action", title: "操作" },
   ],
-  polling: { interval: 10_000, when: (r) => r.some((x) => x.status === "Restoring") },
+  // The orchestrator never reports "Restoring": poll on the lifecycle states
+  // that are actually transitional (CREATING, UPGRADING, RELEASING, ...).
+  polling: { interval: 10_000, when: (r) => r.some((x) => isTransitionalState(x.status)) },
   pageSize: 20,
 });
 
@@ -73,29 +84,37 @@ const tableColumns = computed(() =>
   columns.value.map((c) =>
     c.key === "status"
       ? { ...c, render: (row: InstanceRow) => h(StatusBadge, { status: String(row.status ?? "") }) }
-      : c.key === "instanceName"
-        ? { ...c, render: (row: InstanceRow) => row.instanceName }
+      : c.key === "instanceId"
+        ? { ...c, render: (row: InstanceRow) => (row.instanceName === row.instanceId ? String(row.instanceId) : `${String(row.instanceName)} (${String(row.instanceId)})`) }
         : c.key === "action"
           ? { ...c, render: () => "重启 · 详情 · 删除" }
           : c,
   ),
 );
 
-// Suppress unused-warning for sdk/error wiring in the scaffold (real deploy
-// wires onError → toast / page error bar, 02§7.5).
-void sdk; void (null as unknown as EuError);
+// Back from the create / detail page: reload so a new instance shows at once.
+watch(() => showBuy.value || showDetail.value, (away, wasAway) => {
+  if (wasAway && !away) void refresh();
+});
 </script>
 
 <template>
   <section class="rds-app">
-    <InstanceDetail v-if="showDetail" :key="detailInstanceId ?? ''" />
+    <RdsBuy v-if="showBuy" />
+    <InstanceDetail v-else-if="showDetail" :key="detailInstanceId ?? ''" />
     <template v-else>
     <PageHeader title="云数据库 RDS">
       <template #actions>
-        <ElButton type="primary">创建</ElButton>
+        <ElButton type="primary" @click="goBuy">创建</ElButton>
       </template>
     </PageHeader>
 
+    <!-- A failed load must not read as "暂无云数据库实例". -->
+    <div v-if="error" class="rds-error">
+      <p class="rds-error-msg">列表加载失败:{{ (error as Error)?.message ?? String(error) }}</p>
+      <ElButton size="small" @click="refresh">重试</ElButton>
+    </div>
+    <template v-else>
     <ResourceTable
       :rows="rows as Record<string, unknown>[]"
       :columns="tableColumns"
@@ -104,19 +123,21 @@ void sdk; void (null as unknown as EuError);
       :page="page"
       :page-size="pageSize"
       @update:page="setPage"
-    />
-
-    <EmptyGuide
-      v-if="!loading && rows.length === 0"
-      title="暂无云数据库实例"
-      description="创建您的第一个 RDS 实例,开始使用托管 MySQL 数据库。"
-      action-label="创建实例"
-      action-href="#/eurds/buy"
-    />
+    >
+      <template #empty>
+        <EmptyGuide title="暂无云数据库实例" description="创建您的第一个 RDS 实例,开始使用托管 MySQL 数据库。" action-label="创建实例" action-href="#/eurds/buy" />
+      </template>
+    </ResourceTable>
+    </template>
     </template>
   </section>
 </template>
 
 <style scoped>
 .rds-app { padding: 16px 24px; }
+.rds-error {
+  padding: 32px; text-align: center;
+  border: 1px solid var(--eu-border); border-radius: var(--eu-radius-lg);
+}
+.rds-error-msg { color: var(--eu-color-danger); font-size: 13px; margin: 0 0 12px; }
 </style>

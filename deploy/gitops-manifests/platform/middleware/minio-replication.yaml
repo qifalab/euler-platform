@@ -14,6 +14,35 @@
 # channel, not just the control plane. The RPO target here (async, hourly) is
 # the same number pkg-go/multiregion.ObjectStorageChannel carries — one
 # definition, mirrored, not re-decided.
+#
+# Transport: https end to end, certificates verified (never mc --insecure).
+# Both endpoints serve minio-replication-tls (tls.yaml), each signed by its
+# own region's euler-platform-ca, so the Job trusts two roots:
+#   * this region's — ca.crt of the local minio-replication-tls Secret;
+#   * the peer region's — ConfigMap minio-replication-peer-ca (key ca.crt),
+#     created per environment from the other cluster's
+#     cert-manager/euler-platform-ca Secret (ca.crt; public, not secret).
+# The replication itself runs MinIO-to-MinIO from the source cluster, so the
+# source tenant must trust this region's root as well (Tenant
+# externalCaCertSecret / certs/CAs) — see tls.yaml.
+#
+# Credentials — Secret minio-replication-credentials (namespace mw-storage,
+# created per environment, never in Git; never the root credentials):
+#   source-access-key / source-secret-key
+#       a service account on the SOURCE MinIO that may configure replication
+#       on the listed buckets: admin:SetBucketTarget, admin:GetBucketTarget,
+#       s3:PutReplicationConfiguration, s3:GetReplicationConfiguration,
+#       s3:GetBucketVersioning, s3:ListBucket.
+#   target-access-key / target-secret-key
+#       a replication user on the TARGET MinIO (not an STS credential; mc
+#       rejects those). The source cluster stores it as the remote target and
+#       pushes with it, so it needs MinIO's replication remote-user policy:
+#       s3:ReplicateObject, s3:ReplicateDelete, s3:ReplicateTags,
+#       s3:GetReplicationConfiguration, s3:GetBucketVersioning,
+#       s3:GetBucketObjectLockConfiguration, s3:ListBucket, s3:PutObject,
+#       s3:GetObject, s3:GetObjectVersion, s3:DeleteObject on those buckets.
+# Neither secret appears in a URL or on a command line: mc reads the keys from
+# stdin, and the remote target is named by alias (--remote-bucket dst/<b>).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -26,6 +55,17 @@ data:
   target-region: cn-east-1
   mode: async
   rpo: 1h
+  # Buckets replicated source -> target under the same name, whitespace
+  # separated. Each must exist on BOTH sides with versioning enabled (an S3
+  # replication requirement; mc version enable <alias>/<bucket>). Default set:
+  # the internal tenant's recovery data (04§9.2) — middleware backups, the
+  # log/audit cold archive and document attachments.
+  buckets: |
+    backup-mysql
+    backup-nacos
+    backup-redis
+    log-archive
+    doc-attachments
 ---
 apiVersion: batch/v1
 kind: Job
@@ -36,6 +76,10 @@ metadata:
     cloud.platform/region: cn-east-1
 spec:
   template:
+    metadata:
+      labels:
+        # Selected by NetworkPolicy minio-replication-ingress.
+        app.kubernetes.io/name: minio-replication-bootstrap
     spec:
       restartPolicy: Never
       containers:
@@ -44,7 +88,70 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
+              set -eu
               # One-way async bucket replication: primary -> standby (00§4.5).
-              mc alias set src http://minio.cn-north-1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-              mc alias set dst http://minio.cn-east-1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-              mc replicate add src/"$BUCKET" --remote-bucket "$BUCKET" --region cn-east-1
+              # Keys on stdin (mc alias set reads them when they are not
+              # arguments), so they stay out of argv and out of any URL.
+              printf '%s\n%s\n' "$SOURCE_ACCESS_KEY" "$SOURCE_SECRET_KEY" |
+                mc alias set src "https://minio.${SOURCE_REGION}:9000"
+              printf '%s\n%s\n' "$TARGET_ACCESS_KEY" "$TARGET_SECRET_KEY" |
+                mc alias set dst "https://minio.${TARGET_REGION}:9000"
+              # Re-runnable: a bucket that already carries this rule ID is
+              # skipped (a second rule with the same ID would be refused).
+              RULE_ID="replicate-to-${TARGET_REGION}"
+              n=0
+              for b in $BUCKETS; do
+                n=$((n + 1))
+                if mc --json replicate export "src/$b" | grep -Eq "\"ID\": *\"${RULE_ID}\""; then
+                  echo "src/$b: rule ${RULE_ID} already present"
+                  continue
+                fi
+                # Alias-based remote target: mc takes the endpoint, its https
+                # scheme (what the source cluster uses to push to the
+                # standby) and the replication user's keys from alias dst.
+                mc replicate add "src/$b" --remote-bucket "dst/$b" \
+                  --region "$TARGET_REGION" --id "$RULE_ID" --priority 1
+              done
+              if [ "$n" -eq 0 ]; then
+                echo "minio-replication-cfg lists no buckets" >&2
+                exit 1
+              fi
+          env:
+            - name: SOURCE_REGION
+              valueFrom:
+                configMapKeyRef: { name: minio-replication-cfg, key: source-region }
+            - name: TARGET_REGION
+              valueFrom:
+                configMapKeyRef: { name: minio-replication-cfg, key: target-region }
+            - name: BUCKETS
+              valueFrom:
+                configMapKeyRef: { name: minio-replication-cfg, key: buckets }
+            - name: SOURCE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: minio-replication-credentials, key: source-access-key }
+            - name: SOURCE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: minio-replication-credentials, key: source-secret-key }
+            - name: TARGET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: minio-replication-credentials, key: target-access-key }
+            - name: TARGET_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: minio-replication-credentials, key: target-secret-key }
+          volumeMounts:
+            # mc trusts every CA certificate in <config dir>/certs/CAs.
+            - name: replication-cas
+              mountPath: /root/.mc/certs/CAs
+              readOnly: true
+      volumes:
+        - name: replication-cas
+          projected:
+            sources:
+              - secret:
+                  name: minio-replication-tls
+                  items:
+                    - { key: ca.crt, path: local-region-ca.crt }
+              - configMap:
+                  name: minio-replication-peer-ca
+                  items:
+                    - { key: ca.crt, path: peer-region-ca.crt }

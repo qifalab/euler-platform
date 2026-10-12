@@ -6,9 +6,13 @@
 // identity; the service must not trust a client-supplied account):
 //
 //	GET  /internal/balance  -> ledger.Balance for the account (pkg-go/ledger)
-//	POST /internal/settle   -> billing.Engine.Settle over the in-memory pool set;
-//	                           returns the Charge + deductions + arrears state
-//	GET  /internal/bills    -> billing.Summarize for a period
+//	POST /internal/settle   -> billing.Engine.Settle over the account's resource
+//	                           packs, registry coupons and its ledger cash
+//	                           balance (debited for the cash share); returns
+//	                           the Charge + deductions + arrears state
+//	GET  /internal/bills    -> billing.Summarize for a period, over the settled
+//	                           charges in the settle store (trade_db
+//	                           settle_charge when persistent)
 //
 // Every handler reads the caller's account_id from the X-Euler-Account-Id header
 // the gateway injects (07§3.3); a missing header is a 403, never a guess.
@@ -19,6 +23,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,11 +34,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qifalab/euler-platform/billing"
 	"github.com/qifalab/euler-platform/httpmw"
@@ -40,6 +49,7 @@ import (
 	"github.com/qifalab/euler-platform/metering"
 	"github.com/qifalab/euler-platform/pricing"
 	"github.com/qifalab/euler-platform/reservepack"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/storage"
 )
 
@@ -49,6 +59,9 @@ func main() {
 	// default points at the same port; production overrides via -http / Helm.
 	var httpAddr = flag.String("http", ":9210", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -107,7 +120,7 @@ func main() {
 // logging, and recover (03§2.3.4). The chain itself lives in pkg-go/httpmw so
 // the services cannot drift apart.
 func withMiddleware(h http.Handler) http.Handler {
-	return httpmw.Chain(h)
+	return httpmw.Chain(httpmw.InternalToken(h))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
@@ -140,25 +153,59 @@ type app struct {
 	ledger *ledger.Ledger
 	// store is the ledger's persistence port — *memLedgerStore in the demo,
 	// ledger.SQLStore against trade_db.
-	store    ledger.Store
-	engine   *billing.Engine
-	pools    *poolRegistry
-	charges  *chargeRegistry
+	store     ledger.Store
+	engine    *billing.Engine
+	pools     *poolRegistry
 	packs     *reservepack.Ledger
 	packStore reservepack.Store
-	invoices  *invoice.Book
+	// invoices holds the invoice documents — trade_db's invoice tables when
+	// persistent (spend cap enforced under a per-account row lock), an
+	// invoice.Book otherwise (invoicestore.go).
+	invoices invoiceStore
 
-	// settleMu serializes the settle commit phase so a concurrent duplicate
-	// settle cannot double-deduct the pools, and settled caches the response
-	// per idempotency key (the deterministic ChargeID) so a retried settlement
-	// replays the original result (200) instead of re-charging.
-	settleMu sync.Mutex
-	settled  map[string]map[string]any
+	// settles holds every charge's settlement record — the plan while it is
+	// being committed, the final charge once settled — keyed by the
+	// deterministic ChargeID, and serialises one account's settlements across
+	// replicas (billing.SQLSettleStore against trade_db, in-memory otherwise).
+	// A retried or concurrently duplicated settlement replays the stored
+	// result; one that died part-way resumes from the stored plan. Bills and
+	// cost analysis read their charges from it.
+	settles billing.SettleStore
+
+	// packMu serialises resource-pack purchases: the pre-flight, the debit, the
+	// credit and any compensation of one purchase must not interleave with a
+	// concurrent attempt at the same purchase.
+	packMu sync.Mutex
+}
+
+// cashSpent is what the account actually paid: CONSUME − REFUND in its cash
+// ledger. The invoice store caps the account's live invoices at it.
+//
+// Invoices used to accept any line items the caller typed, so a tenant could
+// issue 发票 for amounts it never paid — a tax-compliance incident, not a
+// display bug.
+func (a *app) cashSpent(acct int64) (pricing.Amount, error) {
+	entries, err := a.store.ListEntries(acct)
+	if err != nil {
+		return 0, err
+	}
+	var spent pricing.Amount
+	for _, e := range entries {
+		switch e.Type {
+		case ledger.EntryConsume:
+			spent = spent.Add(e.Amount)
+		case ledger.EntryRefund:
+			spent = spent.Sub(e.Amount)
+		}
+	}
+	return spent, nil
 }
 
 // newApp wires the domain objects. Persistence is opt-in (pkg-go/storage doc):
-// with EULER_DB_DSN set, the cash ledger and the resource-pack ledger are trade_db's
-// tables, so balances, packs and their journals survive a restart; unset, the
+// with EULER_DB_DSN set, the cash ledger, the resource-pack ledger and the
+// settlement records (settle plans and settled charges) are trade_db's tables, so
+// balances, packs, their journals and the bills survive a restart — and a retried
+// settlement on any replica replays instead of charging again; unset, the
 // service keeps the in-memory stores that make the demo and `go test`
 // dependency-free.
 //
@@ -171,9 +218,8 @@ type app struct {
 // in-memory store — pointed at a real database they restart at 1 and collide with
 // the rows the previous run committed.
 //
-// The invoice book stays in memory either way: the invoice DDL exists, but no
-// invoice store adapter does yet. Saying so is better than a half-wired book that
-// silently loses 红冲 documents.
+// Invoices follow the same rule: trade_db's invoice / invoice_item when
+// persistent (svc-billing V3/V5), an in-memory invoice.Book otherwise.
 func newApp(ctx context.Context) (*app, error) {
 	db, ok, err := storage.MustOpenFor(ctx, "trade_db")
 	if err != nil {
@@ -185,6 +231,13 @@ func newApp(ctx context.Context) (*app, error) {
 	if err := storage.EnsureMigrated(ctx, db, "trade_db"); err != nil {
 		return nil, err
 	}
+	return newSQLApp(ctx, db)
+}
+
+// newSQLApp wires the app to a migrated trade_db pool. Two apps built on one
+// database behave as two replicas (or one process before and after a restart):
+// every piece of settlement state they share lives in the database.
+func newSQLApp(ctx context.Context, db *sql.DB) (*app, error) {
 	ledgerIDs, err := storage.OpenSequence(ctx, db, "ledger_entry", 1000)
 	if err != nil {
 		return nil, err
@@ -193,15 +246,16 @@ func newApp(ctx context.Context) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
+	invoiceIDs, err := storage.OpenSequence(ctx, db, "invoice", 100)
+	if err != nil {
+		return nil, err
+	}
 
-	var invMu sync.Mutex
-	var invSeq int64
 	app := &app{
 		engine:   billing.NewEngine(time.Now),
 		pools:    newPoolRegistry(),
-		charges:  newChargeRegistry(),
-		settled:  make(map[string]map[string]any),
-		invoices: invoice.NewBook(time.Now, func() string { invMu.Lock(); defer invMu.Unlock(); invSeq++; return fmt.Sprintf("inv-%d", invSeq) }),
+		settles:  billing.NewSQLSettleStore(db),
+		invoices: &sqlInvoiceStore{db: db, ids: invoiceIDs, now: time.Now},
 	}
 	app.store = ledger.NewSQLStore(db)
 	app.ledger = ledger.New(app.store, time.Now, ledgerIDs.NextFunc())
@@ -214,14 +268,11 @@ func newApp(ctx context.Context) (*app, error) {
 // counters, invoice book. Tests construct it directly, so they never depend on
 // whether the developer's shell has EULER_DB_DSN set.
 func newInMemoryApp() *app {
-	var invMu sync.Mutex
-	var invSeq int64
 	app := &app{
 		engine:   billing.NewEngine(time.Now),
 		pools:    newPoolRegistry(),
-		charges:  newChargeRegistry(),
-		settled:  make(map[string]map[string]any),
-		invoices: invoice.NewBook(time.Now, func() string { invMu.Lock(); defer invMu.Unlock(); invSeq++; return fmt.Sprintf("inv-%d", invSeq) }),
+		settles:  billing.NewMemorySettleStore(),
+		invoices: newMemInvoiceStore(time.Now),
 	}
 	app.store = newMemLedgerStore()
 	app.ledger = ledger.New(app.store, time.Now, guardedCounter())
@@ -342,17 +393,34 @@ func (a *app) handleBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 type settleRequest struct {
-	AggID         string  `json:"AggId"`
-	ResourceID    string  `json:"ResourceId"`
-	MeteringItem  string  `json:"MeteringItem"`
-	TotalQuantity string  `json:"TotalQuantity"` // decimal, e.g. "2" or "1.99998"
-	HourStart     string  `json:"HourStart"`     // RFC3339
-	CoveredRatio  int     `json:"CoveredRatio"`
-	ProductCode   string  `json:"ProductCode"`
-	UnitPrice     string  `json:"UnitPrice"` // decimal, e.g. "0.25"
-	SnapshotID    string  `json:"SnapshotId"`
+	AggID         string   `json:"AggId"`
+	ResourceID    string   `json:"ResourceId"`
+	MeteringItem  string   `json:"MeteringItem"`
+	TotalQuantity string   `json:"TotalQuantity"` // decimal, e.g. "2" or "1.99998"
+	HourStart     string   `json:"HourStart"`     // RFC3339
+	CoveredRatio  int      `json:"CoveredRatio"`
+	ProductCode   string   `json:"ProductCode"`
+	UnitPrice     string   `json:"UnitPrice"` // decimal, e.g. "0.25"
+	SnapshotID    string   `json:"SnapshotId"`
 	PoolRefs      []string `json:"PoolRefs"` // optional refs to restrict which pools apply
 }
+
+// Column widths of settle_charge (svc-billing V4). The settlement record is
+// written after the money moved, so a value the column cannot hold is refused
+// before anything is charged rather than failing that final write.
+const (
+	maxSettleResourceIDLen   = 64
+	maxSettleMeteringItemLen = 64
+	maxSettleProductCodeLen  = 32
+	maxSettleSnapshotIDLen   = 64
+)
+
+// settleLockTimeout bounds one settlement's critical section: the wait for the
+// account's settlement lock plus the commit. The lock is held by a transaction
+// bound to this deadline (it outlives a client that hangs up, so a half-done
+// commit is not abandoned mid-way), and a settlement that overruns it loses the
+// lock — the record's version guard then refuses its stale write.
+const settleLockTimeout = 30 * time.Second
 
 // handleSettle charges one hourly aggregate against the account's pool set.
 func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +454,18 @@ func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "invalid UnitPrice")
 		return
 	}
+	// The ChargeID is the cash debit's ledger key and biz key (VARCHAR(64)), and
+	// the idempotency key of the whole settlement: an empty AggId would make
+	// every such settlement the same charge.
+	if strings.TrimSpace(req.AggID) == "" || len(billing.ChargeID(req.AggID)) > ledger.MaxKeyLen {
+		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "AggId is required and must be at most 60 bytes")
+		return
+	}
+	if len(req.ResourceID) > maxSettleResourceIDLen || len(req.MeteringItem) > maxSettleMeteringItemLen ||
+		len(req.ProductCode) > maxSettleProductCodeLen || len(req.SnapshotID) > maxSettleSnapshotIDLen {
+		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "ResourceId, MeteringItem, ProductCode or SnapshotId is too long")
+		return
+	}
 
 	usage := metering.HourlyUsage{
 		AggID:         req.AggID,
@@ -398,107 +478,341 @@ func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Idempotency: the ChargeID derived from the aggregate is deterministic
-	// (billing.ChargeID(AggID)), so it doubles as the settle idempotency key.
-	// settleMu serializes the check-settle-commit sequence: a concurrent or
-	// retried duplicate returns the cached original response (200) and never
-	// deducts the pools or the ledger a second time.
-	idemKey := fmt.Sprintf("%d|%s", acct, billing.ChargeID(req.AggID))
-	a.settleMu.Lock()
-	defer a.settleMu.Unlock()
-	if cached, ok := a.settled[idemKey]; ok {
-		writeJSON(w, http.StatusOK, cached)
+	// (billing.ChargeID(AggID)), so it doubles as the settle idempotency key. A
+	// settled charge is final on every replica: the stored result is replayed
+	// (200) and the pools and the ledger are never touched a second time.
+	chargeID := billing.ChargeID(req.AggID)
+	if rec, found, err := a.settles.GetSettle(acct, chargeID); err != nil {
+		slog.Error("settle record lookup failed", "account", acct, "charge", chargeID, "err", err)
+		writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+		return
+	} else if found && rec.Settled {
+		writeJSON(w, http.StatusOK, settleResponse(rec.Charge))
 		return
 	}
 
-	// forAccount returns a copy, so the waterfall below never reads the shared
-	// registry slice outside the registry's lock.
-	pools := a.pools.forAccount(acct, req.PoolRefs)
-	// Inject the account's active resource packs as waterfall pools (rank 0,
-	// consumed before cash — 01§12.3). The waterfall reads Available without
-	// mutating; the consume intent is committed below via Ledger.Consume.
-	now := time.Now()
-	packPools, err := reservepack.PoolsForAccount(a.packStore, acct, now)
+	// One account settles one charge at a time, across every replica: the
+	// waterfall decides against the cash balance and the packs it reads, and a
+	// concurrent settlement of the same account (or a duplicate of this one)
+	// must not decide against the same figures.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), settleLockTimeout)
+	defer cancel()
+	release, err := a.settles.LockAccount(ctx, acct)
 	if err != nil {
-		slog.Error("pack pool lookup failed", "account", acct, "err", err)
+		slog.Warn("settle lock unavailable", "account", acct, "charge", chargeID, "err", err)
+		writeErr(w, http.StatusServiceUnavailable, "Billing.SettleBusy", "settlement for this account is busy, retry")
+		return
+	}
+	defer release()
+
+	rec, found, err := a.settles.GetSettle(acct, chargeID)
+	if err != nil {
+		slog.Error("settle record lookup failed", "account", acct, "charge", chargeID, "err", err)
 		writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
 		return
 	}
-	pools = append(pools, packPools...)
-	s, err := a.engine.Settle(usage, unitPrice, req.ProductCode, req.SnapshotID, pools)
-	if err != nil {
-		slog.Warn("settle rejected", "account", acct, "agg", req.AggID, "err", err)
-		writeErr(w, http.StatusBadRequest, "Billing.SettleFailed", "settlement failed")
+	if found && rec.Settled {
+		// A duplicate settled it while this request waited for the lock.
+		writeJSON(w, http.StatusOK, settleResponse(rec.Charge))
+		return
+	}
+	if !found {
+		rec = billing.SettleRecord{AccountID: acct, ChargeID: chargeID}
+	}
+
+	s, registryDeductions, apiErr := a.settleCommit(acct, req, usage, unitPrice, &rec)
+	if apiErr != nil {
+		writeErr(w, apiErr.status, apiErr.code, apiErr.msg)
 		return
 	}
 
-	// Commit the deduction intent: spend the pools and debit the cash portion
-	// from the ledger. The pool and ledger writes are both in-memory here; in
-	// production they share one local transaction. settleMu is held across the
-	// whole commit so duplicates cannot interleave.
-	a.pools.commit(acct, req.PoolRefs, s.Charge.Deductions)
-	for _, d := range s.Charge.Deductions {
-		if d.Source == billing.SourceResourcePack {
-			// Commit the pack consumption with the charge id as the idempotency
-			// key, so a retried settlement is a no-op against the pack ledger.
-			if _, _, _, err := a.packs.Consume(d.Ref, req.ProductCode, d.Amount, s.Charge.ChargeID, s.Charge.ChargeID); err != nil && !errors.Is(err, reservepack.ErrPackTerminal) && !errors.Is(err, reservepack.ErrPackExhausted) && !errors.Is(err, reservepack.ErrInsufficientQuota) {
-				if errors.Is(err, reservepack.ErrVersionConflict) {
-					// A concurrent settlement moved the pack under us; the
-					// caller can retry the same aggregate (the charge id is
-					// the idempotency key, so a retry cannot double-charge).
-					writeErr(w, http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent pack update, retry")
-					return
-				}
-				slog.Error("pack consume failed", "account", acct, "pack", d.Ref, "err", err)
-				writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
-				return
-			}
-		}
-	}
-	if !s.Charge.PayAmount.IsZero() {
-		if _, _, err := a.ledger.Consume(acct, s.Charge.PayAmount, "bill",
-			s.Charge.ChargeID, s.Charge.ChargeID, "settle "+req.AggID); err != nil && !errors.Is(err, ledger.ErrDuplicateEntry) {
-			// ErrDuplicateEntry means an earlier attempt already debited this
-			// charge — that is idempotent success, not an error.
-			slog.Error("ledger consume failed", "account", acct, "charge", s.Charge.ChargeID, "err", err)
-			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+	// Record the charge: from here on every replay — on any replica, after any
+	// restart — returns it instead of settling again, and bills include it.
+	rec.Settled = true
+	rec.CashPaid = s.Charge.PayAmount
+	rec.Charge = s.Charge
+	if err := a.settles.SaveSettle(&rec); err != nil {
+		// Packs and cash are committed under the ChargeID, so a retry resumes
+		// (replaying both) and records the same charge.
+		slog.Error("settle record write failed", "account", acct, "charge", chargeID, "err", err)
+		if errors.Is(err, billing.ErrSettleConflict) {
+			writeErr(w, http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent settlement update, retry")
 			return
 		}
+		writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+		return
 	}
-	a.charges.append(s.Charge)
+	// Registry pools (coupons) last, once the charge is recorded: a failed
+	// attempt leaves them untouched for the retry, and a recorded charge is
+	// replayed above, never committed twice.
+	a.pools.commit(acct, req.PoolRefs, registryDeductions)
+	writeJSON(w, http.StatusOK, settleResponse(rec.Charge))
+}
 
-	deductions := make([]map[string]any, 0, len(s.Charge.Deductions))
-	for _, d := range s.Charge.Deductions {
+// settleResponse renders a settled charge. The first settlement and every
+// replay render the stored charge, so they answer byte-for-byte the same.
+func settleResponse(c billing.Charge) map[string]any {
+	deductions := make([]map[string]any, 0, len(c.Deductions))
+	for _, d := range c.Deductions {
 		deductions = append(deductions, map[string]any{
 			"Source": d.Source,
 			"Ref":    d.Ref,
 			"Amount": d.Amount.String(),
 		})
 	}
-
-	resp := map[string]any{
+	return map[string]any{
 		"Charge": map[string]any{
-			"ChargeId":      s.Charge.ChargeID,
-			"AccountId":     s.Charge.AccountID,
-			"ResourceId":    s.Charge.ResourceID,
-			"ProductCode":   s.Charge.ProductCode,
-			"MeteringItem":  s.Charge.MeteringItem,
-			"BillPeriod":    s.Charge.BillPeriod,
-			"Quantity":      s.Charge.Quantity.String(),
-			"UnitPrice":     s.Charge.UnitPrice.String(),
-			"PretaxAmount":  s.Charge.PretaxAmount.String(),
-			"PayAmount":     s.Charge.PayAmount.String(),
-			"CoveredRatio":  s.Charge.CoveredRatio,
-			"Incomplete":    s.Charge.Incomplete(),
-			"Reconciles":    s.Charge.Reconciles(),
-			"SnapshotId":    s.Charge.SnapshotID,
-			"SettledAt":     s.Charge.SettledAt.Format(time.RFC3339),
+			"ChargeId":     c.ChargeID,
+			"AccountId":    c.AccountID,
+			"ResourceId":   c.ResourceID,
+			"ProductCode":  c.ProductCode,
+			"MeteringItem": c.MeteringItem,
+			"BillPeriod":   c.BillPeriod,
+			"Quantity":     c.Quantity.String(),
+			"UnitPrice":    c.UnitPrice.String(),
+			"PretaxAmount": c.PretaxAmount.String(),
+			"PayAmount":    c.PayAmount.String(),
+			"CoveredRatio": c.CoveredRatio,
+			"Incomplete":   c.Incomplete(),
+			"Reconciles":   c.Reconciles(),
+			"SnapshotId":   c.SnapshotID,
+			"SettledAt":    c.SettledAt.Format(time.RFC3339),
 		},
 		"Deductions": deductions,
-		"Shortfall":  s.Shortfall.String(),
-		"InArrears":  s.InArrears,
+		// Settlement.Shortfall is the charge's own shortfall; arrears is
+		// derived from it, so a replay cannot disagree with the original.
+		"Shortfall": c.Shortfall.String(),
+		"InArrears": !c.Shortfall.IsZero(),
 	}
-	a.settled[idemKey] = resp
-	writeJSON(w, http.StatusOK, resp)
+}
+
+// apiError is a handler verdict carried out of a helper.
+type apiError struct {
+	status    int
+	code, msg string
+}
+
+var errSettleInternal = &apiError{http.StatusInternalServerError, "Billing.InternalError", "internal error"}
+
+// pinnedPacks renders the consumed pack quota as waterfall pools that cover
+// exactly what was taken. Pack tier goes first, so each pinned pool is spent in
+// full and the remainder flows to coupons, then cash.
+func pinnedPacks(taken map[string]pricing.Amount) []billing.Pool {
+	out := make([]billing.Pool, 0, len(taken))
+	for ref, amount := range taken {
+		if amount.IsZero() || amount.IsNegative() {
+			continue
+		}
+		out = append(out, billing.Pool{Source: billing.SourceResourcePack, Ref: ref, Available: amount})
+	}
+	return out
+}
+
+// withoutCash drops registry cash pools: cash lives in the ledger, and a static
+// BALANCE pool would let the waterfall "pay" with money the ledger never debits.
+func withoutCash(pools []billing.Pool) []billing.Pool {
+	out := make([]billing.Pool, 0, len(pools))
+	for _, p := range pools {
+		if p.Source != billing.SourceBalance {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// saveProgress persists the plan after a failed step, best effort: the pack
+// consumes it records are idempotent on the ChargeID, so a retry that finds an
+// older plan replays them and arrives at the same figures.
+func (a *app) saveProgress(rec *billing.SettleRecord) {
+	if rec.Version == 0 {
+		return
+	}
+	if err := a.settles.SaveSettle(rec); err != nil {
+		slog.Warn("settle plan progress not saved", "account", rec.AccountID, "charge", rec.ChargeID, "err", err)
+	}
+}
+
+// settleCommit computes and commits one charge, in an order that a failure at
+// any step — or a crash, or a retry landing on another replica — can be resumed
+// from without double-charging. Progress lives in rec, which the caller loaded
+// from (and the steps below write back to) the settle store:
+//
+//  1. resource packs — the waterfall's pack intent is persisted BEFORE any pack
+//     moves, then each pack is consumed with the ChargeID as key and pinned at
+//     the quota actually taken (a pack that ran dry or went terminal covers
+//     less, or nothing, and its share moves down the waterfall). A resumed plan
+//     replays the intent's consumes — the pack ledger returns what each
+//     originally took — and never recomputes them;
+//  2. cash — the ledger's own balance is the BALANCE pool, and the cash share is
+//     debited under the ChargeID (re-read and recomputed if the balance moved);
+//  3. registry pools (coupons) — returned to the caller, which commits them only
+//     once the charge is recorded.
+func (a *app) settleCommit(acct int64, req settleRequest, usage metering.HourlyUsage, unitPrice pricing.Amount, rec *billing.SettleRecord) (billing.Settlement, []billing.Deduction, *apiError) {
+	chargeID := rec.ChargeID
+	// forAccount returns a copy, so the waterfall below never reads the shared
+	// registry slice outside the registry's lock.
+	registry := withoutCash(a.pools.forAccount(acct, req.PoolRefs))
+	if rec.PackIntent == nil {
+		rec.PackIntent = map[string]pricing.Amount{}
+	}
+	if rec.PackTaken == nil {
+		rec.PackTaken = map[string]pricing.Amount{}
+	}
+	storePacks := make(map[string]bool, len(rec.PackIntent))
+	for ref := range rec.PackIntent {
+		storePacks[ref] = true
+	}
+
+	if !rec.PacksDone {
+		if len(rec.PackIntent) == 0 {
+			// A fresh plan: decide what each active pack is asked to cover.
+			packPools, err := reservepack.PoolsForAccount(a.packStore, acct, time.Now())
+			if err != nil {
+				slog.Error("pack pool lookup failed", "account", acct, "err", err)
+				return billing.Settlement{}, nil, errSettleInternal
+			}
+			for _, p := range packPools {
+				storePacks[p.Ref] = true
+			}
+			cash, apiErr := a.cashPool(acct, chargeID)
+			if apiErr != nil {
+				return billing.Settlement{}, nil, apiErr
+			}
+			pools := append(append(append([]billing.Pool{}, registry...), packPools...), cash...)
+			s, serr := a.engine.Settle(usage, unitPrice, req.ProductCode, req.SnapshotID, pools)
+			if serr != nil {
+				slog.Warn("settle rejected", "account", acct, "agg", req.AggID, "err", serr)
+				return billing.Settlement{}, nil, &apiError{http.StatusBadRequest, "Billing.SettleFailed", "settlement failed"}
+			}
+			for _, d := range s.Charge.Deductions {
+				if d.Source == billing.SourceResourcePack && storePacks[d.Ref] {
+					rec.PackIntent[d.Ref] = rec.PackIntent[d.Ref].Add(d.Amount)
+				}
+			}
+			if len(rec.PackIntent) > 0 {
+				// Durable BEFORE the first consume: whatever happens next, a
+				// retry knows every pack that may hold a consume under this key.
+				if err := a.settles.SaveSettle(rec); err != nil {
+					slog.Error("settle plan write failed", "account", acct, "charge", chargeID, "err", err)
+					if errors.Is(err, billing.ErrSettleConflict) {
+						return billing.Settlement{}, nil, &apiError{http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent settlement update, retry"}
+					}
+					return billing.Settlement{}, nil, errSettleInternal
+				}
+			}
+		}
+
+		refs := make([]string, 0, len(rec.PackIntent))
+		for ref := range rec.PackIntent {
+			refs = append(refs, ref)
+		}
+		sort.Strings(refs)
+		for _, ref := range refs {
+			if _, pinned := rec.PackTaken[ref]; pinned {
+				continue
+			}
+			// The charge id is the consume key: a replay returns the entry an
+			// earlier attempt applied, and its Amount — not the request — is
+			// what the pack actually covered.
+			_, entry, _, err := a.packs.Consume(ref, req.ProductCode, rec.PackIntent[ref], chargeID, chargeID)
+			switch {
+			case err == nil:
+				rec.PackTaken[ref] = entry.Amount
+			case errors.Is(err, reservepack.ErrPackTerminal), errors.Is(err, reservepack.ErrPackExhausted),
+				errors.Is(err, reservepack.ErrInsufficientQuota), errors.Is(err, reservepack.ErrPackExpired),
+				errors.Is(err, reservepack.ErrPackNotFound):
+				// The pack could not cover anything after all: its share is
+				// NOT recorded as pack coverage, it moves to coupons/cash.
+				rec.PackTaken[ref] = 0
+			case errors.Is(err, reservepack.ErrVersionConflict):
+				// A concurrent writer (a refund, an expiry sweep) moved the
+				// pack under us; the caller can retry the same aggregate (the
+				// plan keeps what was taken).
+				a.saveProgress(rec)
+				return billing.Settlement{}, nil, &apiError{http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent pack update, retry"}
+			default:
+				slog.Error("pack consume failed", "account", acct, "pack", ref, "err", err)
+				a.saveProgress(rec)
+				return billing.Settlement{}, nil, errSettleInternal
+			}
+		}
+		rec.PacksDone = true
+		if rec.Version > 0 {
+			if err := a.settles.SaveSettle(rec); err != nil {
+				slog.Error("settle plan write failed", "account", acct, "charge", chargeID, "err", err)
+				if errors.Is(err, billing.ErrSettleConflict) {
+					return billing.Settlement{}, nil, &apiError{http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent settlement update, retry"}
+				}
+				return billing.Settlement{}, nil, errSettleInternal
+			}
+		}
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		cash, apiErr := a.cashPool(acct, chargeID)
+		if apiErr != nil {
+			return billing.Settlement{}, nil, apiErr
+		}
+		pools := append(append(append([]billing.Pool{}, registry...), pinnedPacks(rec.PackTaken)...), cash...)
+		s, err := a.engine.Settle(usage, unitPrice, req.ProductCode, req.SnapshotID, pools)
+		if err != nil {
+			slog.Warn("settle rejected", "account", acct, "agg", req.AggID, "err", err)
+			return billing.Settlement{}, nil, &apiError{http.StatusBadRequest, "Billing.SettleFailed", "settlement failed"}
+		}
+		if !s.Charge.PayAmount.IsZero() {
+			_, _, err := a.ledger.Consume(acct, s.Charge.PayAmount, "bill", chargeID, chargeID, "settle "+req.AggID)
+			switch {
+			case err == nil, errors.Is(err, ledger.ErrDuplicateEntry):
+				// ErrDuplicateEntry: an earlier attempt already debited exactly
+				// this — idempotent success.
+			case errors.Is(err, ledger.ErrInsufficientBalance), errors.Is(err, ledger.ErrVersionConflict):
+				// The balance moved since it was read: recompute against it.
+				continue
+			case errors.Is(err, ledger.ErrIdempotencyMismatch):
+				slog.Error("settle cash key conflict", "account", acct, "charge", chargeID, "err", err)
+				return billing.Settlement{}, nil, &apiError{http.StatusConflict, "Billing.IdempotencyConflict", "charge id already used for a different debit"}
+			default:
+				slog.Error("ledger consume failed", "account", acct, "charge", chargeID, "err", err)
+				return billing.Settlement{}, nil, errSettleInternal
+			}
+		}
+		// Only what came from the registry is the caller's to commit: store
+		// packs are committed in the pack ledger, cash in the cash ledger.
+		registryDeductions := make([]billing.Deduction, 0, len(s.Charge.Deductions))
+		for _, d := range s.Charge.Deductions {
+			if d.Source == billing.SourceBalance || (d.Source == billing.SourceResourcePack && storePacks[d.Ref]) {
+				continue
+			}
+			registryDeductions = append(registryDeductions, d)
+		}
+		return s, registryDeductions, nil
+	}
+	return billing.Settlement{}, nil, &apiError{http.StatusConflict, "Billing.ConcurrentUpdate", "concurrent balance update, retry"}
+}
+
+// cashPool is the account's cash as a waterfall pool, read from the ledger. If
+// this charge's cash share was already debited (an attempt that failed or died
+// after the debit), the pool is pinned at that debit so the retry reproduces
+// it instead of computing a different figure under the same key.
+func (a *app) cashPool(acct int64, chargeID string) ([]billing.Pool, *apiError) {
+	if prior, found, err := a.ledger.FindEntry(acct, chargeID); err != nil {
+		slog.Error("settle cash lookup failed", "account", acct, "charge", chargeID, "err", err)
+		return nil, errSettleInternal
+	} else if found {
+		if prior.Type != ledger.EntryConsume {
+			return nil, &apiError{http.StatusConflict, "Billing.IdempotencyConflict", "charge id already used for a different ledger entry"}
+		}
+		return []billing.Pool{{Source: billing.SourceBalance, Available: prior.Amount}}, nil
+	}
+	bal, err := a.ledger.Balance(acct)
+	if err != nil {
+		slog.Error("balance lookup failed", "account", acct, "err", err)
+		return nil, errSettleInternal
+	}
+	if bal.Available.IsZero() || bal.Available.IsNegative() {
+		return nil, nil
+	}
+	return []billing.Pool{{Source: billing.SourceBalance, Available: bal.Available}}, nil
 }
 
 // handleBills summarizes the account's charges for a billing period.
@@ -516,13 +830,21 @@ func (a *app) handleBills(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "missing period query param (YYYY-MM)")
 		return
 	}
-	bill := billing.Summarize(acct, period, a.charges.forAccount(acct))
+	// Charges come from the settle store, so a bill survives restarts and is
+	// the same on every replica.
+	charges, err := a.settles.ListCharges(acct, period)
+	if err != nil {
+		slog.Error("bill charge lookup failed", "account", acct, "period", period, "err", err)
+		writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+		return
+	}
+	bill := billing.Summarize(acct, period, charges)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"AccountId":        bill.AccountID,
-		"BillPeriod":       bill.BillPeriod,
-		"TotalAmount":      bill.TotalAmount.String(),
-		"PaidAmount":       bill.PaidAmount.String(),
-		"ChargeCount":      bill.ChargeCount,
+		"AccountId":         bill.AccountID,
+		"BillPeriod":        bill.BillPeriod,
+		"TotalAmount":       bill.TotalAmount.String(),
+		"PaidAmount":        bill.PaidAmount.String(),
+		"ChargeCount":       bill.ChargeCount,
 		"IncompleteCharges": bill.IncompleteCharges,
 		"UnreconciledCount": bill.UnreconciledCount,
 		"Final":             bill.Final(),
@@ -558,8 +880,8 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 			PackID      string `json:"packId"`
 			ProductCode string `json:"productCode"`
 			SKUCode     string `json:"skuCode"`
-			FaceValue   string `json:"faceValue"`   // decimal yuan
-			ExpireAt    string `json:"expireAt"`    // RFC3339, empty = no expiry
+			FaceValue   string `json:"faceValue"` // decimal yuan
+			ExpireAt    string `json:"expireAt"`  // RFC3339, empty = no expiry
 			OrderKey    string `json:"orderKey"`
 		}
 		limitBody(w, r)
@@ -582,6 +904,17 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "orderKey is required")
 			return
 		}
+		if strings.TrimSpace(req.PackID) == "" {
+			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "packId is required")
+			return
+		}
+		// Column widths: resource_pack.pack_id / sku_code VARCHAR(64),
+		// product_code VARCHAR(32), and the order key is the ledger biz_key
+		// (VARCHAR(64)).
+		if len(req.PackID) > 64 || len(req.SKUCode) > 64 || len(req.ProductCode) > 32 || len(req.OrderKey) > ledger.MaxKeyLen {
+			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "packId, skuCode, productCode or orderKey is too long")
+			return
+		}
 		var expire time.Time
 		if req.ExpireAt != "" {
 			expire, err = time.Parse(time.RFC3339, req.ExpireAt)
@@ -590,21 +923,28 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		a.packMu.Lock()
+		defer a.packMu.Unlock()
 		// Pre-flight the pack state BEFORE taking money: re-purchasing a pack id
 		// under a different order key is rejected by the ledger, and discovering
-		// that after the debit would need a compensating refund.
+		// that after the debit would need a compensating refund. Pack ids are
+		// global, so a pack owned by ANOTHER account is refused outright — never
+		// replayed to this caller as if it were theirs.
 		if existing, ok, err := a.packStore.GetPack(req.PackID); err != nil {
 			slog.Error("pack lookup failed", "account", acct, "pack", req.PackID, "err", err)
 			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
 			return
 		} else if ok {
+			if existing.AccountID != acct {
+				writeErr(w, http.StatusConflict, "Billing.PackExists", "pack id already purchased")
+				return
+			}
 			// Same order key: idempotent replay, nothing to charge again.
-			if prior, found, err := a.packStore.FindByIdempotencyKey(req.PackID, req.OrderKey); err != nil {
+			if _, found, err := a.packStore.FindByIdempotencyKey(req.PackID, req.OrderKey); err != nil {
 				slog.Error("pack idempotency lookup failed", "account", acct, "pack", req.PackID, "err", err)
 				writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
 				return
 			} else if found {
-				_ = prior
 				writeJSON(w, http.StatusOK, packToMap(existing))
 				return
 			}
@@ -616,24 +956,65 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 		// free-quota mint (and, since packs are waterfall rank 0, free compute).
 		// Debit the face value from the cash balance first; production does the
 		// debit, the credit and the journal write in one local transaction.
-		payKey := "pack:" + req.OrderKey
-		if _, _, err := a.ledger.Consume(acct, face, "pack", req.OrderKey, payKey,
-			"purchase resource pack "+req.PackID); err != nil && !errors.Is(err, ledger.ErrDuplicateEntry) {
-			if errors.Is(err, ledger.ErrInsufficientBalance) {
-				writeErr(w, http.StatusConflict, "Billing.InsufficientBalance", "insufficient balance for the pack")
+		//
+		// The ledger key binds the pack AND the order. Keyed on the order alone,
+		// buying pack A (¥1) and then pack B (¥1,000,000) under one orderKey
+		// replayed A's debit as B's payment — B was free — and a failed B then
+		// "refunded" ¥1,000,000 that was never taken.
+		payKey := packLedgerKey("pack:", req.PackID, req.OrderKey)
+		undoKey := packLedgerKey("pack-undo:", req.PackID, req.OrderKey)
+		_, _, err = a.ledger.Consume(acct, face, "pack", req.OrderKey, payKey,
+			"purchase resource pack "+req.PackID)
+		switch {
+		case err == nil:
+		case errors.Is(err, ledger.ErrDuplicateEntry):
+			// An earlier attempt at THIS purchase (same pack, order and price)
+			// already paid. If that attempt also reversed its payment, the
+			// purchase is unpaid: replaying the debit would mint a free pack.
+			if _, reversed, ferr := a.ledger.FindEntry(acct, undoKey); ferr != nil {
+				slog.Error("pack reversal lookup failed", "account", acct, "pack", req.PackID, "err", ferr)
+				writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+				return
+			} else if reversed {
+				writeErr(w, http.StatusConflict, "Billing.PurchaseReversed", "this purchase was reversed; use a new order key")
 				return
 			}
+		case errors.Is(err, ledger.ErrIdempotencyMismatch):
+			writeErr(w, http.StatusConflict, "Billing.IdempotencyConflict", "order key already used for a different payment")
+			return
+		case errors.Is(err, ledger.ErrInsufficientBalance):
+			writeErr(w, http.StatusConflict, "Billing.InsufficientBalance", "insufficient balance for the pack")
+			return
+		default:
 			slog.Error("pack payment failed", "account", acct, "pack", req.PackID, "err", err)
 			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
 			return
 		}
 		pack, _, err := a.packs.Purchase(req.PackID, acct, req.ProductCode, req.SKUCode, face, expire, req.OrderKey)
+		if err == nil && pack.AccountID != acct {
+			// Lost a cross-instance race to another account's purchase of the
+			// same pack id and order key: that pack is not ours.
+			err = reservepack.ErrPackExists
+		}
 		if err != nil {
-			// The debit already happened; give it back so a rejected purchase
-			// cannot leave cash with nothing to show for it.
-			if _, _, rerr := a.ledger.Refund(acct, face, req.OrderKey, "pack-undo:"+req.OrderKey,
-				"pack purchase reversed "+req.PackID); rerr != nil && !errors.Is(rerr, ledger.ErrDuplicateEntry) {
-				slog.Error("pack purchase compensation failed", "account", acct, "pack", req.PackID, "err", rerr)
+			// The pack was not credited to this purchase. Give back exactly the
+			// debit this purchase made — the journal's amount, under a key that
+			// can be applied once — and nothing when no debit exists.
+			if _, credited, ferr := a.packStore.FindByIdempotencyKey(req.PackID, req.OrderKey); ferr == nil && credited {
+				// A concurrent attempt (another instance) completed this very
+				// purchase for this account: it is paid and credited.
+				if cur, ok, gerr := a.packStore.GetPack(req.PackID); gerr == nil && ok && cur.AccountID == acct {
+					writeJSON(w, http.StatusOK, packToMap(cur))
+					return
+				}
+			}
+			if paid, found, ferr := a.ledger.FindEntry(acct, payKey); ferr != nil {
+				slog.Error("pack purchase compensation lookup failed", "account", acct, "pack", req.PackID, "err", ferr)
+			} else if found && paid.Type == ledger.EntryConsume {
+				if _, _, rerr := a.ledger.Refund(acct, paid.Amount, req.OrderKey, undoKey,
+					"pack purchase reversed "+req.PackID); rerr != nil && !errors.Is(rerr, ledger.ErrDuplicateEntry) {
+					slog.Error("pack purchase compensation failed", "account", acct, "pack", req.PackID, "err", rerr)
+				}
 			}
 			slog.Warn("pack purchase failed", "account", acct, "pack", req.PackID, "err", err)
 			writeErr(w, http.StatusBadRequest, "Billing.PurchaseFailed", "pack purchase failed")
@@ -643,6 +1024,21 @@ func (a *app) handleReservePacks(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// packLedgerKey names a pack purchase's ledger movement under prefix ("pack:"
+// for the debit, "pack-undo:" for its reversal). It binds the pack id AND the
+// order key. The readable form prefix+packID+":"+orderKey is used when it fits
+// the journal's VARCHAR(64); otherwise prefix+"sha256-"+digest of both. The two
+// forms cannot collide: a readable key always has a ':' after the prefix, a
+// digest never does.
+func packLedgerKey(prefix, packID, orderKey string) string {
+	if k := prefix + packID + ":" + orderKey; len(k) <= ledger.MaxKeyLen {
+		return k
+	}
+	sum := sha256.Sum256([]byte(packID + "\x00" + orderKey))
+	k := prefix + "sha256-" + hex.EncodeToString(sum[:])
+	return k[:ledger.MaxKeyLen]
 }
 
 // handleReservePackSweep runs the expiry sweep for the caller's account.
@@ -696,7 +1092,12 @@ func (a *app) handleInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		invs := a.invoices.ListByAccount(acct)
+		invs, err := a.invoices.List(acct)
+		if err != nil {
+			slog.Error("invoice list failed", "account", acct, "err", err)
+			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+			return
+		}
 		out := make([]map[string]any, 0, len(invs))
 		for _, inv := range invs {
 			out = append(out, invoiceToMap(inv))
@@ -704,15 +1105,19 @@ func (a *app) handleInvoices(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"invoices": out, "total": len(out)})
 	case http.MethodPost:
 		var req struct {
-			InvoiceID  string            `json:"invoiceId"`
-			BillPeriod string            `json:"billPeriod"`
-			Title      string            `json:"title"`
-			TaxNo      string            `json:"taxNo"`
-			Items      []invoiceLineIn   `json:"items"`
+			InvoiceID  string          `json:"invoiceId"`
+			BillPeriod string          `json:"billPeriod"`
+			Title      string          `json:"title"`
+			TaxNo      string          `json:"taxNo"`
+			Items      []invoiceLineIn `json:"items"`
 		}
 		limitBody(w, r)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "malformed request")
+			return
+		}
+		if msg := invoiceFieldsInvalid(req.InvoiceID, req.BillPeriod, req.Title, req.TaxNo); msg != "" {
+			writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", msg)
 			return
 		}
 		items := make([]invoice.LineItem, 0, len(req.Items))
@@ -722,12 +1127,43 @@ func (a *app) handleInvoices(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "invalid item amount")
 				return
 			}
+			if amt <= 0 {
+				writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "item amounts must be positive")
+				return
+			}
+			// invoice_item.amount is DECIMAL(12,2): a 发票 is issued in whole 分.
+			if int64(amt)%10_000 != 0 {
+				writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "item amounts must be whole 分 (at most 2 decimals)")
+				return
+			}
+			if utf8.RuneCountInString(it.Description) > maxInvoiceTextRunes {
+				writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "item description is too long")
+				return
+			}
 			items = append(items, invoice.LineItem{Description: it.Description, Amount: amt})
 		}
-		inv, err := a.invoices.Draft(req.InvoiceID, acct, req.BillPeriod, req.Title, req.TaxNo, items)
+		spent, err := a.cashSpent(acct)
 		if err != nil {
-			slog.Warn("invoice draft failed", "account", acct, "invoice", req.InvoiceID, "err", err)
-			writeErr(w, http.StatusBadRequest, "Billing.InvoiceDraftFailed", "invoice draft failed")
+			slog.Error("invoiceable amount lookup failed", "account", acct, "err", err)
+			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+			return
+		}
+		inv, err := a.invoices.Draft(acct, req.InvoiceID, req.BillPeriod, req.Title, req.TaxNo, items, spent)
+		if err != nil {
+			var exceeds *exceedsSpendError
+			switch {
+			case errors.As(err, &exceeds):
+				writeErr(w, http.StatusConflict, "Billing.InvoiceExceedsSpend",
+					"开票金额超过可开票额度(已消费金额减去已开票金额): 可开 "+exceeds.Avail.String())
+			case errors.Is(err, invoice.ErrInvoiceExists):
+				writeErr(w, http.StatusConflict, "Billing.InvoiceIdTaken", "invoice id is not available")
+			case isInvoiceRuleError(err):
+				slog.Warn("invoice draft refused", "account", acct, "invoice", req.InvoiceID, "err", err)
+				writeErr(w, http.StatusBadRequest, "Billing.InvoiceDraftFailed", "invoice draft failed")
+			default:
+				slog.Error("invoice draft failed", "account", acct, "invoice", req.InvoiceID, "err", err)
+				writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, invoiceToMap(inv))
@@ -741,6 +1177,49 @@ type invoiceLineIn struct {
 	Amount      string `json:"amount"`
 }
 
+// Column widths of svc-billing V3's invoice tables. A longer value is a client
+// error, not a 500 (or, without strict mode, a silently truncated tax document).
+const (
+	maxInvoiceIDLen     = 64  // invoice.invoice_id
+	maxInvoiceTextRunes = 256 // invoice.title, invoice_item.description
+	maxTaxNoRunes       = 64  // invoice.tax_no
+)
+
+// invoiceFieldsInvalid checks a draft's fields against the columns they land in.
+func invoiceFieldsInvalid(id, period, title, taxNo string) string {
+	switch {
+	case len(id) > maxInvoiceIDLen:
+		return "invoiceId is too long"
+	case period != "" && !validBillPeriod(period):
+		return "billPeriod must be YYYY-MM"
+	case utf8.RuneCountInString(title) > maxInvoiceTextRunes:
+		return "title is too long"
+	case utf8.RuneCountInString(taxNo) > maxTaxNoRunes:
+		return "taxNo is too long"
+	}
+	return ""
+}
+
+// validBillPeriod accepts a YYYY-MM month (invoice.bill_period CHAR(7)).
+func validBillPeriod(p string) bool {
+	_, err := time.Parse("2006-01", p)
+	return err == nil && len(p) == 7
+}
+
+// isInvoiceRuleError reports a domain refusal (pkg-go/invoice) — a client
+// error, as opposed to a store failure.
+func isInvoiceRuleError(err error) bool {
+	for _, e := range []error{invoice.ErrInvoiceNotFound, invoice.ErrInvoiceNotDraft, invoice.ErrInvoiceExists,
+		invoice.ErrInvoiceTerminal, invoice.ErrInvoiceAlreadyVoid, invoice.ErrMissingReversalID,
+		invoice.ErrReversalIDTaken, invoice.ErrVoidAmountMismatch, invoice.ErrEmptyTitle,
+		invoice.ErrEmptyItems, invoice.ErrNonPositiveItem} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleInvoiceIssue promotes a DRAFT invoice to ISSUED.
 func (a *app) handleInvoiceIssue(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -751,22 +1230,40 @@ func (a *app) handleInvoiceIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req struct{ InvoiceID string `json:"invoiceId"` }
+	var req struct {
+		InvoiceID string `json:"invoiceId"`
+	}
 	limitBody(w, r)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "malformed request")
 		return
 	}
-	// IDOR guard: the invoice must belong to the caller's account. A foreign or
-	// unknown invoice is reported as 404 (not 403) so IDs cannot be enumerated.
-	if existing, ok := a.invoices.Get(req.InvoiceID); !ok || existing.AccountID != acct {
-		writeErr(w, http.StatusNotFound, "Billing.InvoiceNotFound", "invoice not found")
+	// Re-check the quota at issue time (inside the store, under the account's
+	// invoice lock): a refund since the draft may have shrunk what the account
+	// has actually paid.
+	spent, err := a.cashSpent(acct)
+	if err != nil {
+		slog.Error("invoiceable amount lookup failed", "account", acct, "err", err)
+		writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
 		return
 	}
-	inv, err := a.invoices.Issue(req.InvoiceID)
+	inv, err := a.invoices.Issue(acct, req.InvoiceID, spent)
 	if err != nil {
-		slog.Warn("invoice issue failed", "account", acct, "invoice", req.InvoiceID, "err", err)
-		writeErr(w, http.StatusBadRequest, "Billing.InvoiceIssueFailed", "invoice issue failed")
+		var exceeds *exceedsSpendError
+		switch {
+		case errors.Is(err, invoice.ErrInvoiceNotFound):
+			// IDOR guard: a foreign or unknown invoice is 404 (not 403) so
+			// IDs cannot be enumerated.
+			writeErr(w, http.StatusNotFound, "Billing.InvoiceNotFound", "invoice not found")
+		case errors.As(err, &exceeds):
+			writeErr(w, http.StatusConflict, "Billing.InvoiceExceedsSpend", "开票金额超过可开票额度: 可开 "+exceeds.Avail.String())
+		case isInvoiceRuleError(err):
+			slog.Warn("invoice issue refused", "account", acct, "invoice", req.InvoiceID, "err", err)
+			writeErr(w, http.StatusBadRequest, "Billing.InvoiceIssueFailed", "invoice issue failed")
+		default:
+			slog.Error("invoice issue failed", "account", acct, "invoice", req.InvoiceID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, invoiceToMap(inv))
@@ -783,8 +1280,8 @@ func (a *app) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		OriginalID  string `json:"originalId"`
-		ReversalID  string `json:"reversalId"`
+		OriginalID string `json:"originalId"`
+		ReversalID string `json:"reversalId"`
 	}
 	limitBody(w, r)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -797,16 +1294,24 @@ func (a *app) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "reversalId is required")
 		return
 	}
-	// IDOR guard: the original invoice must belong to the caller's account.
-	// Foreign/unknown invoices are 404 so IDs cannot be enumerated.
-	if orig, ok := a.invoices.Get(req.OriginalID); !ok || orig.AccountID != acct {
-		writeErr(w, http.StatusNotFound, "Billing.InvoiceNotFound", "invoice not found")
+	if len(req.ReversalID) > maxInvoiceIDLen {
+		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "reversalId is too long")
 		return
 	}
-	reversal, err := a.invoices.Void(req.OriginalID, req.ReversalID)
+	reversal, err := a.invoices.Void(acct, req.OriginalID, req.ReversalID)
 	if err != nil {
-		slog.Warn("invoice void failed", "account", acct, "invoice", req.OriginalID, "err", err)
-		writeErr(w, http.StatusBadRequest, "Billing.InvoiceVoidFailed", "invoice void failed")
+		switch {
+		case errors.Is(err, invoice.ErrInvoiceNotFound):
+			// IDOR guard: foreign/unknown invoices are 404 so IDs cannot be
+			// enumerated.
+			writeErr(w, http.StatusNotFound, "Billing.InvoiceNotFound", "invoice not found")
+		case isInvoiceRuleError(err):
+			slog.Warn("invoice void refused", "account", acct, "invoice", req.OriginalID, "err", err)
+			writeErr(w, http.StatusBadRequest, "Billing.InvoiceVoidFailed", "invoice void failed")
+		default:
+			slog.Error("invoice void failed", "account", acct, "invoice", req.OriginalID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, invoiceToMap(reversal))
@@ -827,7 +1332,15 @@ func (a *app) handleCostAnalysis(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Common.InvalidParameter", "missing period query param (YYYY-MM)")
 		return
 	}
-	report := billing.CostAnalysis(acct, period, a.charges.forAccount(acct))
+	// The same stored charges as /internal/bills: a cost figure and a bill
+	// figure must never disagree.
+	charges, err := a.settles.ListCharges(acct, period)
+	if err != nil {
+		slog.Error("cost analysis charge lookup failed", "account", acct, "period", period, "err", err)
+		writeErr(w, http.StatusInternalServerError, "Billing.InternalError", "internal error")
+		return
+	}
+	report := billing.CostAnalysis(acct, period, charges)
 	byProduct := make(map[string]string, len(report.ByProduct))
 	for k, v := range report.ByProduct {
 		byProduct[k] = v.String()
@@ -859,18 +1372,18 @@ func invoiceToMap(inv invoice.Invoice) map[string]any {
 		voided = inv.VoidedAt.Format(time.RFC3339)
 	}
 	return map[string]any{
-		"invoiceId":   inv.InvoiceID,
-		"accountId":   inv.AccountID,
-		"billPeriod":  inv.BillPeriod,
-		"title":       inv.Title,
-		"taxNo":       inv.TaxNo,
-		"amount":      inv.Amount.String(),
-		"status":      inv.Status,
-		"issuedAt":    issued,
-		"voidedAt":    voided,
-		"voidedById":  inv.VoidedByID,
-		"reversesId":  inv.ReversesID,
-		"items":       items,
+		"invoiceId":  inv.InvoiceID,
+		"accountId":  inv.AccountID,
+		"billPeriod": inv.BillPeriod,
+		"title":      inv.Title,
+		"taxNo":      inv.TaxNo,
+		"amount":     inv.Amount.String(),
+		"status":     inv.Status,
+		"issuedAt":   issued,
+		"voidedAt":   voided,
+		"voidedById": inv.VoidedByID,
+		"reversesId": inv.ReversesID,
+		"items":      items,
 	}
 }
 
@@ -982,15 +1495,25 @@ func (p *poolRegistry) forAccount(acct int64, refs []string) []billing.Pool {
 }
 
 // commit reduces each pool's Available by what the settlement consumed.
+//
+// Deductions are matched on (Source, Ref): a pool's identity is both, and a
+// pool with an empty Ref is still a pool that must shrink when spent — skipping
+// Ref == "" left such a pool permanently full. Cash is never a registry pool
+// (the ledger holds it), so a BALANCE deduction is ignored here.
 func (p *poolRegistry) commit(acct int64, refs []string, deductions []billing.Deduction) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	spent := make(map[string]pricing.Amount)
+	type poolKey struct {
+		source billing.DeductionSource
+		ref    string
+	}
+	spent := make(map[poolKey]pricing.Amount)
 	for _, d := range deductions {
-		if d.Ref == "" {
+		if d.Source == billing.SourceBalance {
 			continue // cash portion is handled by the ledger
 		}
-		spent[d.Ref] = spent[d.Ref].Add(d.Amount)
+		k := poolKey{d.Source, d.Ref}
+		spent[k] = spent[k].Add(d.Amount)
 	}
 	if len(spent) == 0 {
 		return
@@ -1004,32 +1527,18 @@ func (p *poolRegistry) commit(acct int64, refs []string, deductions []billing.De
 		if len(refs) > 0 && !allow[cur[i].Ref] {
 			continue
 		}
-		if amt, ok := spent[cur[i].Ref]; ok {
+		k := poolKey{cur[i].Source, cur[i].Ref}
+		if amt, ok := spent[k]; ok {
+			// One deduction per waterfall pool: spend it on the first match
+			// only, so two registry pools sharing (Source, Ref) are not both
+			// charged for it.
 			cur[i].Available = cur[i].Available.Sub(amt)
+			delete(spent, k)
 		}
 	}
 }
 
-// chargeRegistry accumulates settled charges so /internal/bills can summarize.
-type chargeRegistry struct {
-	mu       sync.Mutex
-	charges  map[int64][]billing.Charge
-}
-
-func newChargeRegistry() *chargeRegistry {
-	return &chargeRegistry{charges: make(map[int64][]billing.Charge)}
-}
-
-func (c *chargeRegistry) append(ch billing.Charge) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.charges[ch.AccountID] = append(c.charges[ch.AccountID], ch)
-}
-
-func (c *chargeRegistry) forAccount(acct int64) []billing.Charge {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]billing.Charge, len(c.charges[acct]))
-	copy(out, c.charges[acct])
-	return out
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

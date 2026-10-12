@@ -67,12 +67,12 @@ func persistentStore(s flowStore) bool {
 // # One flow per business key
 //
 // uk_biz(def_key, biz_key) is the schema's answer to "did this order already
-// start this flow": the duplicate is refused rather than silently creating a
-// second saga over the same order.
+// start this flow": reserve inserts the row before the saga runs, so the
+// duplicate is refused before a second saga can touch the same order.
 type sqlFlowStore struct {
-	db         *sql.DB
-	flowIDs    func() int64
-	stepIDs    func() int64
+	db      *sql.DB
+	flowIDs func() int64
+	stepIDs func() int64
 }
 
 var _ flowStore = (*sqlFlowStore)(nil)
@@ -108,9 +108,40 @@ type flowPayload struct {
 	FinishedAt         string   `json:"finished_at"`
 }
 
-// put writes the instance and its steps in one transaction: an instance whose
-// steps are missing tells an operator nothing about where the saga stopped.
-func (s *sqlFlowStore) put(r flowRecord) error {
+// reserve inserts the RUNNING instance row before the saga runs. uk_biz makes
+// the insert the arbiter: of two concurrent starts over the same business key,
+// exactly one gets the row and the other gets errFlowExists without having run
+// a step. (flow_instance_id comes from the allocator, so a duplicate key here is
+// uk_biz.)
+func (s *sqlFlowStore) reserve(r flowRecord) error {
+	payload, err := json.Marshal(flowPayload{})
+	if err != nil {
+		return fmt.Errorf("workflow: encode payload for flow %d: %w", r.ID, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), statementTimeout)
+	defer cancel()
+
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO flow_instance
+		   (flow_instance_id, def_key, def_version, account_id, biz_key, status,
+		    payload_json, current_step, version, created_at, updated_at)
+		 VALUES (?, ?, 1, ?, ?, ?, ?, 0, 0, ?, ?)`,
+		r.ID, r.DefKey, r.AccountID, r.BizKey, string(workflow.FlowRunning), payload,
+		now, now); err != nil {
+		if storage.IsDuplicateKey(err) {
+			return errFlowExists
+		}
+		return fmt.Errorf("workflow: reserve flow %d: %w", r.ID, err)
+	}
+	return nil
+}
+
+// finish writes the outcome onto the reserved row and its steps in one
+// transaction: an instance whose steps are missing tells an operator nothing
+// about where the saga stopped. The update is guarded on status RUNNING, so an
+// outcome can only be written once.
+func (s *sqlFlowStore) finish(r flowRecord) error {
 	payload, err := json.Marshal(flowPayload{
 		FailedStep:         r.FailedStep,
 		Err:                r.Err,
@@ -126,19 +157,14 @@ func (s *sqlFlowStore) put(r flowRecord) error {
 	defer cancel()
 
 	return storage.Tx(ctx, s.db, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO flow_instance
-			   (flow_instance_id, def_key, def_version, account_id, biz_key, status,
-			    payload_json, current_step, version, created_at, updated_at)
-			 VALUES (?, ?, 1, ?, ?, ?, ?, ?, 0, ?, ?)`,
-			r.ID, r.DefKey, r.AccountID, r.BizKey, string(r.Status), payload,
-			len(r.Steps), r.FinishedAt.UTC(), r.FinishedAt.UTC()); err != nil {
-			if storage.IsDuplicateKey(err) {
-				// uk_biz: this order's flow already ran (or is running). Starting a
-				// second saga over the same order is how double provisioning happens.
-				return fmt.Errorf("workflow: flow for %s/%s already exists", r.DefKey, r.BizKey)
-			}
-			return fmt.Errorf("workflow: insert flow %d: %w", r.ID, err)
+		res, err := tx.ExecContext(ctx,
+			`UPDATE flow_instance
+			    SET status = ?, payload_json = ?, current_step = ?, version = version + 1, updated_at = ?
+			  WHERE flow_instance_id = ? AND status = ?`,
+			string(r.Status), payload, len(r.Steps), r.FinishedAt.UTC(),
+			r.ID, string(workflow.FlowRunning))
+		if err := storage.Affected(res, err); err != nil {
+			return fmt.Errorf("workflow: finish flow %d: %w", r.ID, err)
 		}
 
 		for _, step := range r.Steps {
@@ -158,6 +184,21 @@ func (s *sqlFlowStore) put(r flowRecord) error {
 		}
 		return nil
 	})
+}
+
+// release deletes a reservation that never got an outcome. The delete is
+// guarded on status RUNNING, so a flow whose finish did commit (an error after
+// the commit) keeps its record; finish writes the steps in its own
+// transaction, so a RUNNING row has none to orphan.
+func (s *sqlFlowStore) release(id int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), statementTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM flow_instance WHERE flow_instance_id = ? AND status = ?`,
+		id, string(workflow.FlowRunning)); err != nil {
+		return fmt.Errorf("workflow: release flow %d: %w", id, err)
+	}
+	return nil
 }
 
 // get reads one flow instance with its steps, oldest step first.

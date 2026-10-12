@@ -66,7 +66,7 @@ func TestUpdateRuleRouteAndVersionGuard(t *testing.T) {
 	if err := json.Unmarshal(ok.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("decode updated: %v", err)
 	}
-	if updated.Data.Threshold != "95" || updated.Data.Status != 2 {
+	if updated.Data.Threshold != "95.0000" || updated.Data.Status != 2 {
 		t.Fatalf("update not applied: %+v", updated.Data)
 	}
 	if updated.Data.Version != rule.Version+1 {

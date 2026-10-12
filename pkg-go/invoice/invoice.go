@@ -87,6 +87,9 @@ var (
 	ErrVoidAmountMismatch = errors.New("invoice: 红冲 amount must equal the original")
 	ErrEmptyTitle         = errors.New("invoice: title (发票抬头) required")
 	ErrEmptyItems         = errors.New("invoice: invoice must have at least one line item")
+	// ErrNonPositiveItem rejects zero/negative lines on a normal invoice; only
+	// a 红冲 reversal (Void) carries negative amounts.
+	ErrNonPositiveItem = errors.New("invoice: line item amounts must be positive")
 )
 
 // Book is the invoice ledger. It issues and voids invoices, enforcing the
@@ -114,12 +117,53 @@ func NewBook(now func() time.Time, nextSeq func() string) *Book {
 // amount is summed from items; draft may be amended before Issue — but an id
 // already held by an ISSUED or VOIDED invoice may not be reused: overwriting
 // it would silently pull an immutable tax document back to an editable draft.
+//
+// An empty invoiceID mints a fresh id. An id that belongs to ANOTHER account is
+// refused: ids are global, and overwriting a foreign draft used to hand the
+// victim's invoice (title, tax number, lines) to whoever named its id.
 func (b *Book) Draft(invoiceID string, accountID int64, billPeriod, title, taxNo string, items []LineItem) (Invoice, error) {
+	inv, err := NewDraft(invoiceID, accountID, billPeriod, title, taxNo, items)
+	if err != nil {
+		return Invoice{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if invoiceID == "" {
+		for {
+			invoiceID = b.nextSeq()
+			if _, taken := b.invoices[invoiceID]; !taken {
+				break
+			}
+		}
+		inv.InvoiceID = invoiceID
+	}
+	if existing, ok := b.invoices[invoiceID]; ok {
+		if existing.AccountID != accountID {
+			return Invoice{}, fmt.Errorf("%w: %s", ErrInvoiceExists, invoiceID)
+		}
+		if existing.Status != StatusDraft {
+			return Invoice{}, fmt.Errorf("%w: %s is %s", ErrInvoiceExists, invoiceID, existing.Status)
+		}
+	}
+	b.invoices[invoiceID] = inv
+	return inv, nil
+}
+
+// NewDraft validates a draft request and builds the DRAFT document (amount
+// summed from the items, items deep-copied) — the rules Book.Draft applies,
+// shared with persistent invoice stores. It does not check id ownership or
+// reuse; that needs the store's view of existing documents.
+func NewDraft(invoiceID string, accountID int64, billPeriod, title, taxNo string, items []LineItem) (Invoice, error) {
 	if title == "" {
 		return Invoice{}, ErrEmptyTitle
 	}
 	if len(items) == 0 {
 		return Invoice{}, ErrEmptyItems
+	}
+	for _, it := range items {
+		if it.Amount <= 0 {
+			return Invoice{}, ErrNonPositiveItem
+		}
 	}
 	// Deep-copy the items so a caller mutating its slice after Draft cannot
 	// change what the ledger holds.
@@ -129,7 +173,7 @@ func (b *Book) Draft(invoiceID string, accountID int64, billPeriod, title, taxNo
 	for _, it := range own {
 		total = total.Add(it.Amount)
 	}
-	inv := Invoice{
+	return Invoice{
 		InvoiceID:  invoiceID,
 		AccountID:  accountID,
 		BillPeriod: billPeriod,
@@ -138,14 +182,67 @@ func (b *Book) Draft(invoiceID string, accountID int64, billPeriod, title, taxNo
 		Amount:     total,
 		Items:      own,
 		Status:     StatusDraft,
+	}, nil
+}
+
+// NewReversal builds the 红字发票 that reverses orig at now: same title, tax
+// number and period, every line and the total negated, issued immediately,
+// pointing back at orig. orig must be ISSUED, and reversalID must be a fresh
+// id distinct from the original's — the checks Book.Void applies, shared with
+// persistent invoice stores (which also verify reversalID is not taken).
+func NewReversal(orig Invoice, reversalID string, now time.Time) (Invoice, error) {
+	if reversalID == "" {
+		return Invoice{}, ErrMissingReversalID
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if existing, ok := b.invoices[invoiceID]; ok && existing.Status != StatusDraft {
-		return Invoice{}, fmt.Errorf("%w: %s is %s", ErrInvoiceExists, invoiceID, existing.Status)
+	if reversalID == orig.InvoiceID {
+		return Invoice{}, fmt.Errorf("%w: %s is the original", ErrReversalIDTaken, reversalID)
 	}
-	b.invoices[invoiceID] = inv
-	return inv, nil
+	if orig.Status == StatusVoided {
+		return Invoice{}, ErrInvoiceAlreadyVoid
+	}
+	if orig.Status != StatusIssued {
+		return Invoice{}, fmt.Errorf("%w: only an ISSUED invoice may be voided, got %s", ErrInvoiceTerminal, orig.Status)
+	}
+	items := make([]LineItem, len(orig.Items))
+	for i, it := range orig.Items {
+		items[i] = LineItem{
+			Description: "红冲: " + it.Description,
+			Amount:      pricing.Amount(0).Sub(it.Amount),
+		}
+	}
+	return Invoice{
+		InvoiceID:  reversalID,
+		AccountID:  orig.AccountID,
+		BillPeriod: orig.BillPeriod,
+		Title:      orig.Title,
+		TaxNo:      orig.TaxNo,
+		Amount:     pricing.Amount(0).Sub(orig.Amount), // negative
+		Items:      items,
+		Status:     StatusIssued,
+		IssuedAt:   now,
+		ReversesID: orig.InvoiceID,
+	}, nil
+}
+
+// SortForListing orders invoices the way ListByAccount returns them: oldest
+// issue first, drafts (never issued) after every issued invoice, ties broken on
+// invoice id so the order is deterministic.
+func SortForListing(out []Invoice) {
+	sort.SliceStable(out, func(i, j int) bool {
+		ti, tj := out[i].IssuedAt, out[j].IssuedAt
+		switch {
+		case ti.IsZero() && tj.IsZero():
+			return out[i].InvoiceID < out[j].InvoiceID
+		case ti.IsZero():
+			return false
+		case tj.IsZero():
+			return true
+		case ti.Equal(tj):
+			return out[i].InvoiceID < out[j].InvoiceID
+		default:
+			return ti.Before(tj)
+		}
+	})
 }
 
 // Issue promotes a DRAFT to ISSUED. Once issued, the invoice is immutable. An
@@ -207,24 +304,9 @@ func (b *Book) Void(originalID, reversalID string) (Invoice, error) {
 	}
 
 	// Build the 红冲 invoice: same title/tax/period, negative amount.
-	reversalItems := make([]LineItem, len(orig.Items))
-	for i, it := range orig.Items {
-		reversalItems[i] = LineItem{
-			Description: "红冲: " + it.Description,
-			Amount:      pricing.Amount(0).Sub(it.Amount),
-		}
-	}
-	reversal := Invoice{
-		InvoiceID:  reversalID,
-		AccountID:  orig.AccountID,
-		BillPeriod: orig.BillPeriod,
-		Title:      orig.Title,
-		TaxNo:      orig.TaxNo,
-		Amount:     pricing.Amount(0).Sub(orig.Amount), // negative
-		Items:      reversalItems,
-		Status:     StatusIssued,
-		IssuedAt:   b.now(),
-		ReversesID: originalID,
+	reversal, err := NewReversal(orig, reversalID, b.now())
+	if err != nil {
+		return Invoice{}, err
 	}
 
 	orig.Status = StatusVoided
@@ -255,20 +337,6 @@ func (b *Book) ListByAccount(accountID int64) []Invoice {
 			out = append(out, inv)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ti, tj := out[i].IssuedAt, out[j].IssuedAt
-		switch {
-		case ti.IsZero() && tj.IsZero():
-			return out[i].InvoiceID < out[j].InvoiceID
-		case ti.IsZero():
-			return false
-		case tj.IsZero():
-			return true
-		case ti.Equal(tj):
-			return out[i].InvoiceID < out[j].InvoiceID
-		default:
-			return ti.Before(tj)
-		}
-	})
+	SortForListing(out)
 	return out
 }

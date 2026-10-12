@@ -61,6 +61,13 @@ func sourceCode(batchID string) int {
 // UpsertHourly upserts by uk_res_item_hour. quantity/covered_ratio/windows are
 // overwritten on re-run: a late-corrected aggregate must replace the stale one,
 // not average with it.
+//
+// The replacement is monotonic in windows_seen: an aggregate built from FEWER
+// windows than the stored row (a partial re-aggregation, e.g. after a restart
+// lost the raw records) must not overwrite a more complete total. The
+// row-describing columns move together (quantity, coverage, source, batch);
+// windows_seen is assigned LAST because MySQL evaluates the assignments left
+// to right and later ones see the already-updated value.
 func (r *sqlAggRepo) UpsertHourly(ctx context.Context, u metering.HourlyUsage) error {
 	if _, err := r.db.ExecContext(ctx,
 		`INSERT INTO metering_record
@@ -69,9 +76,13 @@ func (r *sqlAggRepo) UpsertHourly(ctx context.Context, u metering.HourlyUsage) e
 		    source, batch_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE
-		    quantity = VALUES(quantity), covered_ratio = VALUES(covered_ratio),
-		    windows_seen = VALUES(windows_seen), windows_expected = VALUES(windows_expected),
-		    agg_id = VALUES(agg_id)`,
+		    quantity         = IF(VALUES(windows_seen) >= windows_seen, VALUES(quantity), quantity),
+		    covered_ratio    = IF(VALUES(windows_seen) >= windows_seen, VALUES(covered_ratio), covered_ratio),
+		    windows_expected = IF(VALUES(windows_seen) >= windows_seen, VALUES(windows_expected), windows_expected),
+		    source           = IF(VALUES(windows_seen) >= windows_seen, VALUES(source), source),
+		    batch_id         = IF(VALUES(windows_seen) >= windows_seen, VALUES(batch_id), batch_id),
+		    agg_id           = VALUES(agg_id),
+		    windows_seen     = GREATEST(windows_seen, VALUES(windows_seen))`,
 		u.AggID, u.AccountID, u.ResourceID, u.ResourceType, u.Region, u.MeteringItem,
 		u.HourStart.UTC(), u.TotalQuantity.String(), u.CoveredRatio, u.WindowsSeen,
 		u.WindowsExpected, sourceCode(u.BatchID), u.BatchID); err != nil {
@@ -154,9 +165,15 @@ func newMeteringStoreWith(agg aggRepo) (*meteringStore, error) {
 		unitPrices:  make(map[string]pricing.Amount),
 		snapshotIDs: make(map[string]string),
 		pools:       make(map[int64][]billing.Pool),
+		restored:    make(map[string]metering.HourlyUsage),
+		owners:      newOwnerVerifier(),
+		ownerChecks: make(map[string]ownerCheck),
 		now:         time.Now,
 		agg:         agg,
 	}
+	// Prices and pools are configuration: both modes need them, or the
+	// persistent mode settles nothing and calls the empty bill final.
+	s.loadPriceConfig()
 	if agg == nil {
 		s.seed()
 		return s, nil
@@ -184,6 +201,40 @@ func (s *meteringStore) cacheAgg(u metering.HourlyUsage) {
 	}
 }
 
+// withRestoredLocked folds a post-restart re-aggregation onto the aggregate
+// the ledger held for the same hour at startup. Caller must hold s.mu.
+//
+// The raw records behind a restored aggregate are gone (they live in
+// ClickHouse in production, in memory here), so re-aggregating the hour after
+// a restart sees only the windows ingested since. Those windows are disjoint
+// from the restored ones — ingest windows are "now", which is past the
+// restart — so the totals add; replacing would silently drop every window
+// collected before the restart.
+func (s *meteringStore) withRestoredLocked(u metering.HourlyUsage) metering.HourlyUsage {
+	base, ok := s.restored[u.AggID]
+	if !ok {
+		return u
+	}
+	u.TotalQuantity = u.TotalQuantity.Add(base.TotalQuantity)
+	u.WindowsSeen += base.WindowsSeen
+	if u.WindowsExpected <= 0 {
+		u.WindowsExpected = base.WindowsExpected
+	}
+	if u.WindowsExpected > 0 && u.WindowsSeen > u.WindowsExpected {
+		u.WindowsSeen = u.WindowsExpected
+	}
+	if u.WindowsExpected > 0 {
+		u.CoveredRatio = u.WindowsSeen * 100 / u.WindowsExpected
+	}
+	if u.CoveredRatio > 100 {
+		u.CoveredRatio = 100
+	}
+	if u.BatchID == metering.BatchRealtime && base.BatchID != "" {
+		u.BatchID = base.BatchID
+	}
+	return u
+}
+
 // rehydrate rebuilds the in-process state from the durable ledger: the
 // aggregate cache, plus the resource metadata maps the ownership checks read.
 // The product-code map is the one thing an aggregate does not carry; it
@@ -196,6 +247,7 @@ func (s *meteringStore) rehydrate(ctx context.Context) error {
 	}
 	for _, u := range usage {
 		s.aggCache[u.AggID] = u
+		s.restored[u.AggID] = u
 		if _, ok := s.accounts[u.ResourceID]; !ok {
 			s.accounts[u.ResourceID] = u.AccountID
 			s.regions[u.ResourceID] = u.Region

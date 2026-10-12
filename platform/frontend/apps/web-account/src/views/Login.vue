@@ -3,17 +3,20 @@
  * Login page (02§5.1, §5.2). account.euler.emoera.com is the SSO-only auth domain.
  * On success: writes token to the account store + broadcasts to the parent
  * shell via the bridge, then redirects to the console (or ?redirect target).
+ * MFA accounts (07§2.4): the password step only yields a challenge; a second
+ * step collects the authenticator code (POST /api/auth/mfa/verify).
  */
 import { ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import { useAccountAuth } from "../stores/auth";
+import { safeRedirect } from "../safeRedirect";
 
 const route = useRoute();
-const router = useRouter();
 const auth = useAccountAuth();
 
 const email = ref("");
 const password = ref("");
+const code = ref("");
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -21,47 +24,56 @@ const error = ref<string | null>(null);
 // the project docs (02§2.4 / 部署文档), not in the page source.
 const DEV_SEED_HINT = "开发环境测试账号请查阅项目部署文档";
 
-function isLoopbackHost(host: string): boolean {
-  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-}
-
-/**
- * Resolve the post-login target, refusing anything off-origin.
- *
- * `?redirect=` is attacker-controllable, so using it raw is an open redirect:
- * a phishing link to the real login page that lands on the attacker's site
- * inherits the page's trust. Only same-origin paths/URLs are accepted; dev
- * loopback hosts are additionally allowed so the console shell on its own dev
- * port keeps working.
- */
-function safeRedirect(raw: unknown): string {
-  const here = window.location;
-  const loopbackDev = isLoopbackHost(here.hostname);
-  const fallback = loopbackDev ? "http://localhost:5173/" : "/";
-  if (typeof raw !== "string" || raw === "") return fallback;
-  if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
-  try {
-    const url = new URL(raw, here.origin);
-    if (url.origin === here.origin) return url.toString();
-    if (loopbackDev && isLoopbackHost(url.hostname)) return url.toString();
-  } catch {
-    /* malformed URL: fall through to the safe default */
-  }
-  return fallback;
+// Only a same-origin, same-site (*.euler.emoera.com) or dev-loopback target
+// may be used; see safeRedirect.
+function finish() {
+  window.location.href = safeRedirect(route.query.redirect);
 }
 
 async function onSubmit() {
   error.value = null;
   loading.value = true;
   try {
-    await auth.login(email.value, password.value);
-    // Only a same-origin (or dev-loopback) target may be used; see safeRedirect.
-    window.location.href = safeRedirect(route.query.redirect);
+    const result = await auth.login(email.value, password.value);
+    if (result.mfaRequired) {
+      code.value = ""; // the MFA step renders while auth.mfaPending
+      return;
+    }
+    finish();
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
     loading.value = false;
   }
+}
+
+async function onVerify() {
+  error.value = null;
+  if (!/^\d{6}$/.test(code.value.trim())) {
+    error.value = "请输入 6 位动态验证码";
+    return;
+  }
+  loading.value = true;
+  try {
+    await auth.verifyMfa(code.value);
+    finish();
+  } catch (e) {
+    // Wrong / reused code or throttling: stay on this step. An expired or
+    // revoked challenge clears auth.mfaPending, which returns the user to the
+    // password step with this message.
+    error.value = (e as Error).message;
+    code.value = "";
+    if (!auth.mfaPending) password.value = "";
+  } finally {
+    loading.value = false;
+  }
+}
+
+function backToPassword() {
+  auth.cancelMfa();
+  code.value = "";
+  password.value = "";
+  error.value = null;
 }
 </script>
 
@@ -71,7 +83,7 @@ async function onSubmit() {
       <h1 class="login-title">登录辰云</h1>
       <p class="login-sub">登录后可访问控制台、费用中心与工单支持</p>
 
-      <form class="login-form" @submit.prevent="onSubmit">
+      <form v-if="!auth.mfaPending" class="login-form" @submit.prevent="onSubmit">
         <label class="login-field">
           <span>邮箱</span>
           <input v-model="email" type="email" placeholder="请输入邮箱" required />
@@ -86,6 +98,30 @@ async function onSubmit() {
         <button class="login-btn" type="submit" :disabled="loading">
           {{ loading ? "登录中…" : "登录" }}
         </button>
+      </form>
+
+      <form v-else class="login-form" @submit.prevent="onVerify">
+        <p class="login-mfa-tip">
+          账号 {{ auth.mfa?.user.name }} 已开启 MFA,请输入身份验证器中的 6 位动态验证码
+        </p>
+        <label class="login-field">
+          <span>动态验证码</span>
+          <input
+            v-model="code"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            placeholder="6 位数字"
+            required
+          />
+        </label>
+
+        <p v-if="error" class="login-error">{{ error }}</p>
+
+        <button class="login-btn" type="submit" :disabled="loading">
+          {{ loading ? "验证中…" : "验证" }}
+        </button>
+        <button class="login-back" type="button" :disabled="loading" @click="backToPassword">返回重新输入密码</button>
       </form>
 
       <div class="login-links">
@@ -135,6 +171,9 @@ async function onSubmit() {
 }
 .login-btn:hover { background: var(--eu-color-brand-hover); }
 .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.login-mfa-tip { margin: 0; font-size: 13px; color: var(--eu-text-secondary); line-height: 1.5; }
+.login-back { padding: 6px; border: none; background: none; color: var(--eu-color-brand); font-size: 13px; cursor: pointer; }
+.login-back:disabled { opacity: 0.6; cursor: not-allowed; }
 .login-links { display: flex; justify-content: space-between; margin-top: var(--eu-spacing-6); }
 .login-links a { color: var(--eu-color-brand); text-decoration: none; font-size: 13px; }
 .login-hint { margin: var(--eu-spacing-6) 0 0; padding: var(--eu-spacing-2) var(--eu-spacing-3); background: var(--eu-color-brand-soft); border-radius: var(--eu-radius-sm); font-size: 12px; color: var(--eu-text-secondary); text-align: center; }

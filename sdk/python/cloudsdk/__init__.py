@@ -13,17 +13,23 @@ gateway share one definition; the fixture is how drift is caught across the
 language boundary).
 
 Errors are parsed into the unified error model (03§9.3): a non-2xx response with
-a body shaped like ``{Code, Message}`` surfaces an :class:`ApiError` carrying
-the business code and HTTP status — the same pairing the wire carries.
+a body shaped like ``{RequestId, Code, Message}`` (the OpenAPI facade's error
+envelope) surfaces an :class:`ApiError` — or the subclass its code names, e.g.
+:class:`ResourceNotFoundError` for ``InvalidInstanceId.NotFound`` — carrying the
+code, message, HTTP status and RequestId.
 
 Usage::
 
     client = Client(Config(ak="EU...", sk="...", region="cn-north-1"))
-    resp = client.call(ApiRequest(
-        product_code="euecs", method="POST", path="/",
-        query={"Action": "RunInstances", "Version": "2026-08-01"},
-        body=b'{"ImageId":"img-001","InstanceType":"s2.large"}',
-    ))
+    data = client.invoke("euecs", "RunInstances",
+                         {"ImageId": "img-001", "InstanceType": "s2.large"})
+    instance_id = data["InstanceId"]
+
+:meth:`Client.invoke` sends Action/Version in the query and the parameters as a
+JSON body (or a form body), unwraps the success envelope
+``{RequestId, Code: "OK", Data}`` and gives a create Action a ``ClientToken``
+so the SDK's retries are idempotent. :meth:`Client.call` is the raw signed
+round trip.
 """
 
 from __future__ import annotations
@@ -46,17 +52,34 @@ __all__ = [
     "ApiRequest",
     "ApiResponse",
     "ApiError",
+    "InvalidParameterError",
+    "AuthorizationError",
+    "ResourceNotFoundError",
+    "IncorrectStatusError",
+    "IdempotentParameterMismatchError",
+    "QuotaExceededError",
+    "InsufficientBalanceError",
+    "ThrottlingError",
+    "ServerError",
     "Credentials",
     "SignedRequest",
     "sign",
+    "new_client_token",
     "product_api_host",
     "service_namespace",
     "ALGORITHM",
+    "API_VERSION",
 ]
 
-# Environment fallback for credentials (mirrors the Go SDK's env chain).
+# Environment fallback for credentials. The platform's tools grew three
+# spellings — this SDK's EULER_ACCESS_KEY_ID/EULER_SECRET_ACCESS_KEY, the
+# Terraform provider's EULER_ACCESS_KEY/EULER_SECRET_KEY and the short
+# EULER_AK/EULER_SK — so each is accepted, first non-empty wins in this order
+# (the Terraform provider reads the same set).
 ENV_ACCESS_KEY_ID = "EULER_ACCESS_KEY_ID"
 ENV_SECRET_ACCESS_KEY = "EULER_SECRET_ACCESS_KEY"
+ENV_ACCESS_KEY_ID_ALIASES = (ENV_ACCESS_KEY_ID, "EULER_ACCESS_KEY", "EULER_AK")
+ENV_SECRET_ACCESS_KEY_ALIASES = (ENV_SECRET_ACCESS_KEY, "EULER_SECRET_KEY", "EULER_SK")
 
 # --- protocol constants (mirror pkg-go/cps1) ----------------------------------
 
@@ -71,6 +94,14 @@ HEADER_SECURITY_TOKEN = "x-cps-security-token"
 
 # Default routing subdomain suffix (04-middleware §3.2).
 _API_HOST_SUFFIX = ".api.euler.emoera.com"
+
+# The API version Client.invoke sends (date-type Version parameter, 04§3.2).
+API_VERSION = "2026-08-01"
+
+# Actions that buy or create a resource: Client.invoke gives them a ClientToken
+# when the caller did not, so a retried create returns the resource the first
+# attempt made (the facade's idempotency key) instead of buying a second one.
+CREATE_ACTION_PREFIXES = ("Create", "Run", "Allocate")
 
 
 def product_api_host(product_code: str) -> str:
@@ -340,16 +371,155 @@ class ApiResponse:
 
 
 class ApiError(Exception):
-    """Unified platform error (03§9.3). Carries the business code + HTTP status."""
+    """Unified platform error (03§9.3). Carries the business code + HTTP status.
+
+    Raised as the subclass the code names (see :func:`_error_class`), so callers
+    can catch a category (``except ResourceNotFoundError``) or every API error
+    (``except ApiError``).
+    """
 
     def __init__(
         self, code: str, http_status: int, message: str, request_id: str = ""
     ) -> None:
-        super().__init__("%s: %s" % (code, message))
+        text = "%s: %s" % (code, message)
+        if request_id:
+            text += " (RequestId %s)" % request_id
+        super().__init__(text)
         self.code = code
         self.http_status = http_status
         self.message = message
         self.request_id = request_id
+
+
+class InvalidParameterError(ApiError):
+    """A parameter is missing or not valid (MissingParameter, InvalidParameter,
+    InvalidCidrBlock, InvalidInstanceType.NotFound, InvalidAction.NotFound, ...)."""
+
+
+class AuthorizationError(ApiError):
+    """The request was not authenticated or not authorized (401/403)."""
+
+
+class ResourceNotFoundError(ApiError):
+    """The addressed resource does not exist (404, e.g. InvalidInstanceId.NotFound)."""
+
+
+class IncorrectStatusError(ApiError):
+    """The resource's status does not allow the operation (IncorrectInstanceStatus,
+    ConcurrentModification, ...)."""
+
+
+class IdempotentParameterMismatchError(ApiError):
+    """The ClientToken was already used with different parameters."""
+
+
+class QuotaExceededError(ApiError):
+    """The quota for the resource type is exceeded."""
+
+
+class InsufficientBalanceError(ApiError):
+    """The account balance cannot pay for the order."""
+
+
+class ThrottlingError(ApiError):
+    """The request was throttled (429)."""
+
+
+class ServerError(ApiError):
+    """A temporary or internal failure of the service (5xx: ServiceUnavailable,
+    InternalError); safe to retry — with the same ClientToken for a create."""
+
+
+def _error_class(code: str, status: int) -> type:
+    """The ApiError subclass for a facade/platform error code and HTTP status."""
+    if code == "IdempotentParameterMismatch" or code == "Order.InvalidClientToken":
+        return IdempotentParameterMismatchError
+    if code == "InsufficientBalance" or code.endswith(".InsufficientBalance"):
+        return InsufficientBalanceError
+    if code == "QuotaExceeded" or code.startswith("Quota."):
+        return QuotaExceededError
+    if status == 429 or code in ("Throttling", "Common.Throttling", "Common.Throttled"):
+        return ThrottlingError
+    if code.startswith("Incorrect") or code in ("ConcurrentModification", "Resource.IncorrectStatus"):
+        return IncorrectStatusError
+    if status == 404:
+        return ResourceNotFoundError
+    if status in (401, 403):
+        return AuthorizationError
+    if status >= 500:
+        return ServerError
+    if status == 400 or code in ("MissingParameter", "InvalidParameter", "Common.InvalidParameter"):
+        return InvalidParameterError
+    return ApiError
+
+
+def _api_error(code: str, status: int, message: str, request_id: str = "") -> ApiError:
+    return _error_class(code, status)(code, status, message, request_id=request_id)
+
+
+def new_client_token() -> str:
+    """A fresh idempotency token for one create (at most 64 printable ASCII)."""
+    return "sdk-" + uuid.uuid4().hex
+
+
+def _form_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return str(value)
+
+
+def _encode_params(params: Mapping[str, object], form: bool) -> tuple[bytes, str]:
+    """Encode Action parameters the way the facade parses a body.
+
+    JSON (default): one object; lists stay arrays. Form: a list becomes a
+    repeated key (the facade reads repeated keys as a list), nested values
+    their JSON text. ``None`` means "not supplied" and is dropped.
+    """
+    clean = {k: v for k, v in params.items() if v is not None}
+    if not form:
+        body = json.dumps(clean, separators=(",", ":"), ensure_ascii=False)
+        return body.encode("utf-8"), "application/json"
+    pairs: list[tuple[str, str]] = []
+    for k, v in clean.items():
+        if isinstance(v, (list, tuple)):
+            pairs.extend((k, _form_value(item)) for item in v if item is not None)
+        else:
+            pairs.append((k, _form_value(v)))
+    return urllib.parse.urlencode(pairs).encode("ascii"), "application/x-www-form-urlencoded"
+
+
+def _parse_success(resp: "ApiResponse") -> dict:
+    """Unwrap the success envelope ``{RequestId, Code: "OK", Data}``.
+
+    A 2xx whose body is not the envelope, or whose Code is not OK, is an error
+    (never silently returned as data).
+    """
+    try:
+        env = json.loads(resp.body.decode("utf-8")) if resp.body else None
+    except (ValueError, UnicodeDecodeError):
+        env = None
+    if not isinstance(env, dict):
+        raise ApiError(
+            "Common.InternalError",
+            resp.status_code,
+            "the response is not the API envelope: %s"
+            % resp.body.decode("utf-8", "replace")[:200],
+        )
+    code = env.get("Code") or "OK"
+    request_id = env.get("RequestId") or ""
+    if code != "OK":
+        raise _api_error(code, resp.status_code, env.get("Message") or "", request_id)
+    data = env.get("Data")
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ApiError(
+            "Common.InternalError", resp.status_code,
+            "the response Data is not an object", request_id=request_id,
+        )
+    return data
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -372,10 +542,22 @@ def _open_request(request: urllib.request.Request, timeout: float):
     return _OPENER.open(request, timeout=timeout)  # noqa: S310
 
 
+def _first_env(names) -> str:
+    for name in names:
+        value = os.environ.get(name, "")
+        if value:
+            return value
+    return ""
+
+
 def _resolve_credentials(config: Config) -> Credentials:
-    """Config credentials, falling back to EULER_ACCESS_KEY_ID/EULER_SECRET_ACCESS_KEY."""
-    ak = config.ak or os.environ.get(ENV_ACCESS_KEY_ID, "")
-    sk = config.sk or os.environ.get(ENV_SECRET_ACCESS_KEY, "")
+    """Config credentials, falling back to the environment.
+
+    AK: EULER_ACCESS_KEY_ID, EULER_ACCESS_KEY, EULER_AK; SK:
+    EULER_SECRET_ACCESS_KEY, EULER_SECRET_KEY, EULER_SK (first non-empty).
+    """
+    ak = config.ak or _first_env(ENV_ACCESS_KEY_ID_ALIASES)
+    sk = config.sk or _first_env(ENV_SECRET_ACCESS_KEY_ALIASES)
     return Credentials(ak=ak, sk=sk, security_token=config.security_token)
 
 
@@ -416,6 +598,44 @@ class Client:
 
     def _host_for(self, product_code: str) -> str:
         return self._host_and_prefix(product_code)[0]
+
+    def invoke(
+        self,
+        product_code: str,
+        action: str,
+        params: Mapping[str, object] | None = None,
+        *,
+        version: str = API_VERSION,
+        client_token: str | None = None,
+        form: bool = False,
+    ) -> dict:
+        """Call one OpenAPI Action and return the ``Data`` of its envelope.
+
+        Action and Version go in the query (the gateway authorizes the query's
+        Action); ``params`` go in the body — a JSON object by default, a form
+        body with ``form=True``. ``client_token`` is sent as ``ClientToken``;
+        without one (in either place) a create Action (Create*/Run*/Allocate*)
+        gets a fresh token, so the retries :meth:`call` makes on 429/5xx are
+        idempotent. Errors raise :class:`ApiError` subclasses carrying code,
+        message and RequestId.
+        """
+        body_params = dict(params or {})
+        if client_token is not None:
+            body_params["ClientToken"] = client_token
+        elif "ClientToken" not in body_params and action.startswith(CREATE_ACTION_PREFIXES):
+            body_params["ClientToken"] = new_client_token()
+        body, content_type = _encode_params(body_params, form)
+        resp = self.call(
+            ApiRequest(
+                product_code=product_code,
+                method="POST",
+                path="/",
+                query={"Action": action, "Version": version},
+                body=body,
+                extra_headers={"Content-Type": content_type},
+            )
+        )
+        return _parse_success(resp)
 
     def call(self, req: ApiRequest) -> ApiResponse:
         if not req.product_code:
@@ -530,12 +750,12 @@ def _parse_error(
         lowered = {k.lower(): v for k, v in headers.items()}
         request_id = lowered.get("x-cps-request-id") or lowered.get("x-request-id")
     if code:
-        return ApiError(code, status, message or "", request_id=request_id or "")
-    return ApiError(
+        return _api_error(code, status, message or "", request_id or "")
+    return _api_error(
         "Common.InternalError",
         status,
         "HTTP %d: %s" % (status, body.decode("utf-8", "replace")[:200]),
-        request_id=request_id or "",
+        request_id or "",
     )
 
 

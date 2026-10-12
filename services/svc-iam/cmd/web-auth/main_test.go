@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/qifalab/euler-platform/accesskey"
 )
 
 // These tests cover the M-7.6 RAM endpoints: roles list, policies list, and the
@@ -20,8 +23,18 @@ import (
 // matching main()'s seed. Tests share this process-global state (the handlers
 // are in-memory and stdlib-HTTP, same as the rest of web-auth's tests).
 func TestMain(m *testing.M) {
-	seedAccount(100123, "admin@euler.emoera.com", "种子管理员", "euler123")
-	seedRAMRolesPolicies(100123)
+	// Production hashes use 600k PBKDF2 iterations; tests only need the
+	// format and the comparison, not the work factor.
+	pbkdf2Iterations = 1000
+	// Mail delivery runs inline so tests can observe it.
+	deliverAsync = false
+	ctx := context.Background()
+	if _, err := seedAccount(ctx, 100123, "admin@euler.emoera.com", "种子管理员", "euler123"); err != nil {
+		panic(err)
+	}
+	if err := seedRAMRolesPolicies(ctx, 100123); err != nil {
+		panic(err)
+	}
 	os.Exit(m.Run())
 }
 
@@ -38,13 +51,7 @@ func newTestAuthMux(t *testing.T) http.Handler {
 
 func authToken(t *testing.T) string {
 	t.Helper()
-	mu.RLock()
-	a := byID[100123]
-	mu.RUnlock()
-	if a.AccountID == 0 {
-		t.Fatal("seed account 100123 missing")
-	}
-	return issueAccessToken(a, time.Now())
+	return issueAccessToken(mustAccount(t, 100123), time.Now())
 }
 
 func doAuth(t *testing.T, method, path string, body any) (int, map[string]any) {
@@ -232,16 +239,11 @@ func TestCreatePolicyRejectsMalformedDocument(t *testing.T) {
 // TestChangePasswordInvalidatesOldTokensAndSessions covers the tokenVersion
 // bump + session revocation on password change, and the atomic read-modify-write.
 func TestChangePasswordInvalidatesOldTokensAndSessions(t *testing.T) {
-	seedAccount(200001, "pwtest@euler.emoera.com", "改密用户", "oldpass12345")
-	mu.RLock()
-	a := byID[200001]
-	mu.RUnlock()
+	a := mustSeed(t, 200001, "pwtest@euler.emoera.com", "改密用户", "oldpass12345")
 	oldToken := issueAccessToken(a, time.Now())
 
 	// Plant a refresh session for the account; it must be revoked.
-	mu.Lock()
-	sessions["pwtest-refresh"] = &session{account: a, refreshToken: "pwtest-refresh", refreshExp: time.Now().Add(time.Hour)}
-	mu.Unlock()
+	plantSession(t, a, "pwtest-refresh", time.Hour)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /api/account/password", handleChangePassword)
@@ -266,10 +268,8 @@ func TestChangePasswordInvalidatesOldTokensAndSessions(t *testing.T) {
 		t.Errorf("old token after password change: code %d, want 401", rr2.Code)
 	}
 
-	mu.RLock()
-	_, sessAlive := sessions["pwtest-refresh"]
-	cur := byID[200001]
-	mu.RUnlock()
+	sessAlive := sessionLive(t, "pwtest-refresh")
+	cur := mustAccount(t, 200001)
 	if sessAlive {
 		t.Error("refresh session survived password change")
 	}
@@ -290,14 +290,9 @@ func TestChangePasswordInvalidatesOldTokensAndSessions(t *testing.T) {
 
 // TestRefreshRejectsDisabledAccount covers the live-status recheck on refresh.
 func TestRefreshRejectsDisabledAccount(t *testing.T) {
-	seedAccount(200002, "frozen@euler.emoera.com", "冻结用户", "somepass1234")
-	mu.Lock()
-	a := byID[200002]
-	sessions["frozen-refresh"] = &session{account: a, refreshToken: "frozen-refresh", refreshExp: time.Now().Add(time.Hour)}
-	a.Status = 2 // freeze after the session was issued
-	accounts[a.AccountName] = a
-	byID[a.AccountID] = a
-	mu.Unlock()
+	a := mustSeed(t, 200002, "frozen@euler.emoera.com", "冻结用户", "somepass1234")
+	plantSession(t, a, "frozen-refresh", time.Hour)
+	setAccountStatus(t, a.AccountID, 2) // freeze after the session was issued
 
 	req := httptest.NewRequest("POST", "/api/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "eu_refresh", Value: "frozen-refresh"})
@@ -306,10 +301,7 @@ func TestRefreshRejectsDisabledAccount(t *testing.T) {
 	if rr.Code != 401 {
 		t.Errorf("refresh for frozen account: code %d, want 401", rr.Code)
 	}
-	mu.RLock()
-	_, alive := sessions["frozen-refresh"]
-	mu.RUnlock()
-	if alive {
+	if sessionLive(t, "frozen-refresh") {
 		t.Error("session for frozen account not revoked on refresh")
 	}
 }
@@ -317,14 +309,19 @@ func TestRefreshRejectsDisabledAccount(t *testing.T) {
 // TestRotateUsesEnabledCount covers the rotate limit switching to countEnabled:
 // 2 AKs with one disabled must still allow rotation of the enabled one.
 func TestRotateUsesEnabledCount(t *testing.T) {
-	seedAccount(200003, "rotate@euler.emoera.com", "轮换用户", "somepass1234")
-	mu.Lock()
-	a := byID[200003]
-	_, _, k1 := issueAccessKey()
-	_, _, k2 := issueAccessKey()
-	k2.Status = 2 // disabled
-	accessKeys[200003] = []accessKey{k1, k2}
-	mu.Unlock()
+	a := mustSeed(t, 200003, "rotate@euler.emoera.com", "轮换用户", "somepass1234")
+	c1, err := akMgr.Create(a.AccountID, accesskey.OwnerMaster, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := akMgr.Create(a.AccountID, accesskey.OwnerMaster, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := akMgr.SetStatus(c2.Record.AK, accesskey.StatusDisabled); err != nil {
+		t.Fatal(err)
+	}
+	k1 := struct{ AKID string }{c1.Record.AK}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ak/{akId}/rotate", handleRotateAccessKey)

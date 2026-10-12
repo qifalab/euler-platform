@@ -1,10 +1,9 @@
 <script setup lang="ts">
 /** Bills list — wired to console-bff /console/bills (02§7.2, §1.2). */
 import { ref, onMounted } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PriceText, PageHeader } from "@eu/ui";
 
-const sdk = createSDK({ baseURL: "" });
 const bills = ref<BillItem[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);

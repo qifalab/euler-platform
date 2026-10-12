@@ -7,15 +7,14 @@
 import { ref, onMounted } from "vue";
 import { ElButton, ElMessage } from "element-plus";
 import { PageHeader, StatusBadge } from "@eu/ui";
-import { createSDK } from "@eu/sdk";
-
-const sdk = createSDK({ baseURL: "" });
+import { formatTime } from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 interface NotificationDTO {
   alertId: string;
   tenantId: number;
   product: string;
-  severity: "critical" | "warning" | "info" | string;
+  severity: "CRITICAL" | "WARNING" | "INFO" | string;
   channels: string[];
   emittedAt: string;
 }
@@ -45,11 +44,11 @@ async function simulate() {
     const stamp = Date.now().toString(36);
     await sdk.post("/api/v1/alertcenter/ingest", {
       alertId: `sim-${stamp}-a`, product: "euecs", metric: "cpu_utilization",
-      severity: "warning", labels: { instance: "i-demo-1", region: "cn-north-1" },
+      severity: "WARNING", labels: { instance: "i-demo-1", region: "cn-north-1" },
     });
     await sdk.post("/api/v1/alertcenter/ingest", {
       alertId: `sim-${stamp}-b`, product: "euecs", metric: "cpu_utilization",
-      severity: "warning", labels: { instance: "i-demo-1", region: "cn-north-1" },
+      severity: "WARNING", labels: { instance: "i-demo-1", region: "cn-north-1" },
     });
     const res = await sdk.post<{ notifications: NotificationDTO[] }>("/api/v1/alertcenter/flush");
     const count = res.data?.notifications?.length ?? 0;
@@ -62,9 +61,12 @@ async function simulate() {
   }
 }
 
+// alert-center's severities are CRITICAL / WARNING / INFO (it rejects any
+// other value); compare case-insensitively so older lower-case rows still map.
 function severityBadge(s: string): string {
-  if (s === "critical") return "Error";
-  if (s === "warning") return "Warning";
+  const sev = String(s ?? "").toUpperCase();
+  if (sev === "CRITICAL") return "Error";
+  if (sev === "WARNING") return "Warning";
   return "Info";
 }
 
@@ -91,7 +93,7 @@ onMounted(() => void load());
             <td>{{ a.product }}</td>
             <td><StatusBadge :status="severityBadge(a.severity)" /></td>
             <td>{{ a.channels.join("/") }}</td>
-            <td>{{ a.emittedAt ? a.emittedAt.replace("T", " ").slice(0, 19) : "" }}</td>
+            <td>{{ formatTime(a.emittedAt) }}</td>
           </tr>
         </tbody>
       </table>

@@ -15,16 +15,20 @@
  * catalogue's per-HOUR pricing rule returns the per-hour management fee as
  * payableAmount; the managed ECS/ECI instances bill separately under their own
  * products. Price is server-trial-computed; the client never invents a price.
+ *
+ * The scaling policy is passed to fulfil as resource attributes (`params`:
+ * minSize, maxSize, desiredCapacity, cooldownSeconds) — editable later on the
+ * detail page.
  */
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInputNumber, ElRadioGroup, ElRadio, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@eu/sdk";
-import { useCatalogMeta } from "@eu/console-kit";
+import { yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta, useOrderCheckout, fulfilledMessage, toParams } from "@eu/console-kit";
+import { sdk } from "../sdk";
+import { policyAttributes, validateScalingPolicy } from "../scalingPolicy";
 
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
-const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
@@ -75,7 +79,10 @@ function parseSpec(json: string): SkuSpec {
 onMounted(async () => {
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euas");
-    skus.value = res.data ?? [];
+    // Only on-sale POSTPAID SKUs: EUAS is postpaid-only, and the quote
+    // rejects an off-sale SKU (Catalog.NotOnSale) or a chargeType other than
+    // the SKU's own (Catalog.ChargeTypeMismatch).
+    skus.value = (res.data ?? []).filter((s) => s.status === "1" && s.chargeType === "POSTPAID");
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
       form.value.managedType = specs.value[0].managed_type;
@@ -153,62 +160,64 @@ watch(
 function next() { if (active.value < 2) active.value++; }
 function prev() { if (active.value > 0) active.value--; }
 
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one.
+/** Live policy check (min <= desired <= max), shown under the replica inputs. */
+const policyError = computed(() => validateScalingPolicy(form.value));
+
+// The pending button re-runs submit(): with an order outstanding, checkout()
+// retries THAT order, carrying the (possibly corrected) policy params.
+const { submitting, pending, checkout } = useOrderCheckout({
+  sdk,
+  onFulfilled: (res) => {
+    ElMessage.success(fulfilledMessage("伸缩组", res));
+    router.push("/instances");
+  },
+});
+
 async function submit() {
   const specCode = form.value.spec;
   if (!specCode) { ElMessage.error("请选择规格"); active.value = 0; return; }
-  if (form.value.minReplicas > form.value.maxReplicas) {
-    ElMessage.warning("最小副本数不能大于最大副本数"); active.value = 1; return;
-  }
-  submitting.value = true;
-  try {
-    // 1) Quote — the authoritative per-hour management fee from the pricing engine.
-    const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "euas", specCode,
-      chargeType: "POSTPAID", quantity: 1,
-      regionId: form.value.region,
-    });
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo. The
-    // scaling-group management fee is per-hour; the managed instances bill
-    // separately under their own products.
-    const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
-    const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
-      "/api/v1/orders",
-      {
+  // Same bounds the orchestrator enforces (min <= desired <= max): reject
+  // before an order is created and paid, not after.
+  const policyErr = validateScalingPolicy(form.value);
+  if (policyErr) { ElMessage.warning(policyErr); active.value = 1; return; }
+  await checkout(
+    async () => {
+      // 1) Quote — the authoritative payable comes from the pricing engine.
+      const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
+        productCode: "euas", specCode,
+        chargeType: "POSTPAID", quantity: 1,
+        regionId: form.value.region,
+      });
+      // The scaling-group management fee is per-hour (分); the managed
+      // instances bill separately under their own products.
+      const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>("/api/v1/orders", {
         type: "NEW", productCode: "euas", skuCode: specCode,
+        chargeType: "POSTPAID",
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
-      },
-    );
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
-      paymentId: `pay-${created.data.orderId}`,
-      paidAmountMinor: amountMinor,
-    });
-
-    // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-    // resource CREATING→RUNNING) and returns the new resource id. productCode=euas
-    // routes it to the DriverK8s binding (the policy layer over HPA/VPA/CA).
-    const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-      "/api/v1/orchestrator/fulfill",
-      {
-        orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "euas", region: form.value.region,
-        specCode, chargeType: "POSTPAID",
-        managedType: form.value.managedType,
-        minReplicas: form.value.minReplicas, maxReplicas: form.value.maxReplicas,
-        desiredReplicas: form.value.desiredReplicas, cpuThreshold: form.value.cpuThreshold,
-        cooldownSeconds: form.value.cooldownSeconds,
-      },
-    );
-    ElMessage.success(`伸缩组已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-    router.push("/instances");
-  } catch (e) {
-    ElMessage.error((e as Error).message || "创建失败");
-  } finally {
-    submitting.value = false;
-  }
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil run in the composable (saga: order PAID→FULFILLING→
+    // COMPLETED, resource CREATING→RUNNING; productCode=euas routes it to the
+    // DriverK8s binding). The body is captured now so a retry repeats exactly
+    // what was ordered.
+    {
+      productCode: "euas", region: form.value.region,
+      specCode, chargeType: "POSTPAID",
+      managedType: form.value.managedType,
+      minReplicas: form.value.minReplicas, maxReplicas: form.value.maxReplicas,
+      desiredReplicas: form.value.desiredReplicas, cpuThreshold: form.value.cpuThreshold,
+      cooldownSeconds: form.value.cooldownSeconds,
+      // Stored as resource attributes (svc-orchestrator validates them).
+      params: toParams(policyAttributes(form.value)),
+    },
+  );
 }
 </script>
 
@@ -241,7 +250,10 @@ async function submit() {
           </ElFormItem>
           <ElFormItem label="最小副本数"><ElInputNumber v-model="form.minReplicas" :min="0" :max="1000" /></ElFormItem>
           <ElFormItem label="最大副本数"><ElInputNumber v-model="form.maxReplicas" :min="1" :max="10000" /></ElFormItem>
-          <ElFormItem label="期望副本数"><ElInputNumber v-model="form.desiredReplicas" :min="0" :max="10000" /></ElFormItem>
+          <ElFormItem label="期望副本数">
+            <ElInputNumber v-model="form.desiredReplicas" :min="0" :max="10000" />
+            <p v-if="policyError" class="form-hint form-hint-error">{{ policyError }}</p>
+          </ElFormItem>
           <ElFormItem label="CPU 扩容阈值"><ElInputNumber v-model="form.cpuThreshold" :min="0" :max="1" :step="0.1" :precision="2" /></ElFormItem>
           <ElFormItem label="冷却时间(秒)"><ElInputNumber v-model="form.cooldownSeconds" :min="0" :max="3600" /></ElFormItem>
         </ElForm>
@@ -262,7 +274,8 @@ async function submit() {
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 2" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 2" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="active === 2 && !pending" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pending" type="warning" :loading="submitting" @click="submit">{{ pending.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pending.orderNo }})</ElButton>
         </div>
       </div>
 
@@ -303,6 +316,7 @@ async function submit() {
 .confirm-list { list-style: none; padding: 0; margin: 0; }
 .confirm-list li { padding: 6px 0; border-bottom: 1px solid var(--eu-border); font-size: 13px; }
 .form-hint { font-size: 12px; color: var(--eu-text-disabled); margin: 4px 0 0; }
+.form-hint-error { color: var(--eu-color-danger); }
 .buy-nav { margin-top: 24px; display: flex; gap: 12px; }
 .buy-summary {
   background: var(--eu-glass-bg-soft);

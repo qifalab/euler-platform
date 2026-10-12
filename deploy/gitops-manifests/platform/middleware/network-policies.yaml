@@ -1,0 +1,176 @@
+# Network isolation for the shared middleware (等保三级 network segmentation).
+#
+# Kafka carries the audit side-stream, the Redis cluster backs the gateway's
+# rate limits, MySQL holds every ledger and MinIO holds customer objects.
+# Without policies any pod in the cluster —
+# tenant workloads included — could reach all of them. Each middleware
+# namespace now admits only:
+#   * its own pods (replication / quorum traffic),
+#   * platform control-plane namespaces (label euler.platform/plane=control,
+#     applied by the ApplicationSet to every service namespace),
+#   * the gateway (mw-gateway) where it is a client (Kafka audit, Redis
+#     limit-count, MinIO data plane),
+#   * observability (metrics scraping).
+#
+# This is defence in depth on top of transport security, not a substitute for
+# it: Kafka clients use SASL_SSL (kafka-kraft.yaml) and MinIO serves TLS, with
+# certificates from cert-manager (tls.yaml). Ports are unchanged by TLS
+# (Kafka client 9092, MinIO 9000).
+#
+# MinIO cross-region replication (minio-replication.yaml) has its own policy,
+# minio-replication-ingress: in Git it admits MinIO's port 9000 only from the
+# minio-replication-bootstrap Job's pods. The replication traffic proper —
+# the SOURCE region's MinIO pushing objects to minio.<target-region>:9000 —
+# comes from outside this cluster, and its source CIDRs differ per
+# environment, so they are NOT in this file. Per environment, in the TARGET
+# region's cluster, append one ipBlock peer per source-region egress CIDR (the
+# source cluster's node / NAT egress range; the Service behind
+# minio.<region> must keep client IPs, externalTrafficPolicy: Local) to that
+# policy's `from` list. platform/ is applied as-is today (no per-environment
+# overlay), so record the CIDRs next to the environment's other overrides in
+# envs/<target-region>/<env>/ and apply them as a patch after this file, e.g.
+#   kubectl -n mw-storage patch networkpolicy minio-replication-ingress \
+#     --type=json -p '[{"op":"add","path":"/spec/ingress/0/from/-",
+#       "value":{"ipBlock":{"cidr":"<source-region egress CIDR>"}}}]'
+# Without them, replication from the source region is refused here.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-ingress
+  namespace: mw-mq
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # Client listener (SASL_SSL).
+    - ports:
+        - { port: 9092, protocol: TCP }
+      from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              euler.platform/plane: control
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [mw-gateway, observability]
+    - ports:
+        - { port: 9094, protocol: TCP }   # metrics
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+    # KRaft controller (9093) and inter-broker (9095) listeners: the brokers
+    # themselves plus the kafka-scram-users Job. mTLS already limits them to
+    # kafka-internal-ca identities; this keeps everyone else off the ports.
+    - ports:
+        - { port: 9093, protocol: TCP }
+        - { port: 9095, protocol: TCP }
+      from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [kafka, kafka-scram-users]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-ingress
+  namespace: mw-cache
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              euler.platform/plane: control
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [mw-gateway, observability]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mysql-ingress
+  namespace: mw-db
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              euler.platform/plane: control
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [observability]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-ingress
+  namespace: mw-storage
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              euler.platform/plane: control
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [mw-gateway, observability]
+---
+# Cross-region replication port (see the header). In-cluster peer: the
+# bootstrap Job only. Cross-region source CIDRs are appended per environment.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-replication-ingress
+  namespace: mw-storage
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { port: 9000, protocol: TCP }
+      from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio-replication-bootstrap
+---
+# The gateway's etcd holds every route and plugin config: only APISIX itself
+# (and etcd peers) may talk to it. The APISIX pods are deliberately NOT
+# selected here — they are the internet-facing entry point.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: apisix-etcd-ingress
+  namespace: mw-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: apisix-etcd
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: apisix
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: apisix-etcd

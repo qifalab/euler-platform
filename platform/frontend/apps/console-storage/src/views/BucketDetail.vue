@@ -12,7 +12,8 @@
 import { ref, computed, onMounted } from "vue";
 import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElEmpty, ElTag } from "element-plus";
 import { StatusBadge } from "@eu/ui";
-import { createSDK } from "@eu/sdk";
+import { formatTime } from "@eu/console-kit";
+import { sdk } from "../sdk";
 import "@eu/tokens/style.css";
 
 interface ResourceItem {
@@ -27,7 +28,6 @@ interface ResourceItem {
   CreatedAt: string;
 }
 
-const sdk = createSDK({ baseURL: "" });
 
 const bucketId = computed(() => {
   const m = (location.hash || "").match(/buckets\/([^/?#]+)/);
@@ -73,10 +73,9 @@ function copyId() {
   });
 }
 
-function fmt(s: string): string {
-  if (!s) return "—";
-  return s.replace("T", " ").replace(/\+.*$/, "");
-}
+// RFC3339 → viewer-local time; "—" for unset ("" / zero-year) values. The old
+// textual strip showed UTC wall-clock (with a stray "Z") as if it were local.
+const fmt = formatTime;
 const chargeLabel = computed(() => resource.value?.ChargeType === "PREPAID" ? "包年包月" : resource.value?.ChargeType === "POSTPAID" ? "按量付费" : "—");
 </script>
 
@@ -119,7 +118,7 @@ const chargeLabel = computed(() => resource.value?.ChargeType === "PREPAID" ? "�
             <StatusBadge :status="resource.State" />
           </ElDescriptionsItem>
           <ElDescriptionsItem label="计费起始">{{ fmt(resource.BillingStart) }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="到期时间">{{ resource.ExpiredAt || "—" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="到期时间">{{ fmt(resource.ExpiredAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="创建时间">{{ fmt(resource.CreatedAt) }}</ElDescriptionsItem>
         </ElDescriptions>
         <p v-else class="bucket-loading">加载中…</p>

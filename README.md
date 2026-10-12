@@ -114,7 +114,7 @@ flowchart LR
 - **券体系**：代金券（可叠加，按到期升序消耗）/ 满减券（单张）/ 折扣券（单张，带封顶防资损）；
   扣减定序 **RATE → THRESHOLD → VOUCHER**，顺序可复现。
 - **免费试用 = 试用券 + 标准订单链路**（不建独立免费额度系统），准入六规则定序、首个拒绝可解释：
-  实名准入 / 身份去重（证件号 SHA-256，不留原始证件）/ 活动预算（活券计数）/ 终身限领 / 冷静期 / 并发上限。
+  实名准入 / 身份去重（证件号 HMAC 指纹 + 国标校验位，不留原始证件）/ 活动预算（活券计数）/ 终身限领 / 冷静期 / 并发上限。
 - **欠费四段式状态机**（对客全透明）：
 
 | 阶段 | 时长 | 资源状态 | 数据状态 | 通知 |
@@ -153,9 +153,9 @@ flowchart LR
 |---|---|
 | 在售产品 | 14 款 + RAM 子账号（15 售卖口径）；云市场生态另计 |
 | 地域 | `cn-north-1`（双 AZ，主）+ `cn-east-1`（异地冷备） |
-| 服务 | 18 个可运行 Go 服务（stdlib HTTP，端口 91xx/92xx；另含 1 个服务模板） |
-| 领域库 | `pkg-go` 39 个包、70 个测试文件、621 个测试函数（含资金双花、配额超卖、死锁回归） |
-| 持久化 | `EULER_DB_DSN` 一键切换：真 MySQL（6 schema / 86 表 / 33 迁移）或零依赖内存模式 |
+| 服务 | 19 个可运行 Go 服务（stdlib HTTP，端口 91xx/92xx；含 OpenAPI 门面 svc-openapi；另含 1 个服务模板） |
+| 领域库 | `pkg-go` 40 个包、85 个测试文件、714 个测试函数（含资金双花、配额超卖、死锁回归） |
+| 持久化 | `EULER_DB_DSN` 一键切换：真 MySQL（6 schema / 98 表 / 44 迁移）或零依赖内存模式 |
 | 合同 | `proto-hub` 18 个 proto 包 + 破坏性变更 CI 门 |
 | 前端 | Vue 3 + Wujie 微前端，20 个应用：6 站点 + 12 品类子应用 + 云市场 + 开发者 Explorer |
 | 状态 | **Alpha**：全部服务可运行、可测试，已接入真实 MySQL；履约走 `provision.Driver` 契约的 Mock/KubeVirt-in-process，Kafka 事件与 ClickHouse 下沉是 phase-3 接线点 |
@@ -185,7 +185,7 @@ tools/                 sqlmigrate + 仓库校验器（YAML/Lua/routes/proto/topo
 
 ## 快速开始
 
-前置：Go ≥ 1.22（以 `pkg-go/go.mod` 为准）、MySQL 8.0+/9.x（本地开发账号需
+前置：Go ≥ 1.26（以 `pkg-go/go.mod` 为准）、MySQL 8.0+/9.x（本地开发账号需
 CREATE/DROP DATABASE 权限）、Node 18+ / pnpm（仅前端）。
 
 ### 1. 建库（真实持久化）
@@ -197,8 +197,8 @@ export EULER_DB_DSN='user:password@tcp(127.0.0.1:3306)/'
 go run .                # 全量应用；-dry-run 预览；-only svc-order 单服务
 ```
 
-33 个迁移覆盖 6 个 schema：`account_db`(20 表) / `trade_db`(33) /
-`resource_db`(11) / `support_db`(12) / `metering_db`(7) / `openapi_meta`(3)。
+44 个迁移覆盖 6 个 schema：`account_db`(25 表) / `trade_db`(37) /
+`resource_db`(13) / `support_db`(13) / `metering_db`(7) / `openapi_meta`(3)。
 规则：**已应用迁移只增不改**——修正一律写新 Vn，幂等可重跑。
 
 ### 2. 运行一个服务
@@ -229,24 +229,87 @@ SQL 适配器的测试跑在 **schema of record** 上（`pkg-go/storage/sqltest`
 ### 4. 前端
 
 ```sh
-cd platform/frontend && pnpm install && pnpm -r dev
+cd platform/frontend && pnpm install && pnpm build:packages && pnpm -r dev
 # console-base :5173；子应用 :517x/518x/519x（vite 代理注入 X-Euler-Account-Id）
 ```
 
-开发态账号 `100123`（BFF 种子数据），SSO 登录 `admin@euler.emoera.com / euler123`。
+开发态账号 `100123`（BFF 种子数据），SSO 登录 `admin@euler.emoera.com / euler123`——这个演示账号
+只在**非生产环境且显式设置 `EULER_DEV_SEED=1`** 时才会创建（svc-iam web-auth、svc-marketplace
+的演示审核员同理），生产环境永远不会出现。
+
+### 5. 生产必需配置
+
+所有安全控制都由环境变量配置。`EULER_ENV=prod|production|staging` 标记生产类环境：
+**缺少下列任一必需项时服务拒绝启动**（`pkg-go/runmode`），不会静默退回开发模式。
+部署清单已为各环境设置 `EULER_ENV`，密钥统一放在每个服务命名空间的 Secret
+`euler-platform-secrets`（以 `envFrom` 注入，见各 chart `deployment.yaml`）。
+
+| 变量 | 谁需要 | 说明 |
+|---|---|---|
+| `EULER_INTERNAL_TOKEN` | 全部业务服务 + APISIX（Secret `euler-internal-token`，key `token`） | 网关鉴权后注入 `X-Euler-Internal-Token`，服务据此只信任经过网关的 `X-Euler-Account-Id`；服务间调用同样携带 |
+| `EULER_JWT_PRIVATE_KEY` / `EULER_JWT_PRIVATE_KEY_FILE` | svc-iam web-auth | RS256 签名私钥（≥2048 位 PEM）。公钥从 `GET /api/auth/public-key` 取得，放入网关 Secret `eu-jwt-public-key`（key `publicKey`） |
+| `EULER_DB_DSN` | svc-iam web-auth 与 verify（生产强制）及需持久化的服务 | web-auth 的账号、会话、RAM、AK、MFA、找回密码码在生产必须落库；verify 的账号冻结与 nonce 防重放依赖 account_db |
+| `EULER_KMS_MASTER_KEY`（+`_VERSION`） | svc-iam web-auth 与 verify（持久化或生产时强制，两边相同） | base64 的 32 字节根密钥，按用途 HKDF 派生；AK 的 SK、MFA 种子以其密封存储，重启/多副本必须一致 |
+| `EULER_KMS_MASTER_KEY_PREVIOUS` | svc-iam web-auth 与 verify（轮换时） | 已退役根密钥 `版本:base64,…`，只用于解密旧数据，版本必须低于当前版本 |
+| `EULER_STS_KEY` | svc-iam web-auth 与 verify（两边相同） | base64 的 32 字节，密封 STS 临时凭证；缺失时 STS 关闭（503 / 拒绝） |
+| `EULER_PAYMENT_CHANNEL_SECRET` | svc-payment | 支付渠道回调的 HMAC 密钥，签名头 `X-Euler-Channel-Signature` = hex(HMAC-SHA256(secret, `recharge|{账号}|{金额分}|{outTradeNo}`))；缺失时充值接口关闭 |
+| `EULER_IDENTITY_PEPPER` | svc-iam web-auth（持久化或生产时强制） | 实名证件号指纹与邮件验证码哈希（HMAC）的密钥 |
+| `EULER_SVC_NOTIFY_URL` | svc-iam web-auth（生产强制） | 找回密码、注册验证码经 svc-notify 发邮件；非生产未配置时验证码打印到 WARN 日志 |
+| `EULER_SMTP_ADDR` / `_USERNAME` / `_PASSWORD` / `_FROM` / `_TLS` | svc-notify（`EULER_SMTP_ADDR` 生产强制） | 真实邮件发送；`_TLS` 为 `starttls`（默认）/`tls`/`none`，`none` 只允许对本机中继带凭据 |
+| `EULER_REGISTER_REQUIRE_EMAIL_CODE` | svc-iam web-auth（可选） | `1` 时注册必须带邮箱验证码；prod/staging 清单已开启 |
+| `EULER_REALNAME_PROVIDER_URL` + `_SECRET` | svc-iam web-auth（可选） | 实名核验第三方接口（请求体 HMAC 签名，生产要求 https）；不配置时只做证件号校验位检查 |
+| `EULER_PROMETHEUS_URL` | svc-monitor（生产强制） | 监控指标查询后端（Prometheus/VictoriaMetrics `query_range`）；非生产未配置时返回标注为 `synthetic` 的示例数据 |
+| `EULER_MARKETPLACE_OPERATORS` | svc-marketplace | 云市场审核/分账运营账号（逗号分隔）；不配置则无人可审核 |
+| `EULER_COOKIE_SECURE` | svc-iam web-auth（可选） | 默认 Secure；仅 `EULER_ENV=dev/local/test` 时关闭，可用此变量显式覆盖 |
+| `EULER_COOKIE_DOMAIN` | svc-iam web-auth（可选） | refresh cookie 的 Domain；prod/staging 清单设为 `.euler.emoera.com`（account→console/billing/ticket 跨子域 SSO），不设则仅当前主机 |
+
+服务间地址（非密钥，已写入各 chart 的 `extraEnv`，生产环境缺失即拒绝启动）：`EULER_SVC_CATALOG_URL`、`EULER_SVC_PAYMENT_URL`、
+`EULER_SVC_IAM_URL`（svc-order）；`EULER_SVC_ORDER_URL`、`EULER_SVC_QUOTA_URL`（svc-orchestrator）；
+`EULER_SVC_ORCHESTRATOR_URL`（svc-metering、svc-monitor、console-bff）；svc-openapi 的
+`EULER_SVC_CATALOG_URL` / `_ORDER_URL` / `_ORCHESTRATOR_URL` / `_MONITOR_URL` 与 `EULER_OPENAPI_DEFAULT_REGION`。
+编排器另有 `EULER_PROVISION_POLL_INTERVAL`（默认 15s）与 `EULER_PROVISION_CREATING_TIMEOUT`（默认 30m）。
+
+部署形态要点（`deploy/gitops-manifests`）：
+
+- **Kubernetes ≥ 1.30**：各 chart 的 preStop 使用原生 `sleep` 处理器（镜像为 distroless，无 shell）。
+- **ArgoCD**：ApplicationSet 按（地域, 环境）投放到各自集群 `euler-cn-north-1-dev|staging|prod`、
+  `euler-cn-east-1-prod`，需先 `argocd cluster add` 注册同名集群；Helm release 名即应用目录名，
+  因此集群内地址统一为 `http://<app>.euler-<app>.svc:<port>`。
+- **镜像**：`services/_tmpl-go/deploy/Dockerfile` 在仓库根目录构建（`--build-arg SERVICE=services/<svc> MAIN=<cmd>`），
+  把服务的每个 `cmd/*` 编译为 `/app/<名>`，`/app/app` 为主程序。svc-iam 的 Pod 有两个容器：
+  web-auth（:9101，含 `/internal/authz/check`）与 OpenAPI 验签 verify（:9100）。
+- **APISIX**：自定义插件挂载于 `/opt/eu-plugins/apisix/plugins`；探针改用 Status API（:7085 `/status`、`/status/ready`）；
+  `/internal/*` 一律不经网关（服务间接口如 `/internal/payment/*`、`/internal/orders/{id}/fulfilment`）。
+  控制台路由同时服务 `account.*`、`billing.*`、`ticket.*` 独立站点；官网 `www.*` 只开放匿名只读的
+  商品目录与公告（eu-auth `anonymous` 模式）。
+- **前端**：共享包需先 `pnpm build:packages`（产出 `dist/style.css`）；应用默认打包共享依赖，
+  仅在宿主提供 import map 时用 `EU_SHARED_EXTERNALS=1` 构建为外部依赖。
+- **OpenAPI**：`{product}.api.euler.emoera.com` 的所有产品（euecs/eurds/euvpc/eubs/eueip/euoss 控制面/eumon）
+  经签名鉴权后由门面服务 `svc-openapi`（:9230）转换为内部调用；创建类 Action 走下单→扣款→开通，
+  `ClientToken` 保证重试幂等。Terraform provider（`sdk/terraform`）与 Python SDK 均对接该门面。
+- RAM 子用户的 AK 按其所挂策略鉴权（`/internal/authz/check`，数据在 `account_db`）。
+- **传输层加密**（需先安装 **cert-manager ≥ 1.15**，`platform/middleware/tls.yaml` 建内部 CA）：
+  Kafka 客户端监听 9092 为 SASL_SSL（SCRAM-SHA-512），broker 间 9095 与 KRaft 控制器 9093 为双向 TLS，
+  启用 `StandardAuthorizer` 与最小 ACL；MinIO 与跨地域复制走 https。网关只信任平台 CA。
+  每个环境需自行创建（不入 Git）：`mw-mq/kafka-kraft-cluster-id`（`cluster-id`，一次生成永不更改）、
+  `mw-mq/kafka-scram-users`（必须含 `apisix-audit`，可选 `kafka-ops`）、`mw-gateway/kafka-apisix-audit`
+  （`password`，与前者相同）、`mw-storage/minio-replication-credentials`（复制专用账号的四个 key），
+  备用地域的 ConfigMap `mw-storage/minio-replication-peer-ca`（对端 CA），并把对端地域的源 CIDR 加入
+  `minio-replication-ingress`。证书续期后需滚动重启 Kafka。MinIO Tenant 由 Operator 管理，
+  需把 `externalCertSecret` 指向 `minio-sell-tls` / `minio-internal-tls`（见 `tls.yaml` 注释）。
 
 ## 验证状态
 
 | 层 | 验证方式 |
 |---|---|
-| 领域库 | `go test`：621 个测试（资金/配额/工作流的并发回归；金样本向量） |
+| 领域库 | `go test`：714 个测试（资金/配额/工作流的并发回归；金样本向量） |
 | SQL 适配器 | 真库测试：幂等 upsert、乐观锁冲突、DECIMAL 精度、并发死锁（配额首写路径 Error 1213 已根治）、跨重启重水化、双实现 parity |
-| DDL | 33 个迁移真实应用 + 幂等重跑验证；迁移工具自身有 `-probe/-dry-run` 与 NULL 探测 |
-| 服务 | 18/18 `go vet` + `go test`（有/无 DSN 双模式） |
+| DDL | 44 个迁移真实应用 + 幂等重跑验证；迁移工具自身有 `-probe/-dry-run` 与 NULL 探测 |
+| 服务 | 全部 Go 模块（19 个服务 + pkg-go + sqlmigrate + terraform provider）`go vet` + `go test`（有/无 DSN 双模式） |
 | 签名链路 | svc-iam verify 线上 e2e（7 项）+ Python SDK 金样本逐字节 |
 | 前端 | `pnpm -r typecheck` 全部通过（含 20 个应用与共享包） |
 | K8s/Helm/Vitess | 清单与 chart 结构校验 + CI 门（YAML/Lua/routes/proto-breaking/topology-spread）——**未实际部署** |
-| `-race` | 本 Windows 宿主无 cgo，未跑；并发正确性由双花/超卖/死锁内容测试覆盖 |
+| `-race` | 并发敏感的包与服务（配额、结算、编排账本、云市场等）在 Linux 下跑过 `-race`；其余由双花/超卖/死锁内容测试覆盖 |
 
 ## Alpha 已知边界
 

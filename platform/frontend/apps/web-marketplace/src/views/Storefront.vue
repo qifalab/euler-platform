@@ -4,13 +4,16 @@ import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
 import { PageHeader } from "@eu/ui";
-import { fetchListings, categoryLabel, bpsPercent, CATEGORIES, type ListingDTO } from "@/marketplace";
+import { fetchListings, isOperator, categoryLabel, bpsPercent, CATEGORIES, type ListingDTO } from "@/marketplace";
 
 const router = useRouter();
 const listings = ref<ListingDTO[]>([]);
 const category = ref("");
 const loading = ref(true);
 const error = ref<string | null>(null);
+// Settlement (分账) is an operator-only platform job — hide it from tenants.
+const operator = ref(false);
+void isOperator().then((v) => { operator.value = v; });
 
 async function load() {
   loading.value = true;
@@ -54,7 +57,7 @@ onMounted(() => void load());
         <p class="sf-url">{{ l.openapiUrl }}</p>
         <div class="sf-card-foot">
           <span class="sf-id">ID {{ l.listingId }}</span>
-          <ElButton size="small" @click="router.push(`/settlement?listingId=${l.listingId}`)">购买结算</ElButton>
+          <ElButton v-if="operator" size="small" @click="router.push(`/settlement?listingId=${l.listingId}`)">购买结算</ElButton>
         </div>
       </div>
     </div>

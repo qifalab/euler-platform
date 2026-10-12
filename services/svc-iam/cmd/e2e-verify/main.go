@@ -5,10 +5,15 @@
 // This is the wire-level proof that the chain holds together —
 // sign → HTTP → AK resolve → KMS decrypt → HMAC recompute → nonce dedup —
 // rather than only the in-process unit tests.
+//
+// The verify binary listens on :9100 (cmd/verify -http; web-auth owns :9101).
+// EULER_VERIFY_ENDPOINT overrides the target; EULER_INTERNAL_TOKEN, when set,
+// is sent as X-Euler-Internal-Token exactly like the gateway does.
 package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,19 +26,29 @@ import (
 )
 
 const (
-	endpoint = "http://127.0.0.1:9101/internal/openapi/verify"
-	region   = "cn-north-1"
-	service  = "ecs"
-	host     = "euecs.api.euler.emoera.com"
+	defaultEndpoint = "http://127.0.0.1:9100/internal/openapi/verify"
+	region          = "cn-north-1"
+	service         = "ecs"
+	host            = "euecs.api.euler.emoera.com"
 )
 
+// endpoint is the verify URL: EULER_VERIFY_ENDPOINT, else the local default.
+func endpoint() string {
+	if v := os.Getenv("EULER_VERIFY_ENDPOINT"); v != "" {
+		return v
+	}
+	return defaultEndpoint
+}
+
+// verifyRequest mirrors the payload eu-auth.lua forwards: the raw wire path,
+// ngx-shaped args/headers and the exact body bytes as body_b64.
 type verifyRequest struct {
 	Method  string            `json:"method"`
 	Host    string            `json:"host"`
 	Path    string            `json:"path"`
 	Query   map[string]string `json:"query"`
 	Headers map[string]string `json:"headers"`
-	Body    string            `json:"body"`
+	BodyB64 string            `json:"body_b64"`
 	Region  string            `json:"region"`
 	Service string            `json:"service"`
 }
@@ -68,7 +83,7 @@ func main() {
 
 	// 3. Tampered body → 403 SignatureDoesNotMatch.
 	req := sign(ak, sk, "e2e-nonce-2", []byte(`{"amount":1}`), now)
-	req.Body = `{"amount":99999}`
+	req.BodyB64 = base64.StdEncoding.EncodeToString([]byte(`{"amount":99999}`))
 	st, body = post(req)
 	check("tampered body rejected", http.StatusForbidden, st, body)
 
@@ -133,7 +148,7 @@ func sign(ak, sk, nonce string, body []byte, at time.Time) verifyRequest {
 		Path:    "/",
 		Query:   map[string]string{"Action": "RunInstances", "Version": "2026-08-01"},
 		Headers: out,
-		Body:    string(body),
+		BodyB64: base64.StdEncoding.EncodeToString(body),
 		Region:  region,
 		Service: service,
 	}
@@ -141,7 +156,16 @@ func sign(ak, sk, nonce string, body []byte, at time.Time) verifyRequest {
 
 func post(vr verifyRequest) (int, string) {
 	payload, _ := json.Marshal(vr)
-	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, endpoint(), bytes.NewReader(payload))
+	if err != nil {
+		fmt.Println("build request:", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok := os.Getenv("EULER_INTERNAL_TOKEN"); tok != "" {
+		req.Header.Set("X-Euler-Internal-Token", tok)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Println("post error:", err)
 		os.Exit(1)

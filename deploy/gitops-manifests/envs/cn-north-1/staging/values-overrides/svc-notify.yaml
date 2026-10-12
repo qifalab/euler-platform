@@ -6,3 +6,10 @@ replicas: 2
 # losing one AZ does not take the service down.
 topology:
   zoneSpread: true
+
+# Production mode: services refuse to start without their secrets
+# (pkg-go/runmode; README「生产必需配置」) and never seed demo data. svc-notify
+# additionally needs its mail relay (EULER_SMTP_ADDR / _USERNAME / _PASSWORD /
+# _FROM / _TLS) in Secret euler-platform-secrets — no relay, no start.
+extraEnv:
+  EULER_ENV: staging

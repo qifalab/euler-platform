@@ -136,6 +136,18 @@ type Order struct {
 	ProductCode string
 	ChargeType  pricing.ChargeType
 
+	// The purchased line (orders are single-line; persisted in order_item).
+	// Fulfilment provisions exactly this SKU in this region: the resource spec
+	// must come from what was paid for, never from the fulfil request.
+	SKUCode  string
+	RegionID string
+	// ZoneID is the availability zone a ZONAL product is pinned to at create
+	// time (M-6, 00§4.4); empty for REGIONAL products, which spread.
+	ZoneID       string
+	Quantity     int64
+	Duration     int64
+	DurationUnit pricing.DurationUnit
+
 	// SnapshotID references the frozen price. Every downstream amount comes
 	// from the snapshot, never from the live catalogue — that is what makes a
 	// historical bill explicable after prices move (01§12.3).
@@ -143,6 +155,12 @@ type Order struct {
 	OriginalAmount pricing.Amount
 	DiscountAmount pricing.Amount
 	PayableAmount  pricing.Amount
+
+	// CouponIDs are the coupons applied to this order, in consumption order
+	// (svc-order's order_coupon_use journal). They are fixed at create time:
+	// reserved then, consumed at payment, released on cancel and restored on
+	// refund — the ids stay on the order through all of it.
+	CouponIDs []string
 
 	// ResourceID is empty for NEW until fulfilment reports back; for all other
 	// types it identifies the resource being acted on.
@@ -219,14 +237,15 @@ func (e Event) TriggersProvisioning() bool {
 
 // CreateRequest is the input to placing an order.
 type CreateRequest struct {
-	AccountID   int64
-	Type        Type
-	ProductCode string
-	ChargeType  pricing.ChargeType
-	SKUCode     string
-	RegionID    string
-	Quantity    int64
-	Duration    int64
+	AccountID    int64
+	Type         Type
+	ProductCode  string
+	ChargeType   pricing.ChargeType
+	SKUCode      string
+	RegionID     string
+	ZoneID       string // ZONAL products only (see Order.ZoneID)
+	Quantity     int64
+	Duration     int64
 	DurationUnit pricing.DurationUnit
 
 	// ResourceID must be set for every type except NEW.
@@ -315,11 +334,18 @@ func (m *Machine) Create(req CreateRequest, orderID int64, orderNo string) (*Ord
 		State:          StatePendingPayment,
 		ProductCode:    req.ProductCode,
 		ChargeType:     req.ChargeType,
+		SKUCode:        req.SKUCode,
+		RegionID:       req.RegionID,
+		ZoneID:         req.ZoneID,
+		Quantity:       req.Quantity,
+		Duration:       req.Duration,
+		DurationUnit:   req.DurationUnit,
 		SnapshotID:     req.SnapshotID,
 		OriginalAmount: req.Quote.ListAmount,
 		DiscountAmount: req.Quote.PromoAmount.Add(req.Quote.CouponAmount),
 		PayableAmount:  req.Quote.PayableAmount,
 		ResourceID:     req.ResourceID,
+		CouponIDs:      couponIDs(req.Quote.AppliedCoupons),
 		ClientToken:    req.ClientToken,
 		Version:        0,
 		CreatedAt:      now,
@@ -340,6 +366,18 @@ func (m *Machine) Create(req CreateRequest, orderID int64, orderNo string) (*Ord
 		OccurredAt:  now,
 	}
 	return o, evt, nil
+}
+
+// couponIDs lists the coupons a quote consumes, in consumption order.
+func couponIDs(uses []pricing.CouponUse) []string {
+	if len(uses) == 0 {
+		return nil
+	}
+	out := make([]string, len(uses))
+	for i, u := range uses {
+		out[i] = u.CouponID
+	}
+	return out
 }
 
 // Transition moves the order to a new state, enforcing the transition table
@@ -467,8 +505,13 @@ type ProrationBasis struct {
 // Returns zero rather than a negative amount when usage meets or exceeds the
 // purchased term — a fully consumed subscription refunds nothing, and a
 // negative refund would be a charge disguised as one.
+//
+// Malformed input refunds nothing either: a negative UsedPeriods would make
+// remaining exceed the term and refund MORE than was paid, and a negative
+// snapshot amount is not a payment. Money out of the platform fails closed.
 func (b ProrationBasis) RefundAmount() pricing.Amount {
-	if b.TotalPeriods <= 0 || b.UsedPeriods >= b.TotalPeriods {
+	if b.TotalPeriods <= 0 || b.UsedPeriods < 0 || b.UsedPeriods >= b.TotalPeriods ||
+		b.SnapshotAmount.IsNegative() {
 		return 0
 	}
 	remaining := b.TotalPeriods - b.UsedPeriods

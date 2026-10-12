@@ -82,7 +82,7 @@ func TestTrialClaimIssuesVoucher(t *testing.T) {
 	}
 	// The minted voucher is spendable through the pricing engine as a normal
 	// VOUCHER coupon — the whole point of decision D7.
-	cs := s.coupons[100123]
+	cs := trialCoupons(t, s, 100123)
 	if len(cs) != 1 {
 		t.Fatalf("store should hold 1 voucher, got %d", len(cs))
 	}
@@ -116,7 +116,7 @@ func TestTrialClaimIdentityDedupAcrossAccounts(t *testing.T) {
 	s := newTrialStore()
 	// Two different accounts, one 实名 identity: the registry is the only
 	// structure that can stop the register-N-accounts attack.
-	s.accounts[100200] = trial.AccountState{RealNameVerified: true, IdentityKey: "idn-8f3a1c2d"}
+	s.devRealNames[100200] = realNameStatus{Verified: true, IdentityKey: "idn-8f3a1c2d"}
 	if w := doTrial(t, s, http.MethodPost, "/api/v1/trial/claim", "100123"); w.Code != 200 {
 		t.Fatalf("first account claim failed: %d %s", w.Code, w.Body.String())
 	}
@@ -131,7 +131,7 @@ func TestTrialClaimIdentityDedupAcrossAccounts(t *testing.T) {
 
 func TestTrialClaimGlobalBudget(t *testing.T) {
 	s := newTrialStore()
-	s.globalActive = s.policy.MaxActiveGlobal
+	memTrial(s).globalActive = s.policy.MaxActiveGlobal
 	w := doTrial(t, s, http.MethodPost, "/api/v1/trial/claim", "100123")
 	if w.Code != 409 {
 		t.Fatalf("want 409 at exhausted budget, got %d: %s", w.Code, w.Body.String())

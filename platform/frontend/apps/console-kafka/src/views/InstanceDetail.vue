@@ -10,8 +10,9 @@
  */
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElTag, ElEmpty, ElMessage } from "element-plus";
+import { formatTime, InstanceActions, type SpecLabel } from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 interface ResourceDetail {
   resourceId: string;
@@ -21,6 +22,8 @@ interface ResourceDetail {
   state: string;      // RUNNING | CREATING | ...
   specCode: string;
   billingStart: string;
+  /** Prepaid term end (RFC3339); "" for postpaid / not yet delivered. */
+  expiredAt?: string;
   createdAt: string;
   version: number;
 }
@@ -28,34 +31,40 @@ interface ResourceDetail {
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
-const sdk = createSDK({ baseURL: "" });
 
 const inst = ref<ResourceDetail | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const activeTab = ref("monitor");
 
-onMounted(async () => {
-  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+/** (Re)load the resource record — on mount and after every lifecycle action. */
+async function fetchDetail() {
   try {
     const res = await sdk.get<ResourceDetail>(`/api/v1/orchestrator/resources/${id.value}`);
     inst.value = res.data;
+    error.value = null;
   } catch (e) {
     error.value = (e as Error).message ?? "加载失败";
     if (error.value.includes("404") || error.value.includes("不存在")) {
       ElMessage.error("实例不存在");
       router.push("/instances");
     }
-  } finally {
-    loading.value = false;
   }
+}
+
+onMounted(async () => {
+  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+  await fetchDetail();
+  loading.value = false;
 });
 
-function fmt(s: string): string {
-  if (!s) return "—";
-  return s.replace("T", " ").replace(/\+.*$/, "");
-}
+// RFC3339 → viewer-local time; "—" for unset ("" / zero-year) values. The old
+// textual strip showed UTC wall-clock (with a stray "Z") as if it were local.
+const fmt = formatTime;
 const chargeLabel = computed(() => inst.value?.chargeType === "PREPAID" ? "包年包月" : inst.value?.chargeType === "POSTPAID" ? "按量" : "—");
+
+/** 变配 dialog label for a catalogue spec (specJson {broker_count, version}). */
+const specLabel: SpecLabel = (s) => `${String(s.broker_count ?? "?")} Broker · Kafka ${String(s.version ?? "")}`.trim();
 </script>
 
 <template>
@@ -68,10 +77,15 @@ const chargeLabel = computed(() => inst.value?.chargeType === "PREPAID" ? "包�
         <p class="detail-id">ID:{{ id }} · {{ inst?.region ?? "—" }}</p>
       </div>
       <div class="detail-actions">
-        <ElButton size="small">重启</ElButton>
-        <ElButton size="small">变配</ElButton>
-        <ElButton size="small" type="primary">续费</ElButton>
-        <ElButton size="small" type="danger">释放</ElButton>
+        <InstanceActions
+          :sdk="sdk"
+          :resource-id="id"
+          :instance="inst"
+          :actions="['start', 'restart', 'upgrade', 'renew', 'release']"
+          :spec-label="specLabel"
+          @changed="fetchDetail"
+          @released="router.push('/instances')"
+        />
       </div>
     </header>
 
@@ -88,6 +102,7 @@ const chargeLabel = computed(() => inst.value?.chargeType === "PREPAID" ? "包�
           <ElDescriptionsItem label="产品">{{ inst.productCode }}</ElDescriptionsItem>
           <ElDescriptionsItem label="地域">{{ inst.region }}</ElDescriptionsItem>
           <ElDescriptionsItem label="计费起始">{{ fmt(inst.billingStart) }}</ElDescriptionsItem>
+          <ElDescriptionsItem v-if="inst.chargeType === 'PREPAID'" label="到期时间">{{ fmt(inst.expiredAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="创建时间">{{ fmt(inst.createdAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="资源版本">{{ inst.version }}</ElDescriptionsItem>
         </ElDescriptions>

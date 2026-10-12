@@ -54,3 +54,29 @@ topology:
 pdb:
   enabled: true
   minAvailable: 1
+
+# Least-privilege runtime (templates/deployment.yaml securityContext) and
+# ingress isolation (templates/networkpolicy.yaml).
+networkPolicy:
+  enabled: true
+  # Namespaces allowed in addition to those labelled euler.platform/plane=control.
+  allowFromNamespaces:
+    - mw-gateway
+    - observability
+
+# Secret projected with envFrom (optional); see README「生产必需配置」.
+secretName: euler-platform-secrets
+
+# Non-secret env projected into the ConfigMap (EULER_ENV is set per
+# environment in envs/<region>/<env>/values-overrides).
+extraEnv:
+  EULER_SVC_ORDER_URL: "http://svc-order.euler-svc-order.svc:9204"
+  # svc-quota (apps/svc-quota, port 9208): occupy before provisioning, commit
+  # at RUNNING, release on compensation, /internal/quota/free on release.
+  # Required in production (the service refuses to start without it).
+  EULER_SVC_QUOTA_URL: "http://svc-quota.euler-svc-quota.svc:9208"
+  # Provisioning poller: how often CREATING resources are re-checked with the
+  # driver, and how long one may stay CREATING before it is compensated
+  # (reclaimed, CREATE_FAILED, order refunded). Go durations.
+  EULER_PROVISION_POLL_INTERVAL: "15s"
+  EULER_PROVISION_CREATING_TIMEOUT: "30m"

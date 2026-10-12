@@ -150,7 +150,23 @@ var (
 	ErrNonPositiveAmount   = errors.New("ledger: amount must be positive")
 	ErrMissingIdempotency  = errors.New("ledger: idempotency key required")
 	ErrDuplicateEntry      = errors.New("ledger: entry already applied (idempotent no-op)")
+	// ErrIdempotencyMismatch reports an idempotency key that was already used
+	// for a DIFFERENT movement (type, amount or business linkage). It is
+	// deliberately not an ErrDuplicateEntry: callers treat a duplicate as "this
+	// exact movement already happened", and replaying a 1-分 entry as proof of a
+	// ¥1,000,000 one is how a reused key turns into free goods or minted cash.
+	ErrIdempotencyMismatch = errors.New("ledger: idempotency key already used for a different entry")
+	// ErrKeyTooLong reports an idempotency or business key wider than the
+	// journal columns (ledger_entry.idempotency_key / biz_key, VARCHAR(64)). A
+	// longer key would be rejected — or, without strict mode, truncated into a
+	// collision with another key — by the database, so it is refused up front.
+	ErrKeyTooLong = errors.New("ledger: idempotency or biz key too long")
 )
+
+// MaxKeyLen is the width of ledger_entry.idempotency_key and biz_key
+// (VARCHAR(64)). Callers that compose keys validate against it so an oversized
+// input is a 400, not a database error.
+const MaxKeyLen = 64
 
 // Store persists balances and journal entries. The production implementation
 // writes both in ONE local transaction — the balance update and its journal
@@ -216,7 +232,35 @@ func (r request) validate() error {
 	if r.idempotencyKey == "" {
 		return ErrMissingIdempotency
 	}
+	if len(r.idempotencyKey) > MaxKeyLen || len(r.bizKey) > MaxKeyLen {
+		return fmt.Errorf("%w: idempotency key %d bytes, biz key %d bytes (max %d)",
+			ErrKeyTooLong, len(r.idempotencyKey), len(r.bizKey), MaxKeyLen)
+	}
 	return nil
+}
+
+// matches reports whether a previously applied entry is the same movement the
+// request describes. Only then is a reused key an idempotent replay.
+func (r request) matches(prior Entry) bool {
+	return prior.Type == r.entryType && prior.Amount == r.amount &&
+		prior.BizType == r.bizType && prior.BizKey == r.bizKey
+}
+
+// replay answers a request whose idempotency key is already in the journal:
+// the prior entry and the current balance with ErrDuplicateEntry when the
+// prior entry is this very movement, ErrIdempotencyMismatch otherwise.
+func (l *Ledger) replay(r request, prior Entry) (Entry, Balance, error) {
+	bal, err := l.store.GetBalance(r.accountID)
+	if err != nil {
+		return Entry{}, Balance{}, err
+	}
+	if !r.matches(prior) {
+		return prior, bal, fmt.Errorf("%w: key %q holds %s %s (%s/%s), request is %s %s (%s/%s)",
+			ErrIdempotencyMismatch, r.idempotencyKey,
+			prior.Type, prior.Amount, prior.BizType, prior.BizKey,
+			r.entryType, r.amount, r.bizType, r.bizKey)
+	}
+	return prior, bal, ErrDuplicateEntry
 }
 
 // apply is the single path through which every balance change flows. Routing
@@ -229,15 +273,13 @@ func (l *Ledger) apply(r request) (Entry, Balance, error) {
 	}
 
 	// Idempotency: a repeated application returns the original entry and the
-	// current balance, without moving money again.
+	// current balance, without moving money again — but only when it IS the
+	// same movement. A key reused for a different type, amount or business
+	// linkage is a conflict, never a replay.
 	if prior, found, err := l.store.FindByIdempotencyKey(r.accountID, r.idempotencyKey); err != nil {
 		return Entry{}, Balance{}, err
 	} else if found {
-		bal, err := l.store.GetBalance(r.accountID)
-		if err != nil {
-			return Entry{}, Balance{}, err
-		}
-		return prior, bal, ErrDuplicateEntry
+		return l.replay(r, prior)
 	}
 
 	bal, err := l.store.GetBalance(r.accountID)
@@ -303,9 +345,23 @@ func (l *Ledger) apply(r request) (Entry, Balance, error) {
 	}
 
 	if err := l.store.Apply(entry, newBal, bal.Version); err != nil {
+		// Lost a race on the same key (the store's unique index fired): the
+		// winner's entry decides, under the same match rule as the pre-check.
+		if errors.Is(err, ErrDuplicateEntry) {
+			if prior, found, ferr := l.store.FindByIdempotencyKey(r.accountID, r.idempotencyKey); ferr == nil && found {
+				return l.replay(r, prior)
+			}
+		}
 		return Entry{}, bal, err
 	}
 	return entry, newBal, nil
+}
+
+// FindEntry returns the journal entry applied under idempotencyKey, if any.
+// Services use it to reference an earlier movement (e.g. to refund exactly the
+// debit an order made) without trusting a caller-reported amount.
+func (l *Ledger) FindEntry(accountID int64, idempotencyKey string) (Entry, bool, error) {
+	return l.store.FindByIdempotencyKey(accountID, idempotencyKey)
 }
 
 // Recharge credits the account after a channel payment settles.

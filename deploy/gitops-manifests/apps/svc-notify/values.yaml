@@ -54,3 +54,23 @@ topology:
 pdb:
   enabled: true
   minAvailable: 1
+
+# Least-privilege runtime (templates/deployment.yaml securityContext) and
+# ingress isolation (templates/networkpolicy.yaml).
+networkPolicy:
+  enabled: true
+  # Namespaces allowed in addition to those labelled euler.platform/plane=control.
+  allowFromNamespaces:
+    - mw-gateway
+    - observability
+
+# Secret projected with envFrom (optional); see README「生产必需配置」.
+# The EMAIL channel's SMTP relay comes from it too: EULER_SMTP_ADDR (host:port),
+# EULER_SMTP_USERNAME / EULER_SMTP_PASSWORD, EULER_SMTP_FROM and
+# EULER_SMTP_TLS (starttls default | tls | none). prod/staging refuse to start
+# without EULER_SMTP_ADDR; dev without it logs mail instead of sending it.
+secretName: euler-platform-secrets
+
+# Non-secret env projected into the ConfigMap (EULER_ENV is set per
+# environment in envs/<region>/<env>/values-overrides).
+extraEnv: {}

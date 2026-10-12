@@ -9,11 +9,10 @@
 // never re-implements signing; drift is caught by the golden-vector fixture,
 // not by Terraform users.
 //
-// Source-only deliverable (repo convention): the framework dependency is not
-// vendored on this host, so this module is complete and statically consistent
-// but not built. The four core products (EUECS/EUOSS/EUVPC/EURDS) are covered
-// as resource skeletons sharing one CRUD helper; the pattern is the deliverable
-// the acceptance criterion (C3) counts.
+// The resources (EUECS/EURDS/EUVPC/EUBS/EUEIP/EUOSS) run against the OpenAPI
+// facade (services/svc-openapi): idempotent creates (ClientToken), Describe-
+// based refresh, in-place modify Actions and replacement for the rest — see
+// internal/provider and README.md.
 package main
 
 import (

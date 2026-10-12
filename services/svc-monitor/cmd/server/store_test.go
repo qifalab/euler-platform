@@ -104,9 +104,10 @@ func TestSQLRuleRepoOptimisticLock(t *testing.T) {
 		t.Fatalf("loser: %v, want ErrRuleConflict", err)
 	}
 
-	// And the Delete is shard-scoped the same way.
-	if err := repo.Delete(999, rule.RuleID); err != nil {
-		t.Fatal(err)
+	// And the Delete is shard-scoped the same way: another account's delete
+	// matches nothing and says so.
+	if err := repo.Delete(999, rule.RuleID); !errors.Is(err, ErrRuleNotFound) {
+		t.Fatalf("cross-account delete: %v, want ErrRuleNotFound", err)
 	}
 	if got, err := repo.Get(acct, rule.RuleID); err != nil || got == nil {
 		t.Fatalf("rule vanished after a cross-account delete: %+v (err %v)", got, err)

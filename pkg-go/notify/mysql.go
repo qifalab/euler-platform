@@ -103,15 +103,18 @@ func (s *SQLStore) Get(notificationID string) (Notification, error) {
 }
 
 // CountInWindow counts the notifications created for a tenant since `since`,
-// powering the per-tenant throttle.
+// powering the per-tenant throttle. SUPPRESSED rows are the throttle's own
+// output, not messages the tenant received: counting them would keep a storm
+// suppressing itself forever (and the in-memory stores already exclude them).
 func (s *SQLStore) CountInWindow(accountID int64, since time.Time) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var n int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM notification WHERE account_id = ? AND created_at >= ?`,
-		accountID, since.UTC()).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM notification
+		  WHERE account_id = ? AND created_at >= ? AND status <> ?`,
+		accountID, since.UTC(), string(StatusSuppressed)).Scan(&n); err != nil {
 		return 0, fmt.Errorf("notify: count in window for account %d: %w", accountID, err)
 	}
 	return n, nil

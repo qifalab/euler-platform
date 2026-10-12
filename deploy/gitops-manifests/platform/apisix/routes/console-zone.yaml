@@ -16,6 +16,28 @@
 #
 # The JWT is issued by svc-iam in the account domain; the gateway verifies with
 # the public key published through Nacos, rotated by kid (04§3.4).
+#
+# Hosts: console.euler.emoera.com, plus account.euler.emoera.com for the svc-iam
+# routes — web-account is also served standalone there (the SSO-only auth
+# domain, 02-frontend-architecture) and calls the same relative /api/auth|account|ram|ak|mfa|
+# realname|sts paths. billing.euler.emoera.com (web-billing) and
+# ticket.euler.emoera.com (web-ticket) are the standalone forms of those two
+# sub-apps: they get the routes their views call plus session refresh.
+# www.euler.emoera.com (marketing site) only gets the anonymous, GET-only
+# public catalogue / announcement routes at the end of this file.
+#
+# Upstreams are the in-cluster Services the ApplicationSet deploys:
+# http://<app>.euler-<app>.svc:<service.port of apps/<app>/values.yaml>.
+# /internal/* paths are service-to-service only and are never routed.
+# eu-authorize always calls svc-iam web-auth CheckAccess:
+#   http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+#
+# eu-audit ships to Kafka's SASL_SSL client listener (:9092,
+# platform/middleware/kafka-kraft.yaml): TLS verified against the platform CA
+# (the plugin's ssl / ssl_verify default to true) and SCRAM-SHA-512 as user
+# apisix-audit, whose password the gateway pods read from Secret
+# kafka-apisix-audit. All three brokers are listed so the metadata bootstrap
+# survives one broker (one AZ) down.
 
 routes:
   # ---------------------------------------------------------------------------
@@ -23,8 +45,10 @@ routes:
   # ---------------------------------------------------------------------------
   - id: console-auth
     name: console-account-auth
-    desc: Login, refresh, logout. Rate limited hard; no auth plugin by design.
-    hosts: [console.euler.emoera.com]
+    desc: Login, register, MFA login step, password reset. Rate limited hard; no auth plugin by design.
+    hosts: [console.euler.emoera.com, account.euler.emoera.com]
+    # Catch-all for the credential endpoints. refresh/session/logout are
+    # matched first by the exact-path route console-auth-session below.
     uris:
       - /api/auth/*
     upstream:
@@ -59,16 +83,70 @@ routes:
             x-requested-with:
               type: string
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  # Session maintenance — refresh / session / logout. Split from console-auth:
+  # the 5/min/IP credential-stuffing floor there also throttled the silent
+  # refresh every open console tab performs (and the session fetch on each
+  # shell boot), logging users out behind a shared NAT. These endpoints mint
+  # nothing from a password, so they get a per-IP floor sized for NATed
+  # offices instead. Exact paths win over the /api/auth/* prefix.
+  - id: console-auth-session
+    name: console-account-auth-session
+    desc: Silent refresh, session snapshot, logout. No auth plugin by design (refresh is cookie-authenticated by svc-iam).
+    hosts: [console.euler.emoera.com, account.euler.emoera.com, billing.euler.emoera.com, ticket.euler.emoera.com]
+    uris:
+      - /api/auth/refresh
+      - /api/auth/session
+      - /api/auth/logout
+    priority: 10
+    upstream:
+      nodes:
+        "svc-iam.euler-svc-iam.svc:9101": 1
+      type: roundrobin
+      timeout: { connect: 2, send: 5, read: 5 }
+    plugins:
+      limit-count:
+        count: 300
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+        rejected_msg: '{"Code":"Common.Throttling","Message":"too many requests"}'
+      # Same CSRF floor as console-auth: refresh/logout ride the HttpOnly
+      # refresh cookie, so a cross-site form post must not reach them.
+      request-validation:
+        header_schema:
+          type: object
+          required: ["x-requested-with"]
+          properties:
+            x-requested-with:
+              type: string
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   # ---------------------------------------------------------------------------
   # Account / RAM / AK management
   # ---------------------------------------------------------------------------
   - id: console-account
     name: console-account-manage
-    hosts: [console.euler.emoera.com]
+    hosts: [console.euler.emoera.com, account.euler.emoera.com]
+    # Every logged-in svc-iam web-auth path (services/svc-iam/cmd/web-auth):
+    # profile/password, RAM users/roles/policies/simulate, AccessKeys, MFA
+    # bind/verify/unbind, real-name, STS AssumeRole.
     uris:
       - /api/account/*
+      - /api/ram/*
+      - /api/ak
+      - /api/ak/*
+      - /api/mfa/*
+      - /api/realname/*
+      - /api/sts/*
     upstream:
       # Real cluster Service (namespace from the ApplicationSet: euler-svc-iam).
       nodes:
@@ -79,7 +157,7 @@ routes:
         count: 1800          # 30 req/s per logged-in user (04§3.2)
         time_window: 60
         key_type: var
-        key: http_x_eu_uid
+        key: http_x_euler_account_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
@@ -90,18 +168,22 @@ routes:
         jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
       eu-authorize:
         check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
-        action_from_query: Action
-        action_prefix: euiam
+        # svc-iam's console endpoints are plain REST (no RPC-style Action
+        # query parameter), so the action is pinned like console-trade:
+        # action_from_query rejected every call with "missing or malformed
+        # Action" (400) before it reached svc-iam.
+        action: euiam:ConsoleApi
         region: cn-north-1
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   # ---------------------------------------------------------------------------
   # Trade: orders, billing, fee centre — aggregated by console-bff
   # ---------------------------------------------------------------------------
   - id: console-trade
     name: console-trade-orders
-    hosts: [console.euler.emoera.com]
+    hosts: [console.euler.emoera.com, billing.euler.emoera.com]
     # console-bff serves /console/* and the BFF-backed console views call
     # exactly these paths. The route previously declared /api/trade/* with no
     # rewrite, so every request reached the BFF as /api/trade/... — a path it
@@ -119,7 +201,7 @@ routes:
         count: 1800
         time_window: 60
         key_type: var
-        key: http_x_eu_uid
+        key: http_x_euler_account_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
@@ -128,6 +210,7 @@ routes:
         mode: jwt
         jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
       eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
         # The BFF's endpoints are plain REST (no RPC-style Action query
         # parameter), so the action is pinned per route: action_from_query
         # would resolve to nil and reject every call with
@@ -135,14 +218,15 @@ routes:
         action: eutrade:ConsoleApi
         region: cn-north-1
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   # ---------------------------------------------------------------------------
   # Resource list / lifecycle — aggregated by console-bff
   # ---------------------------------------------------------------------------
   - id: console-resource
     name: console-resource-list
-    hosts: [console.euler.emoera.com]
+    hosts: [console.euler.emoera.com, billing.euler.emoera.com]
     # Same contract as console-trade: the BFF serves /console/resources, and
     # that is the path the console views call. (/api/resource/* was declared
     # here but is not a path any service registers.)
@@ -162,7 +246,7 @@ routes:
         count: 1800
         time_window: 60
         key_type: var
-        key: http_x_eu_uid
+        key: http_x_euler_account_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
@@ -171,33 +255,41 @@ routes:
         mode: jwt
         jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
       eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
         # Fixed action, like console-trade: the BFF is plain REST.
         action: eures:ConsoleApi
         region: cn-north-1
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   # ---------------------------------------------------------------------------
-  # Per-product console backends: /api/{productCode}/**
-  # Adding a product means adding one route here (01§7.3 step 5).
+  # Service-owned console APIs: /api/v1/<svc>/** straight to the owning Service
+  # (the paths the console shell and sub-apps call; the vite dev proxies in
+  # platform/frontend/apps/*/vite.config.ts mirror this table). Plain REST, so
+  # eu-authorize pins one action per domain, like console-trade.
+  #
+  # (The former console-product-euecs route — /api/euecs/* to console-bff —
+  # was removed: console-bff registers no such path, and the ECS console calls
+  # /console/*, /api/v1/orchestrator, /api/v1/catalog and /api/v1/orders,
+  # all routed here.)
   # ---------------------------------------------------------------------------
-  - id: console-product-euecs
-    name: console-compute-euecs
-    hosts: [console.euler.emoera.com]
+  - id: console-catalog
+    name: console-trade-catalog
+    desc: Catalog — products, SKUs, quote, regions, images, placement (svc-catalog)
+    hosts: [console.euler.emoera.com, billing.euler.emoera.com, ticket.euler.emoera.com]
     uris:
-      - /api/euecs/*
+      - /api/v1/catalog/*
     upstream:
-      # No standalone svc-euecs exists yet; the console product plane is
-      # aggregated by console-bff (real fan-out to catalog/order/orchestrator).
       nodes:
-        "console-bff.euler-console-bff.svc:9200": 1
+        "svc-catalog.euler-svc-catalog.svc:9207": 1
       type: roundrobin
     plugins:
       limit-count:
-        count: 1800
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
         time_window: 60
         key_type: var
-        key: http_x_eu_uid
+        key: http_x_euler_account_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
@@ -206,14 +298,458 @@ routes:
         mode: jwt
         jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
       eu-authorize:
-        action_from_query: Action
-        action_prefix: euecs
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eutrade:ConsoleApi
         region: cn-north-1
-        # High-risk operations get fine-grained ARN evaluation at the gateway
-        # rather than relying solely on the service-layer owner check (07§3.4).
-        resource_arn_template: "eu:ecs:$region:$account_id:instance/$arg_InstanceId"
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-orders
+    name: console-trade-orders-direct
+    desc: Orders, auto-renew and free trial (svc-order)
+    hosts: [console.euler.emoera.com, billing.euler.emoera.com]
+    uris:
+      - /api/v1/orders
+      - /api/v1/orders/*
+      - /api/v1/trial/*
+    upstream:
+      nodes:
+        "svc-order.euler-svc-order.svc:9204": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eutrade:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-coupons
+    name: console-trade-coupons
+    desc: The account's coupons — list and detail (svc-order)
+    hosts: [console.euler.emoera.com, billing.euler.emoera.com]
+    # svc-order serves coupons read-only (GET /api/v1/coupons and
+    # /api/v1/coupons/{couponId}); no other method is routed.
+    methods: [GET]
+    uris:
+      - /api/v1/coupons
+      - /api/v1/coupons/*
+    upstream:
+      nodes:
+        "svc-order.euler-svc-order.svc:9204": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eutrade:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-payment
+    name: console-trade-payment
+    desc: Tenant-facing payment routes only — balance, recharge (channel-signed), freeze, consume
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/payment/*
+    upstream:
+      # /api/v1/payment/* only. /internal/payment/{consume,refund} are
+      # svc-order's service-to-service debit/refund and are never routed.
+      nodes:
+        "svc-payment.euler-svc-payment.svc:9205": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eutrade:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-marketplace
+    name: console-trade-marketplace
+    desc: Marketplace listings, review, settlements (svc-marketplace)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/marketplace/*
+    upstream:
+      nodes:
+        "svc-marketplace.euler-svc-marketplace.svc:9212": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eutrade:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-metering
+    name: console-trade-metering
+    desc: Usage aggregate, bills, anomaly scan (svc-metering)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/metering/*
+    upstream:
+      nodes:
+        "svc-metering.euler-svc-metering.svc:9206": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eutrade:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-orchestrator
+    name: console-resource-orchestrator
+    desc: Resource fulfilment, detail, lifecycle actions, release (svc-orchestrator)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/orchestrator/*
+    upstream:
+      nodes:
+        "svc-orchestrator.euler-svc-orchestrator.svc:9203": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eures:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-quota
+    name: console-resource-quota
+    desc: Quota usage, read-only (svc-quota)
+    hosts: [console.euler.emoera.com]
+    # Tenants may only read their usage. occupy / commit / release are the
+    # two-phase reservation svc-orchestrator drives service-to-service while
+    # fulfilling an order (services/svc-orchestrator/cmd/server/quotaclient.go);
+    # routing them let a tenant hold, commit or release quota outside any
+    # order. (platform/frontend calls no /api/v1/quota path at present.)
+    methods: [GET]
+    uris:
+      - /api/v1/quota/usage
+    upstream:
+      nodes:
+        "svc-quota.euler-svc-quota.svc:9208": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eures:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-monitor
+    name: console-monitor-rules
+    desc: Monitor rules, metrics, templates, SLO, chaos drills (svc-monitor)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/monitor/*
+    upstream:
+      nodes:
+        "svc-monitor.euler-svc-monitor.svc:9202": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eumon:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-alertcenter
+    name: console-monitor-alertcenter
+    desc: Alert center — ingest, converge/flush, history (alert-center)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/alertcenter/*
+    upstream:
+      nodes:
+        "alert-center.euler-alert-center.svc:9213": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eumon:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-tickets
+    name: console-support-tickets
+    desc: Support tickets and ticket enums (svc-ticket)
+    hosts: [console.euler.emoera.com, ticket.euler.emoera.com]
+    uris:
+      - /api/v1/tickets
+      - /api/v1/tickets/*
+    upstream:
+      nodes:
+        "svc-ticket.euler-svc-ticket.svc:8080": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eusupport:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-announcements
+    name: console-support-announcements
+    desc: Announcement board (svc-notify)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/announcements
+    upstream:
+      nodes:
+        "svc-notify.euler-svc-notify.svc:8080": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eusupport:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  - id: console-apimeta
+    name: console-meta-apimeta
+    desc: API Explorer and the console sub-app registry (svc-api-meta)
+    hosts: [console.euler.emoera.com]
+    uris:
+      - /api/v1/apimeta/*
+      - /api/v1/meta/console/apps
+    upstream:
+      nodes:
+        "svc-api-meta.euler-svc-api-meta.svc:8080": 1
+      type: roundrobin
+    plugins:
+      limit-count:
+        count: 1800          # 30 req/s per logged-in account (04§3.2)
+        time_window: 60
+        key_type: var
+        key: http_x_euler_account_id
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+      eu-auth:
+        mode: jwt
+        jwt_public_key_file: /opt/eu-secrets/jwt/publicKey
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action: eumeta:ConsoleApi
+        region: cn-north-1
+      eu-audit:
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
+
+  # ---------------------------------------------------------------------------
+  # Marketing site (www.*) — anonymous, read-only public data. The Nuxt site
+  # (apps/site) fetches these during SSR and in the browser. Exact paths and
+  # GET/HEAD only: nothing else of svc-catalog / svc-notify is exposed here.
+  # ---------------------------------------------------------------------------
+  - id: portal-catalog-public
+    name: portal-catalog-public
+    desc: Public product catalogue and categories for the marketing site (svc-catalog)
+    hosts: [www.euler.emoera.com]
+    methods: [GET, HEAD]
+    uris:
+      - /api/v1/catalog/products
+      - /api/v1/catalog/categories
+    upstream:
+      nodes:
+        "svc-catalog.euler-svc-catalog.svc:9207": 1
+      type: roundrobin
+      timeout: { connect: 2, send: 5, read: 5 }
+    plugins:
+      limit-count:
+        count: 3600          # 60 req/s per client IP (04§3.2 官网开放区)
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+        rejected_msg: '{"Code":"Common.Throttling","Message":"too many requests"}'
+      eu-auth:
+        mode: anonymous
+
+  - id: portal-announcements-public
+    name: portal-announcements-public
+    desc: Public announcements board for the marketing site (svc-notify)
+    hosts: [www.euler.emoera.com]
+    methods: [GET, HEAD]
+    uris:
+      - /api/v1/announcements
+    upstream:
+      nodes:
+        "svc-notify.euler-svc-notify.svc:8080": 1
+      type: roundrobin
+      timeout: { connect: 2, send: 5, read: 5 }
+    plugins:
+      limit-count:
+        count: 3600          # 60 req/s per client IP (04§3.2 官网开放区)
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis-cluster
+        redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
+        redis_cluster_name: eu-redis-cluster
+        rejected_code: 429
+        rejected_msg: '{"Code":"Common.Throttling","Message":"too many requests"}'
+      eu-auth:
+        mode: anonymous
 
 global_rules:
   - id: console-global

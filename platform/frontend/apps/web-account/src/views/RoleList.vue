@@ -21,6 +21,7 @@ import {
   type FormRules,
 } from "element-plus";
 import { useAccountAuth } from "../stores/auth";
+import { formatTime } from "../format";
 
 const auth = useAccountAuth();
 
@@ -44,32 +45,17 @@ interface RoleDto {
   createdAt?: string;
 }
 
-// Unwrap the platform envelope {RequestId,Code,Message,Data} (03§9.3).
-async function readEnvelope<T>(res: Response): Promise<T> {
-  const body = await res.json();
-  if (!res.ok || body.Code !== "OK") {
-    throw new Error(body.Message ?? `request failed (HTTP ${res.status})`);
-  }
-  return body.Data as T;
-}
-
-function authHeaders(): HeadersInit {
-  return auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : {};
-}
-
 async function fetchRoles() {
   if (!auth.isAuthenticated) return;
   try {
-    const data = await readEnvelope<{ roles: RoleDto[]; total: number }>(
-      await fetch("/api/ram/roles", { headers: authHeaders() }),
-    );
+    const data = await auth.request<{ roles: RoleDto[]; total: number }>("/api/ram/roles");
     roles.splice(0, roles.length, ...(data?.roles ?? []).map((r) => ({
       id: r.id ?? 0,
       name: r.name,
       description: r.description ?? "",
       policies: r.policies ?? [],
       status: r.status ?? 1,
-      createdAt: r.createdAt ?? "—",
+      createdAt: formatTime(r.createdAt),
     })));
   } catch (e) {
     ElMessage.error(`加载 RAM 角色失败：${(e as Error).message}`);
@@ -111,20 +97,17 @@ async function submitCreate() {
     .map((s) => s.trim())
     .filter(Boolean);
   try {
-    const created = await readEnvelope<RoleDto>(
-      await fetch("/api/ram/roles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ name: form.name, description: form.description, policies }),
-      }),
-    );
+    const created = await auth.request<RoleDto>("/api/ram/roles", {
+      method: "POST",
+      body: JSON.stringify({ name: form.name, description: form.description, policies }),
+    });
     roles.push({
       id: created.id ?? 0,
       name: created.name ?? form.name,
       description: created.description ?? form.description,
       policies: created.policies ?? policies,
       status: created.status ?? 1,
-      createdAt: created.createdAt ?? "—",
+      createdAt: formatTime(created.createdAt),
     });
     dialogVisible.value = false;
     ElMessage.success(`角色「${form.name}」已创建`);

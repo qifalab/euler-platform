@@ -183,8 +183,8 @@ flowchart TB
 | 控制台 | `/api/trade/**` | `console-bff@@console-bff` | 订单/费用中心聚合层(《03》§4.0 console-bff) |
 | 控制台 | `/api/resource/**` | `console-bff@@console-bff` | 资源列表/生命周期聚合层(同上) |
 | 控制台 | `/api/{productCode}/**` | `svc-{productCode}@@svc-{productCode}` | 各产品控制台后端,新增产品=新增一条路由模板,服务同步补录《03》§4.0(见 4.3) |
-| OpenAPI | `euecs.api.euler.emoera.com/**` | `svc-euecs@@svc-euecs` | RPC 风格:`Action`+日期型 `Version` 参数,URI 不带版本(《03》§9.1) |
-| OpenAPI | `euoss.api.euler.emoera.com/**` | MinIO 售卖集群(特殊路由,见 9.3/9.4) | S3 兼容协议透传 |
+| OpenAPI | `{productCode}.api.euler.emoera.com/**`(euecs/eurds/euvpc/eubs/eueip/eumon,及 euoss 带 `Action` 的管控请求) | OpenAPI 门面 `svc-openapi`(K8s Service `svc-openapi.euler-svc-openapi.svc:9230`,`pass_host: pass`) | RPC 风格:`Action`+日期型 `Version` 参数,URI 不带版本(《03》§9.1);门面按 Host 选产品,把 Action 译为 svc-catalog/svc-order/svc-orchestrator/svc-monitor 调用;上游 send/read 超时 30s(创建类 Action 串行约 5 次内部调用) |
+| OpenAPI | `euoss.api.euler.emoera.com/**`(数据面) | MinIO 售卖集群(特殊路由,见 9.3/9.4) | S3 兼容协议透传 |
 
 路由命名规范:`{zone}-{domain}-{name}`,如 `console-trade-list-orders`。所有路由强制挂 `prometheus` 与 `request-id` 插件(通过 global_rule 统一下发,避免遗漏)。
 
@@ -293,12 +293,15 @@ routes:
     uri: /*
     methods: [POST]
     upstream:
-      discovery_type: nacos
-      service_name: svc-euecs@@svc-euecs
+      # 所有 OpenAPI 产品共用的门面 svc-openapi(按 Host 选产品),而非各产品 svc-{productCode}
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass
+      timeout: { connect: 2, send: 30, read: 30 }   # 创建类 Action 串行约 5 次内部调用
     plugins:
       forward-auth:
-        uri: http://svc-iam.business.svc/internal/openapi/verify
+        uri: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify   # svc-iam verify 容器(:9100);实际由 eu-auth 的 verify_endpoint 承载
         request_headers: [Authorization, x-cps-date, x-cps-content-sha256, x-cps-nonce, x-cps-security-token]   # 头名与《07-security.md》§4.1 签名契约对齐
         upstream_headers: [X-Euler-Uid, X-Euler-Identity, X-Euler-TraceId, X-Euler-Ak-Id, X-Euler-Quota-Qps]
         timeout: { connect: 500, send: 500, read: 500 }

@@ -7,7 +7,7 @@ const instances: InstanceListConfig = {
   title: "云服务器 ECS",
   createLabel: "创建实例",
   placement: { key: "zoneId", title: "可用区" },
-  extraColumns: [{ key: "expiredTime", title: "到期时间", from: "ExpiredAt", fallback: "—" }],
+  extraColumns: [{ key: "expiredTime", title: "到期时间", from: "ExpiredAt", fallback: "—", format: "time" }],
   empty: {
     title: "暂无云服务器",
     description: "创建您的第一台云服务器。",

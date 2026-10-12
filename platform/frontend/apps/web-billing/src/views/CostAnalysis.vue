@@ -3,10 +3,9 @@
  *  按产品/资源分摊 pretax 费用,与账单总额一致(无未解释差异).
  *  Wired to console-bff /console/cost-analysis (fan-out svc-billing). */
 import { ref, computed, onMounted } from "vue";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PriceText, PageHeader } from "@eu/ui";
 
-const sdk = createSDK({ baseURL: "" });
 const byProduct = ref<Record<string, string>>({});
 const byResource = ref<Record<string, string>>({});
 const total = ref("0");

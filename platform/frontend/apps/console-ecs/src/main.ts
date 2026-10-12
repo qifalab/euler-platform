@@ -16,7 +16,7 @@ import "@eu/ui/style.css";
 import "@eu/console-kit/style.css";
 import App from "./App.vue";
 import { router } from "./router";
-import { inWujieSandbox, readSharedProps } from "@eu/wujie-bridge";
+import { bootstrapSubApp, readSharedProps } from "@eu/wujie-bridge";
 
 let app: VueApp | null = null;
 
@@ -46,10 +46,7 @@ export async function beforeLoad() {
   console.debug("[console-ecs] beforeLoad");
 }
 
-// Standalone mode (02§6.6 degradation path): self-mount when not in the sandbox.
-if (!inWujieSandbox()) {
-  document.addEventListener("DOMContentLoaded", () => {
-    const el = document.getElementById("app");
-    if (el) void mount(el);
-  });
-}
+// Inside Wujie the shell drives mount/unmount through window.__WUJIE_MOUNT /
+// __WUJIE_UNMOUNT; standalone (02§6.6 degradation path) self-mounts once the
+// DOM is ready. bootstrapSubApp wires whichever applies.
+bootstrapSubApp(() => mount("#app"), unmount);

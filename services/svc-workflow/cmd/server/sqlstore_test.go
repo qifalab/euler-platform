@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,13 +127,79 @@ func TestSQLStoreFailedFlowCarriesCompensationTrail(t *testing.T) {
 }
 
 // TestSQLStoreOneFlowPerBusinessKey pins uk_biz: the same order must not run the
-// same saga twice — that is double provisioning.
+// same saga twice — that is double provisioning. The duplicate must be refused
+// with errFlowExists BEFORE any step runs (the check used to happen when the
+// finished record was written, after the saga had already provisioned).
 func TestSQLStoreOneFlowPerBusinessKey(t *testing.T) {
 	a := newSQLTestApp(t)
+	runs := registerCountingFlow(t, "test_count")
 
-	startTestFlow(t, a, "ord-dup")
-	_, _, err := a.StartFlow(100123, "test_ok", "ord-dup")
-	if err == nil {
-		t.Fatal("a second flow over the same business key must be refused")
+	if _, _, err := a.StartFlow(100123, "test_count", "ord-dup"); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	_, _, err := a.StartFlow(100123, "test_count", "ord-dup")
+	if !errors.Is(err, errFlowExists) {
+		t.Fatalf("second start over the same business key = %v, want errFlowExists", err)
+	}
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("the saga ran %d times, want 1 (a refused start must not run a step)", n)
+	}
+}
+
+// TestSQLStoreConcurrentStartsRunOnce: the reservation insert is the arbiter, so
+// of several simultaneous starts over one key exactly one runs.
+func TestSQLStoreConcurrentStartsRunOnce(t *testing.T) {
+	a := newSQLTestApp(t)
+	runs := registerCountingFlow(t, "test_count")
+
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _, errs[i] = a.StartFlow(100123, "test_count", "ord-race")
+		}(i)
+	}
+	wg.Wait()
+	ok := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case !errors.Is(err, errFlowExists):
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if ok != 1 || runs.Load() != 1 {
+		t.Fatalf("%d starts succeeded and the saga ran %d times, want 1 and 1", ok, runs.Load())
+	}
+}
+
+// TestSQLStoreKeylessStartsDoNotCollide: an empty biz_key used to be stored as
+// "", so the second keyless start hit uk_biz.
+func TestSQLStoreKeylessStartsDoNotCollide(t *testing.T) {
+	a := newSQLTestApp(t)
+	registerCountingFlow(t, "test_count")
+
+	id1, _, err := a.StartFlow(100123, "test_count", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, _, err := a.StartFlow(100123, "test_count", "")
+	if err != nil {
+		t.Fatalf("second keyless start: %v", err)
+	}
+	r1, _, err1 := a.store.get(id1)
+	r2, _, err2 := a.store.get(id2)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("lookup: %v / %v", err1, err2)
+	}
+	if r1.BizKey == "" || r1.BizKey == r2.BizKey {
+		t.Fatalf("keyless starts got biz keys %q and %q, want distinct non-empty keys", r1.BizKey, r2.BizKey)
+	}
+	if r1.Status != workflow.FlowCompleted {
+		t.Fatalf("finished flow status = %s, want COMPLETED", r1.Status)
 	}
 }

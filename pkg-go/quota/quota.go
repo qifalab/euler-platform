@@ -207,6 +207,11 @@ func (m *Manager) CheckAndOccupy(accountID int64, quotaCode, region string, amou
 	}
 
 	now := m.now()
+	// Mint the token id BEFORE the usage row moves. The id generator can fail
+	// (the SQL 号段 allocator panics when a refill fails); minting after the
+	// increment would leave Occupying raised with no token to release it — the
+	// sweeper only reclaims what the token table knows about.
+	tokenID := m.newToken()
 	updated := u
 	updated.Occupying += amount
 	if err := m.store.UpdateUsage(updated, u.Version); err != nil {
@@ -214,7 +219,7 @@ func (m *Manager) CheckAndOccupy(accountID int64, quotaCode, region string, amou
 	}
 
 	tok := Token{
-		TokenID:   m.newToken(),
+		TokenID:   tokenID,
 		AccountID: accountID,
 		QuotaCode: quotaCode,
 		Region:    region,
@@ -285,6 +290,15 @@ func (m *Manager) CommitOccupy(tokenID string) error {
 // Releasing an unknown or already-released token SUCCEEDS: this runs as saga
 // compensation, which retries, and an error would turn a completed rollback
 // into a false escalation.
+//
+// Like CommitOccupy and the sweeper, the token is CLAIMED (deleted) before the
+// usage row moves: two releases (a saga retry racing the original), or a
+// release racing a commit or the sweep, would otherwise each read the token and
+// each decrement Occupying — returning the same reservation to the pool twice
+// and eating another in-flight order's reservation (oversell). Exactly one
+// claimer moves the counter; a claim that finds the token gone is the
+// "already released" success. If the usage update then fails, the token is
+// restored so the reservation can still be released (or swept) later.
 func (m *Manager) ReleaseOccupy(tokenID string) error {
 	tok, err := m.store.GetToken(tokenID)
 	if errors.Is(err, ErrTokenNotFound) {
@@ -294,8 +308,16 @@ func (m *Manager) ReleaseOccupy(tokenID string) error {
 		return err
 	}
 
+	if err := m.store.DeleteToken(tokenID); err != nil {
+		if errors.Is(err, ErrTokenNotFound) {
+			return nil // a concurrent release, commit or sweep claimed it first
+		}
+		return err
+	}
+
 	u, err := m.store.GetUsage(tok.AccountID, tok.QuotaCode, tok.Region)
 	if err != nil {
+		_ = m.store.PutToken(tok) // restore the claim; the reservation still stands
 		return err
 	}
 	updated := u
@@ -304,13 +326,7 @@ func (m *Manager) ReleaseOccupy(tokenID string) error {
 		updated.Occupying = 0
 	}
 	if err := m.store.UpdateUsage(updated, u.Version); err != nil {
-		return err
-	}
-	// The delete also has to tolerate an already-claimed token: a commit or the
-	// expiry sweep may have claimed it between the GetToken above and here, and
-	// this function's contract is that releasing an unknown or already-released
-	// token SUCCEEDS (it runs as saga compensation, which retries).
-	if err := m.store.DeleteToken(tokenID); err != nil && !errors.Is(err, ErrTokenNotFound) {
+		_ = m.store.PutToken(tok)
 		return err
 	}
 	return nil

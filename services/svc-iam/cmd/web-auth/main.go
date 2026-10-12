@@ -23,11 +23,29 @@
 //	POST /api/ak/{akId}/enable  — re-enable a disabled AccessKey
 //	POST /api/ak/{akId}/rotate  — mint a replacement, mark old one in grace window
 //	DELETE /api/ak/{akId}       — permanently delete an AccessKey
+//	  (create/list take an optional ramUserId — body / query — to manage a
+//	  RAM user's keys; such keys verify as "user/id:<n>")
+//
+//	POST /api/auth/forgot/send-code — email a 6-digit reset code (always 200)
+//	POST /api/auth/forgot/reset     — code + new password; revokes every session
+//
+//	POST /internal/authz/check  — gateway CheckAccess (eu-authorize.lua);
+//	                              internal-token only, never routed publicly
+//	GET  /internal/accounts/{id}/realname — real-name status for other
+//	                              services (svc-order trial); internal-token only
+//
+// Persistence (F1): with EULER_DB_DSN every account, refresh session, RAM
+// user/role/policy, MFA seed, real-name result and reset code lives in
+// account_db (store_sql.go); AccessKeys go through the pkg-go/accesskey store
+// and pkg-go/kms keys cmd/verify reads, so a console-created key verifies at
+// the gateway. Unset, the in-memory store keeps dev and tests dependency-free
+// (store_mem.go); production refuses to start without it.
 //
 // Token scheme (02§5.1):
-//   - access_token: HS256-signed JWT, 15 min, returned in the JSON body (memory-only on the client)
-//   - refresh_token: opaque crypto/rand string, 7 days, HttpOnly cookie on Domain=.euler.emoera.com
-//     (in dev the cookie domain is localhost; the frontend reads it via credentials:include)
+//   - access_token: RS256-signed JWT (jwt.go), 15 min, returned in the JSON body (memory-only on the client)
+//   - refresh_token: opaque crypto/rand string, 7 days, HttpOnly cookie. Its Domain comes from
+//     EULER_COOKIE_DOMAIN (prod/staging: .euler.emoera.com, shared by account→console SSO);
+//     unset means a host-only cookie (dev: localhost; the frontend reads it via credentials:include)
 //
 // This is a stdlib-HTTP service (repo convention). The password hash is
 // salted SHA-256 here for zero-dep portability; production uses argon2id with a
@@ -35,8 +53,8 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -45,18 +63,22 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/qifalab/euler-platform/accesskey"
 	"github.com/qifalab/euler-platform/authz"
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/kms"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/sts"
 	"github.com/qifalab/euler-platform/totp"
 )
@@ -74,28 +96,12 @@ const (
 	maxBodyBytes = 1 << 20 // 1 MiB
 )
 
-// hmacSecret is the HS256 signing key. Loaded from EULER_JWT_SECRET; when unset
-// (dev) a process-local random key is generated so the service stays usable,
-// at the cost of invalidating tokens across restarts. Production must set
-// EULER_JWT_SECRET (loaded from KMS/secret manager — 07§5.3).
-var hmacSecret = loadJWTSecret()
-
-func loadJWTSecret() string {
-	if s := os.Getenv("EULER_JWT_SECRET"); s != "" {
-		return s
-	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	slog.Warn("EULER_JWT_SECRET not set — generated ephemeral JWT signing key (dev only); tokens will not survive restarts")
-	return hex.EncodeToString(b)
-}
-
 // cookieSecure controls the Secure attribute of the refresh cookie.
-// EULER_COOKIE_SECURE=true/false overrides; when unset it defaults to true in
-// production (EULER_ENV=prod/production) and false in dev so plain-HTTP localhost
-// keeps working.
+// EULER_COOKIE_SECURE=true/false overrides. Otherwise the cookie is Secure
+// unless EULER_ENV explicitly says dev/local/test: secure by default, so a
+// deployment that forgets EULER_ENV does not ship a refresh token that may
+// travel over plain HTTP. (Browsers accept Secure cookies on
+// http://localhost, so local development keeps working.)
 var cookieSecure = loadCookieSecure()
 
 func loadCookieSecure() bool {
@@ -106,16 +112,24 @@ func loadCookieSecure() bool {
 		}
 		slog.Warn("invalid EULER_COOKIE_SECURE, falling back to env default", "value", v)
 	}
-	env := strings.ToLower(os.Getenv("EULER_ENV"))
-	return env == "prod" || env == "production"
+	switch runmode.Env() {
+	case "dev", "local", "test":
+		return false
+	}
+	return true
 }
+
+// cookieDomain is the Domain attribute of the refresh cookie
+// (EULER_COOKIE_DOMAIN). Production sets ".euler.emoera.com" so the session
+// minted on the account site is sent to the console (02§5.1 SSO); empty keeps
+// the cookie host-only, which is what local development needs.
+var cookieDomain = loadCookieDomain()
+
+func loadCookieDomain() string { return strings.TrimSpace(os.Getenv("EULER_COOKIE_DOMAIN")) }
 
 // dummyPasswordHash is compared against when the account does not exist, so
 // login latency does not reveal whether an email is registered.
-var dummyPasswordHash = func() string {
-	salt := randHex(16)
-	return salt + "$" + sha256Hex(salt+randHex(16))
-}()
+var dummyPasswordHash = hashPassword(randHex(16))
 
 // --- domain ---
 
@@ -123,13 +137,18 @@ type account struct {
 	AccountID      int64
 	AccountName    string // login (email)
 	RealName       string
-	PasswordHash   string // salted sha256: salt$hex
+	PasswordHash   string // PBKDF2-SHA256 (accountsec.go); legacy "salt$hex" still verifies
 	Status         int    // 1 normal, 2 frozen, 3 closed
 	RealNameStatus int    // 0 unverified, 1 individual verified, 2 enterprise verified (07§2.3)
 	RealNameType   string // "individual" | "enterprise" | ""
-	IDCardNo       string // masked after verification (real-name doc number)
-	EnterpriseName string
-	CreatedAt      time.Time // provisioning time, surfaced in profile (03§9.3)
+	IDCardNo       string // MASKED document number (the plaintext is never kept)
+	// IdentityFingerprint is HMAC(pepper, kind:number) — the dedup key for
+	// "one person, many accounts" (trial anti-abuse) without storing the number.
+	IdentityFingerprint string
+	EnterpriseName      string
+	CreatedAt           time.Time // provisioning time, surfaced in profile (03§9.3)
+	// version is account_db's optimistic-lock column (SQL store bookkeeping).
+	version int
 	// TokenVersion is bumped whenever credentials change (e.g. password
 	// change). It is embedded in issued access tokens ("tv" claim) and
 	// compared on verification, so older tokens are rejected immediately.
@@ -143,55 +162,6 @@ type account struct {
 	MFAEnabled      bool
 }
 
-type session struct {
-	account      account
-	refreshToken string
-	refreshExp   time.Time
-	accessExp    time.Time
-}
-
-var (
-	mu       sync.RWMutex
-	accounts = map[string]account{}  // accountName → account
-	byID     = map[int64]account{}   // accountID → account
-	sessions = map[string]*session{} // refreshToken → session
-
-	// RAM sub-users keyed by accountID → username → ramUser. Phase-1 is
-	// in-memory (02§5.3); prod persists to the iam_user table (03 DDL).
-	ramUsers = map[int64]map[string]ramUser{}
-	// AccessKeys keyed by accountID → akID. Phase-1 in-memory.
-	accessKeys = map[int64][]accessKey{}
-
-	ramSeq int64 // RAM sub-user id counter (prod uses snowflake — 00 附录A)
-	akSeq  int64 // AccessKey id counter
-
-	// RAM roles keyed by accountID → roleName → ramRole (07§3.2). Phase-1
-	// in-memory; prod persists to iam_role / iam_role_policy.
-	ramRoles = map[int64]map[string]ramRole{}
-	// RAM policies keyed by accountID → policyName → storedPolicy (07§3.2). A
-	// policy document is JSON ({Version,Statement}); the name is the binding
-	// key (the doc has no Name field, matching pkg-go/authz.Policy).
-	ramPolicies = map[int64]map[string]storedPolicy{}
-
-	roleSeq int64
-	polSeq  int64
-
-	// MFA (07§2.4): the seed-encryption KMS and the shared replay-safe TOTP
-	// verifier. In production the KMS is svc-kms over gRPC (07§5.3); the
-	// interface is identical. The verifier's replay memory is process-local
-	// — restarting reopens a ≤90s replay window, the standard trade.
-	mfaKMS        *kms.KMS
-	totpVerifier  *totp.Verifier
-)
-
-func init() {
-	mfaKMS = kms.New()
-	if err := mfaKMS.GenerateMasterKey(kms.PurposeUser, 1); err != nil {
-		panic("mfa kms bootstrap: " + err.Error())
-	}
-	totpVerifier = totp.NewVerifier()
-}
-
 // mfaReplayKey scopes the TOTP replay memory per account.
 func mfaReplayKey(accountID int64) string { return fmt.Sprintf("mfa:%d", accountID) }
 
@@ -201,7 +171,7 @@ func mfaSecret(a account) ([]byte, error) {
 	if len(a.MFASecretCipher) == 0 {
 		return nil, errors.New("Auth.MFANotBound")
 	}
-	return mfaKMS.Decrypt(kms.PurposeUser, a.MFASecretCipher, a.MFAKeyVersion)
+	return keyring.Decrypt(kms.PurposeUser, a.MFASecretCipher, a.MFAKeyVersion)
 }
 
 // ramUser is a RAM sub-account (07§2.6). Status mirrors the account status enum.
@@ -212,25 +182,11 @@ type ramUser struct {
 	DisplayName string
 	Remark      string
 	Status      int // 1 enabled, 2 disabled, 3 deleted (soft)
-	CreatedAt   time.Time
+	// Policies are the attached policy names (ram_user_policy); they are the
+	// user's effective policy set at /internal/authz/check.
+	Policies  []string
+	CreatedAt time.Time
 }
-
-// accessKey is a long-lived credential pair (07§2.7). The secret is shown ONCE
-// at creation and never stored in plaintext — only its salted hash is retained
-// for later verification (prod never returns the secret again).
-type accessKey struct {
-	AKID          string // "EU"+14 chars, masked for display after creation
-	SecretHash    string // salted sha256 of the plaintext secret
-	Status        int    // 1 enabled, 2 disabled
-	CreatedAt     time.Time
-	LastUsed      time.Time
-	RotationGrace bool // true while this AK is the outgoing side of a rotation (07§2.2)
-}
-
-func nextRAMID() int64    { ramSeq++; return ramSeq }
-func nextAKIDSeq() int64  { akSeq++; return akSeq }
-func nextRoleID() int64   { roleSeq++; return roleSeq }
-func nextPolicyID() int64 { polSeq++; return polSeq }
 
 // ramRole is a named role that groups policies (07§3.2 RBAC skeleton:
 // user → group/role → system policy). A role carries a set of attached policy
@@ -258,82 +214,77 @@ type storedPolicy struct {
 	CreatedAt time.Time
 }
 
-// seedAccount provisions a real account with a real salted password hash so the
-// login flow is genuine (not a mock that always succeeds). Matches the
-// console-bff seed account 100123.
-func seedAccount(id int64, name, realName, password string) {
-	salt := randHex(16)
-	h := sha256Hex(salt + password)
-	a := account{
+// seedAccount provisions an account with a real salted password hash so the
+// login flow is genuine (not a mock that always succeeds). created is false
+// when the id already holds a real account (a persistent store keeps the seed
+// across restarts). A placeholder row the verify container's dev seed wrote
+// for the same id (password "!dev-seed-no-login") is taken over.
+func seedAccount(ctx context.Context, id int64, name, realName, password string) (created bool, err error) {
+	name = normalizeEmail(name)
+	_, err = st.CreateAccount(ctx, account{
 		AccountID: id, AccountName: name, RealName: realName,
-		PasswordHash: salt + "$" + h, Status: 1,
-		CreatedAt: time.Now(),
+		PasswordHash: hashPassword(password), Status: 1, CreatedAt: time.Now(),
+	})
+	if err == nil {
+		return true, nil
 	}
-	accounts[name] = a
-	byID[id] = a
+	if !errors.Is(err, errExists) {
+		return false, err
+	}
+	existing, gerr := st.AccountByID(ctx, id)
+	if gerr != nil || existing.PasswordHash != devSeedPlaceholderHash {
+		return false, nil // already seeded (or the name is taken): leave it alone
+	}
+	_, err = st.UpdateAccount(ctx, id, func(a *account) error {
+		a.AccountName, a.RealName, a.PasswordHash, a.Status = name, realName, hashPassword(password), 1
+		return nil
+	})
+	return err == nil, err
 }
 
+// devSeedPlaceholderHash marks the account row cmd/verify inserts for its dev
+// seed AK (devSeedAccountRow); it can never match a password.
+const devSeedPlaceholderHash = "!dev-seed-no-login"
+
 // seedRAM provisions two demo RAM sub-users for the seed account so the console
-// RAM page has real rows on first load (phase-1 dev; prod reads from iam_user).
-func seedRAM(accountID int64) {
-	now := time.Now()
-	ramUsers[accountID] = map[string]ramUser{
-		"ops-admin": {ID: nextRAMID(), AccountID: accountID, Username: "ops-admin", DisplayName: "运维管理员", Remark: "生产运维", Status: 1, CreatedAt: now},
-		"dev-ro":    {ID: nextRAMID(), AccountID: accountID, Username: "dev-ro", DisplayName: "开发只读", Remark: "只读开发", Status: 1, CreatedAt: now},
+// RAM page has real rows on first load (dev only).
+func seedRAM(ctx context.Context, accountID int64) error {
+	for _, u := range []ramUser{
+		{AccountID: accountID, Username: "ops-admin", DisplayName: "运维管理员", Remark: "生产运维", Status: 1, Policies: []string{"EuEcsFullAccess"}},
+		{AccountID: accountID, Username: "dev-ro", DisplayName: "开发只读", Remark: "只读开发", Status: 1, Policies: []string{"EuReadOnlyAccess"}},
+	} {
+		u.CreatedAt = time.Now()
+		if _, err := st.CreateRAMUser(ctx, u); err != nil && !errors.Is(err, errExists) {
+			return err
+		}
 	}
+	return nil
 }
 
 // seedAK provisions one demo AccessKey for the seed account so the AK page has a
-// real row on first load. The secret here is never shown again (only the hash is
-// kept), matching prod behavior (07§2.7).
-func seedAK(accountID int64) {
-	now := time.Now()
-	akID := "EU" + randMasked(14)
-	accessKeys[accountID] = []accessKey{{
-		AKID: akID, SecretHash: randHex(16) + "$" + sha256Hex(randHex(16)+"eu-seed-secret"),
-		Status: 1, CreatedAt: now, LastUsed: now.Add(-2 * time.Hour),
-	}}
+// real row on first load. The secret is discarded — never shown, never logged
+// (07§2.7: the SK exists in plaintext exactly once, at creation).
+func seedAK(accountID int64) error {
+	_, err := akMgr.Create(accountID, accesskey.OwnerMaster, 0)
+	return err
 }
 
-// seedRAMRolesPolicies provisions the three canonical roles and two system
-// policies for the seed account (07§3.2 — EuEcsFullAccess / EuReadOnlyAccess
-// system-policy naming). The policies are real authz.Policy documents the
-// simulator evaluates, so the 策略模拟器 has real rows on first load.
-func seedRAMRolesPolicies(accountID int64) {
-	now := time.Now()
-	fullAccess := `{"Version":"1","Statement":[{"Effect":"Allow","Action":"euecs:*","Resource":"*"}]}`
-	readOnly := `{"Version":"1","Statement":[{"Effect":"Allow","Action":["euecs:Describe*","euecs:List*"],"Resource":"*"}]}`
-	mustParseStored := func(name, typ, doc string) storedPolicy {
-		p, err := authz.ParsePolicy([]byte(doc))
-		if err != nil {
-			panic("seedRAMRolesPolicies: " + err.Error())
+// seedRAMRolesPolicies provisions the three canonical roles for the seed
+// account. They attach the platform system policies (EuEcsFullAccess /
+// EuReadOnlyAccess, 07§3.2 naming — systemPolicyDefs), which every account
+// sees, so the 策略模拟器 has real rows on first load.
+func seedRAMRolesPolicies(ctx context.Context, accountID int64) error {
+	for _, r := range []ramRole{
+		{AccountID: accountID, Name: "Admin", Description: "全部权限", Policies: []string{"EuEcsFullAccess"}, Status: 1},
+		{AccountID: accountID, Name: "Operator", Description: "运维操作", Policies: []string{"EuEcsFullAccess"}, Status: 1},
+		{AccountID: accountID, Name: "ReadOnly", Description: "只读", Policies: []string{"EuReadOnlyAccess"}, Status: 1},
+	} {
+		r.CreatedAt = time.Now()
+		if _, err := st.CreateRAMRole(ctx, r); err != nil && !errors.Is(err, errExists) {
+			return err
 		}
-		return storedPolicy{ID: nextPolicyID(), AccountID: accountID, Name: name, Type: typ, Document: doc, Parsed: p, CreatedAt: now}
 	}
-	ramPolicies[accountID] = map[string]storedPolicy{
-		"EuEcsFullAccess":  mustParseStored("EuEcsFullAccess", "system", fullAccess),
-		"EuReadOnlyAccess": mustParseStored("EuReadOnlyAccess", "system", readOnly),
-	}
-	ramRoles[accountID] = map[string]ramRole{
-		"Admin":    {ID: nextRoleID(), AccountID: accountID, Name: "Admin", Description: "全部权限", Policies: []string{"EuEcsFullAccess"}, Status: 1, CreatedAt: now},
-		"Operator": {ID: nextRoleID(), AccountID: accountID, Name: "Operator", Description: "运维操作", Policies: []string{"EuEcsFullAccess"}, Status: 1, CreatedAt: now},
-		"ReadOnly": {ID: nextRoleID(), AccountID: accountID, Name: "ReadOnly", Description: "只读", Policies: []string{"EuReadOnlyAccess"}, Status: 1, CreatedAt: now},
-	}
-}
-
-// randMasked returns a random uppercase alphanumeric string of length n, used to
-// build a display akId like "EU"+14 chars. It is NOT the secret.
-func randMasked(n int) string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	r := make([]byte, n)
-	if _, err := rand.Read(r); err != nil {
-		panic(err)
-	}
-	for i := range b {
-		b[i] = alphabet[int(r[i])%len(alphabet)]
-	}
-	return string(b)
+	return nil
 }
 
 // --- token primitives ---
@@ -353,34 +304,56 @@ func sha256Hex(s string) string {
 
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// issueAccessToken signs a minimal HS256 JWT carrying sub/name/exp plus the
-// account's TokenVersion ("tv") so credential changes invalidate old tokens.
+// accessClaims is the access-token payload. It is ALWAYS serialised with
+// encoding/json: user-controlled strings (login email, real name) used to be
+// spliced into a fmt.Sprintf template, so an email such as
+// `x@evil.com","sub":"100123","a":"` injected a second "sub" claim — and
+// encoding/json keeps the LAST duplicate key, which turned that token into a
+// token for account 100123 (account takeover, MFA bypassed).
+type accessClaims struct {
+	Sub       string `json:"sub"`
+	AccountID string `json:"account_id"`
+	Name      string `json:"name"`
+	RealName  string `json:"real_name"`
+	Tv        int    `json:"tv"`
+	Iat       int64  `json:"iat"`
+	Exp       int64  `json:"exp"`
+}
+
+// mfaClaims is the MFA-challenge payload ("typ":"mfa"), serialised the same way.
+type mfaClaims struct {
+	Sub string `json:"sub"`
+	Typ string `json:"typ"`
+	Tv  int    `json:"tv"`
+	Iat int64  `json:"iat"`
+	Exp int64  `json:"exp"`
+}
+
+// signJWT serialises claims with encoding/json (never string templating)
+// and returns the compact RS256 JWT (jwt.go).
+func signJWT(claims any) string { return jwtSigner.sign(claims) }
+
+// issueAccessToken signs a minimal RS256 JWT carrying sub/account_id/name/exp
+// plus the account's TokenVersion ("tv") so credential changes invalidate old
+// tokens. account_id is the claim the gateway injects as X-Euler-Account-Id.
 func issueAccessToken(a account, now time.Time) string {
-	header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := fmt.Sprintf(`{"sub":"%d","name":"%s","real_name":"%s","tv":%d,"iat":%d,"exp":%d}`,
-		a.AccountID, a.AccountName, a.RealName, a.TokenVersion, now.Unix(), now.Add(accessTTL).Unix())
-	payloadB64 := b64url([]byte(payload))
-	signingInput := header + "." + payloadB64
-	mac := hmac.New(sha256.New, []byte(hmacSecret))
-	mac.Write([]byte(signingInput))
-	return signingInput + "." + b64url(mac.Sum(nil))
+	return signJWT(accessClaims{
+		Sub:       strconv.FormatInt(a.AccountID, 10),
+		AccountID: strconv.FormatInt(a.AccountID, 10),
+		Name:      a.AccountName,
+		RealName:  a.RealName,
+		Tv:        a.TokenVersion,
+		Iat:       now.Unix(),
+		Exp:       now.Add(accessTTL).Unix(),
+	})
 }
 
 // verifyAccessToken returns the account ID and token version embedded in a
 // valid JWT, or an error.
 func verifyAccessToken(token string, now time.Time) (int64, int, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return 0, 0, errors.New("Auth.MalformedToken")
-	}
-	mac := hmac.New(sha256.New, []byte(hmacSecret))
-	mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal([]byte(parts[2]), []byte(b64url(mac.Sum(nil)))) {
-		return 0, 0, errors.New("Auth.InvalidSignature")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	payload, err := jwtSigner.verify(token)
 	if err != nil {
-		return 0, 0, errors.New("Auth.MalformedToken")
+		return 0, 0, err
 	}
 	var p struct {
 		Sub string `json:"sub"`
@@ -413,31 +386,21 @@ func verifyAccessToken(token string, now time.Time) (int64, int, error) {
 // access token: it authorizes exactly the /api/auth/mfa/verify call and
 // nothing else — every other endpoint ignores it.
 func issueMFAToken(a account, now time.Time) string {
-	header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := fmt.Sprintf(`{"sub":"%d","typ":"mfa","tv":%d,"iat":%d,"exp":%d}`,
-		a.AccountID, a.TokenVersion, now.Unix(), now.Add(mfaTTL).Unix())
-	payloadB64 := b64url([]byte(payload))
-	signingInput := header + "." + payloadB64
-	mac := hmac.New(sha256.New, []byte(hmacSecret))
-	mac.Write([]byte(signingInput))
-	return signingInput + "." + b64url(mac.Sum(nil))
+	return signJWT(mfaClaims{
+		Sub: strconv.FormatInt(a.AccountID, 10),
+		Typ: "mfa",
+		Tv:  a.TokenVersion,
+		Iat: now.Unix(),
+		Exp: now.Add(mfaTTL).Unix(),
+	})
 }
 
 // verifyMFAToken validates an MFA challenge token. It re-checks the account's
 // TokenVersion so a challenge issued before a password change is void.
 func verifyMFAToken(token string, now time.Time) (int64, int, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return 0, 0, errors.New("Auth.MalformedToken")
-	}
-	mac := hmac.New(sha256.New, []byte(hmacSecret))
-	mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal([]byte(parts[2]), []byte(b64url(mac.Sum(nil)))) {
-		return 0, 0, errors.New("Auth.InvalidSignature")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	payload, err := jwtSigner.verify(token)
 	if err != nil {
-		return 0, 0, errors.New("Auth.MalformedToken")
+		return 0, 0, err
 	}
 	var p struct {
 		Sub string `json:"sub"`
@@ -484,6 +447,13 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(envelope{RequestId: reqID, Code: code, Message: msg})
 }
 
+// internalError answers a store / infrastructure failure: 500 with a stable
+// code, the cause in the log only (SQL text and hosts never reach a client).
+func internalError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	slog.Error("web-auth: "+what+" failed", "path", r.URL.Path, "err", err)
+	writeErr(w, http.StatusInternalServerError, "Common.InternalError", "internal error")
+}
+
 // decodeJSON caps the request body at maxBodyBytes and decodes it into v.
 // On failure it responds with a stable error (no err.Error() detail leaks to
 // the client — the detail goes to the log) and returns false.
@@ -503,17 +473,31 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // setRefreshCookie writes the HttpOnly refresh_token cookie. In production the
-// Domain is .euler.emoera.com (root, shared across console/billing/ticket); in dev
-// the browser scopes it to localhost.
+// Domain is .euler.emoera.com (root, shared across console/billing/ticket) via
+// EULER_COOKIE_DOMAIN; in dev it is host-only (localhost).
 func setRefreshCookie(w http.ResponseWriter, token string, exp time.Time) {
 	http.SetCookie(w, &http.Cookie{
-		Name: "eu_refresh", Value: token, Expires: exp, HttpOnly: true,
+		Name: "eu_refresh", Value: token, Expires: exp, HttpOnly: true, Domain: cookieDomain,
 		Secure: cookieSecure, SameSite: http.SameSiteLaxMode, Path: "/api/auth",
 	})
 }
 
+// clearRefreshCookie must name the same Domain as setRefreshCookie: a
+// host-only clear does not delete a domain cookie, so logout would leave the
+// shared session behind.
 func clearRefreshCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "eu_refresh", Value: "", Expires: time.Unix(0, 0), HttpOnly: true, Path: "/api/auth"})
+	http.SetCookie(w, &http.Cookie{
+		Name: "eu_refresh", Value: "", Expires: time.Unix(0, 0), MaxAge: -1, HttpOnly: true, Domain: cookieDomain,
+		Secure: cookieSecure, SameSite: http.SameSiteLaxMode, Path: "/api/auth",
+	})
+}
+
+// handlePublicKey serves the RS256 public key (PEM) and its kid so operators
+// can provision the gateway's eu-jwt-public-key Secret. Public by nature.
+func handlePublicKey(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("X-Euler-Jwt-Kid", jwtSigner.kid)
+	_, _ = w.Write(jwtSigner.publicKeyPEM())
 }
 
 type loginRequest struct {
@@ -526,22 +510,36 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	mu.RLock()
-	a, ok := accounts[req.Email]
-	mu.RUnlock()
+	now := time.Now()
+	// 5 failures in 15 minutes lock the email for 15 minutes (07§2.4), keyed
+	// by what was submitted so a lockout says nothing about whether the
+	// account exists. The gateway's per-IP limit alone did not stop a
+	// distributed guess.
+	lkey := loginKey(req.Email)
+	if loginLimiter.Locked(lkey, now) {
+		writeErr(w, 429, "Auth.TooManyAttempts", "尝试次数过多,请 15 分钟后再试")
+		return
+	}
+	a, err := st.AccountByName(r.Context(), normalizeEmail(req.Email))
+	if err != nil && !errors.Is(err, errNotFound) {
+		internalError(w, r, "login lookup", err)
+		return
+	}
 	// Constant-time-ish: always perform one hash comparison even when the
 	// account does not exist, so response timing does not reveal whether an
 	// email is registered.
-	if !ok {
+	if err != nil {
 		_ = verifyPassword(dummyPasswordHash, req.Password)
+		loginLimiter.Fail(lkey, now)
 		writeErr(w, 401, "Auth.InvalidCredentials", "邮箱或密码错误")
 		return
 	}
 	if !verifyPassword(a.PasswordHash, req.Password) || a.Status != 1 {
+		loginLimiter.Fail(lkey, now)
 		writeErr(w, 401, "Auth.InvalidCredentials", "邮箱或密码错误")
 		return
 	}
-	now := time.Now()
+	loginLimiter.Reset(lkey)
 
 	// MFA 强制登录 (07§2.4): a bound-and-activated TOTP seed makes the
 	// password merely step one. No session, no tokens — just a 5-minute
@@ -555,19 +553,30 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
-	refresh := randHex(32)
-	mu.Lock()
-	sessions[refresh] = &session{
-		account: a, refreshToken: refresh,
-		refreshExp: now.Add(refreshTTL), accessExp: now.Add(accessTTL),
+	if !startSession(w, r, a, now) {
+		return
 	}
-	mu.Unlock()
-	setRefreshCookie(w, refresh, now.Add(refreshTTL))
 	writeJSON(w, 200, "OK", map[string]any{
 		"accessToken": issueAccessToken(a, now),
 		"user":        map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
 	})
+}
+
+// startSession mints a refresh token (the first link of a new rotation
+// chain), stores only its hash and sets the cookie. It answers the request
+// itself on failure and reports false.
+func startSession(w http.ResponseWriter, r *http.Request, a account, now time.Time) bool {
+	token := randHex(32)
+	s := refreshSession{
+		TokenHash: hashToken(token), AccountID: a.AccountID, TokenVersion: a.TokenVersion,
+		FamilyID: newFamilyID(), ExpiresAt: now.Add(refreshTTL), CreatedAt: now,
+	}
+	if err := st.CreateSession(r.Context(), s); err != nil {
+		internalError(w, r, "create session", err)
+		return false
+	}
+	setRefreshCookie(w, token, s.ExpiresAt)
+	return true
 }
 
 // mfaLoginRequest completes a second-factor login: the mfaToken from the
@@ -591,10 +600,12 @@ func handleMFALoginVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, err.Error(), "MFA 校验凭证无效,请重新登录")
 		return
 	}
-	mu.RLock()
-	a := byID[id]
-	mu.RUnlock()
-	if a.AccountID == 0 || a.Status != 1 {
+	a, err := st.AccountByID(r.Context(), id)
+	if err != nil && !errors.Is(err, errNotFound) {
+		internalError(w, r, "mfa login lookup", err)
+		return
+	}
+	if err != nil || a.Status != 1 {
 		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在或不可用")
 		return
 	}
@@ -604,23 +615,27 @@ func handleMFALoginVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, err := mfaSecret(a)
 	if err != nil {
-		writeErr(w, 401, err.Error(), "MFA 未绑定")
+		writeErr(w, 401, "Auth.MFANotBound", "MFA 未绑定")
 		return
 	}
-	if err := totpVerifier.Verify(mfaReplayKey(a.AccountID), secret, req.Code, time.Now()); err != nil {
+	mkey := mfaReplayKey(a.AccountID)
+	if mfaLimiter.Locked(mkey, time.Now()) {
+		writeErr(w, 429, "Auth.TooManyAttempts", "动态验证码错误次数过多,请 15 分钟后再试")
+		return
+	}
+	if err := totpVerifier.Verify(mkey, secret, req.Code, time.Now()); err != nil {
+		// 6 digits are 10^6 guesses; without a limit the 5-minute MFA
+		// challenge (or a stolen session on bind/unbind) could be brute-forced.
+		mfaLimiter.Fail(mkey, time.Now())
 		writeMFACodeErr(w, err)
 		return
 	}
+	mfaLimiter.Reset(mkey)
 
 	now := time.Now()
-	refresh := randHex(32)
-	mu.Lock()
-	sessions[refresh] = &session{
-		account: a, refreshToken: refresh,
-		refreshExp: now.Add(refreshTTL), accessExp: now.Add(accessTTL),
+	if !startSession(w, r, a, now) {
+		return
 	}
-	mu.Unlock()
-	setRefreshCookie(w, refresh, now.Add(refreshTTL))
 	writeJSON(w, 200, "OK", map[string]any{
 		"accessToken": issueAccessToken(a, now),
 		"user":        map[string]any{"id": a.AccountID, "name": a.AccountName, "realName": a.RealName},
@@ -641,23 +656,6 @@ func writeMFACodeErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func verifyPassword(stored, input string) bool {
-	parts := strings.SplitN(stored, "$", 2)
-	if len(parts) != 2 {
-		return false
-	}
-	return hmac.Equal([]byte(parts[1]), []byte(sha256Hex(parts[0]+input)))
-}
-
-// nextAccountID issues a monotonically increasing account id (prod uses a
-// snowflake generator — 00 附录A; phase-1 dev counter is sufficient).
-var accountSeq int64 = 100123
-
-func nextAccountID() int64 {
-	accountSeq++
-	return accountSeq
-}
-
 // requireAuth extracts and validates the Bearer access_token, returning the
 // authenticated account. Used by authenticated endpoints (实名, profile, ...).
 func requireAuth(r *http.Request) (account, error) {
@@ -669,11 +667,12 @@ func requireAuth(r *http.Request) (account, error) {
 	if err != nil {
 		return account{}, err
 	}
-	mu.RLock()
-	a := byID[id]
-	mu.RUnlock()
-	if a.AccountID == 0 {
+	a, err := st.AccountByID(r.Context(), id)
+	if errors.Is(err, errNotFound) {
 		return account{}, errors.New("Auth.AccountNotFound")
+	}
+	if err != nil {
+		return account{}, &storeFailure{err}
 	}
 	// Token issued before a credential change (password change bumps
 	// TokenVersion) is no longer accepted.
@@ -681,6 +680,28 @@ func requireAuth(r *http.Request) (account, error) {
 		return account{}, errors.New("Auth.TokenRevoked")
 	}
 	return a, nil
+}
+
+// storeFailure marks an authentication that failed on infrastructure, not
+// on the caller's credentials (500, not 401).
+type storeFailure struct{ err error }
+
+func (e *storeFailure) Error() string { return "Common.InternalError" }
+func (e *storeFailure) Unwrap() error { return e.err }
+
+// authed authenticates the request, answering it on failure.
+func authed(w http.ResponseWriter, r *http.Request) (account, bool) {
+	a, err := requireAuth(r)
+	if err != nil {
+		var sf *storeFailure
+		if errors.As(err, &sf) {
+			internalError(w, r, "authenticate", sf.err)
+			return account{}, false
+		}
+		writeErr(w, 401, err.Error(), "未认证")
+		return account{}, false
+	}
+	return a, true
 }
 
 // maskIDCard returns a masked ID number for display (keeps first 4 + last 2).
@@ -694,9 +715,38 @@ func maskIDCard(id string) string {
 
 // handleRegister creates a new account with a real salted password hash.
 // A duplicate email returns 409. The new account starts unverified (实名=0).
+// Code is the mailed registration code (register.go): mandatory with
+// EULER_REGISTER_REQUIRE_EMAIL_CODE=1, otherwise checked only when given.
 type registerRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Code     string `json:"code"`
+}
+
+// maxEmailLen is the RFC 5321 forward-path limit.
+const maxEmailLen = 254
+
+// maxPasswordLen bounds the input to the (deliberately slow) password hash.
+const maxPasswordLen = 128
+
+// validLoginEmail accepts only a bare addr-spec (no display name, no quoted
+// local part, no control characters). The login name ends up in tokens,
+// logs and UI, so anything that is not a plain address is refused at the door.
+func validLoginEmail(s string) bool {
+	if s == "" || len(s) > maxEmailLen {
+		return false
+	}
+	for _, c := range s {
+		if c <= 0x20 || c == 0x7f || c == '"' || c == '\\' || c == '<' || c == '>' {
+			return false
+		}
+	}
+	addr, err := mail.ParseAddress(s)
+	if err != nil || addr.Name != "" || addr.Address != s {
+		return false
+	}
+	at := strings.LastIndexByte(s, '@')
+	return at > 0 && at < len(s)-1 && strings.Contains(s[at+1:], ".")
 }
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -704,34 +754,48 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Email == "" || len(req.Password) < 8 {
-		writeErr(w, 400, "Common.InvalidParameter", "邮箱必填,密码至少 8 位")
+	// One account per address regardless of case: the store key, the login
+	// lockout key and account_db's (case-insensitive) unique key must all
+	// agree, or "Alice@x.com" and "alice@x.com" become two accounts.
+	email := normalizeEmail(req.Email)
+	if !validLoginEmail(email) || !validPassword(req.Password) {
+		writeErr(w, 400, "Common.InvalidParameter", "请填写有效邮箱,密码 8-128 位")
 		return
 	}
-	mu.Lock()
-	if _, exists := accounts[req.Email]; exists {
-		mu.Unlock()
+	// The mailed code proves control of the address. It is checked (and
+	// consumed) before the duplicate check, so without a code for the
+	// address a caller cannot learn whether it is registered.
+	if code := strings.TrimSpace(req.Code); code != "" || registerCodeRequired() {
+		if !checkRegisterCode(w, r, email, code) {
+			return
+		}
+	}
+	// RealName stays empty until real-name verification sets it: copying the
+	// email in made a fresh account look verified to the UI and leaked the
+	// address into the real-name field. Display code uses AccountName.
+	a, err := st.CreateAccount(r.Context(), account{
+		AccountName: email, PasswordHash: hashPassword(req.Password),
+		Status: 1, RealNameStatus: 0, CreatedAt: time.Now(),
+	})
+	if errors.Is(err, errExists) {
 		writeErr(w, 409, "Auth.EmailExists", "该邮箱已注册")
 		return
 	}
-	id := nextAccountID()
-	salt := randHex(16)
-	a := account{
-		AccountID: id, AccountName: req.Email, RealName: req.Email,
-		PasswordHash: salt + "$" + sha256Hex(salt+req.Password),
-		Status:       1, RealNameStatus: 0, CreatedAt: time.Now(),
+	if err != nil {
+		internalError(w, r, "register", err)
+		return
 	}
-	accounts[req.Email] = a
-	byID[id] = a
-	mu.Unlock()
-	writeJSON(w, 201, "OK", map[string]any{"id": id, "email": req.Email, "realNameStatus": 0})
+	writeJSON(w, 201, "OK", map[string]any{"id": a.AccountID, "email": email, "realNameStatus": 0})
 }
+
+// validPassword is the password rule shared by register, change and reset:
+// 8-128 bytes (the upper bound caps the deliberately slow hash's input).
+func validPassword(pw string) bool { return len(pw) >= 8 && len(pw) <= maxPasswordLen }
 
 // handleRealnameStatus returns the current real-name verification state.
 func handleRealnameStatus(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, 200, "OK", map[string]any{
@@ -755,61 +819,82 @@ type realnameRequest struct {
 }
 
 func handleRealnameVerify(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req realnameRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	// Validate before taking the lock (no shared state involved).
+	// Format first (no shared state involved): the check digits reject
+	// made-up numbers before a provider is ever asked.
+	check := realnameCheck{Type: req.Type}
 	switch req.Type {
 	case "individual":
-		if req.Name == "" || len(req.IDCardNo) < 15 {
-			writeErr(w, 400, "Common.InvalidParameter", "请填写真实姓名与身份证号")
+		if !validPersonName(req.Name) || !validResidentID(req.IDCardNo, time.Now()) {
+			writeErr(w, 400, "Common.InvalidParameter", "请填写真实姓名与有效的 18 位身份证号")
 			return
 		}
+		check.Name, check.IDNumber = strings.TrimSpace(req.Name), strings.ToUpper(req.IDCardNo)
 	case "enterprise":
-		if req.EnterpriseName == "" || len(req.CreditCode) < 15 {
-			writeErr(w, 400, "Common.InvalidParameter", "请填写企业名称与统一社会信用代码")
+		if !validPersonName(req.EnterpriseName) || !validCreditCode(req.CreditCode) {
+			writeErr(w, 400, "Common.InvalidParameter", "请填写企业名称与有效的统一社会信用代码")
 			return
 		}
+		check.Name, check.IDNumber = strings.TrimSpace(req.EnterpriseName), strings.ToUpper(req.CreditCode)
 	default:
 		writeErr(w, 400, "Common.InvalidParameter", "实名类型无效")
 		return
 	}
-	// Read-modify-write of the account happens entirely inside one critical
-	// section so a concurrent update (e.g. password change) is not lost.
-	mu.Lock()
-	cur, ok := byID[a.AccountID]
-	if !ok {
-		mu.Unlock()
-		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+	// A verified identity is final: re-submitting used to overwrite it, so one
+	// account could cycle identities (and the trial dedup that keys on them).
+	// Changing a verified identity is an operator workflow, not a self-service
+	// form. Checked before the provider call (it costs money) and again inside
+	// the atomic update below.
+	if a.RealNameStatus != 0 {
+		writeErr(w, 409, "Auth.RealNameAlreadyVerified", "已完成实名认证,如需变更请提交工单")
 		return
 	}
-	status := 0
-	switch req.Type {
-	case "individual":
-		status = 1
-		cur.RealName = req.Name
-		cur.IDCardNo = req.IDCardNo
-	case "enterprise":
-		status = 2
-		cur.EnterpriseName = req.EnterpriseName
-		cur.IDCardNo = req.CreditCode
+	if !verifyWithProvider(w, r, a.AccountID, check) {
+		return
 	}
-	cur.RealNameType = req.Type
-	cur.RealNameStatus = status
-	accounts[cur.AccountName] = cur
-	byID[cur.AccountID] = cur
-	masked := maskIDCard(cur.IDCardNo)
-	mu.Unlock()
+	cur, err := st.UpdateAccount(r.Context(), a.AccountID, func(cur *account) error {
+		if cur.RealNameStatus != 0 {
+			return errRealNameFinal
+		}
+		switch req.Type {
+		case "individual":
+			cur.RealNameStatus = 1
+			cur.RealName = check.Name
+			cur.IDCardNo = maskIDCard(check.IDNumber)
+			cur.IdentityFingerprint = identityFingerprint("id", req.IDCardNo)
+		case "enterprise":
+			cur.RealNameStatus = 2
+			cur.EnterpriseName = check.Name
+			cur.IDCardNo = maskIDCard(check.IDNumber)
+			cur.IdentityFingerprint = identityFingerprint("uscc", req.CreditCode)
+		}
+		cur.RealNameType = req.Type
+		return nil
+	})
+	switch {
+	case errors.Is(err, errRealNameFinal):
+		writeErr(w, 409, "Auth.RealNameAlreadyVerified", "已完成实名认证,如需变更请提交工单")
+		return
+	case errors.Is(err, errNotFound):
+		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	case err != nil:
+		internalError(w, r, "realname update", err)
+		return
+	}
 	writeJSON(w, 200, "OK", map[string]any{
-		"status": status, "type": req.Type, "idCard": masked,
+		"status": cur.RealNameStatus, "type": req.Type, "idCard": maskIDCard(cur.IDCardNo),
 	})
 }
+
+var errRealNameFinal = errors.New("Auth.RealNameAlreadyVerified")
 
 // --- MFA management (07§2.4) -----------------------------------------------
 //
@@ -828,9 +913,8 @@ type mfaCodeRequest struct {
 // the QR code. The secret is shown here exactly once (same convention as AK
 // secrets); after this call it can only be proven, never read again.
 func handleMFABind(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	secret, err := totp.GenerateSecret()
@@ -838,100 +922,119 @@ func handleMFABind(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "Common.InternalError", "生成 MFA 种子失败")
 		return
 	}
-	cipher, version, err := mfaKMS.Encrypt(kms.PurposeUser, secret)
+	cipher, version, err := keyring.Encrypt(kms.PurposeUser, secret)
 	if err != nil {
 		writeErr(w, 500, "Common.InternalError", "加密 MFA 种子失败")
 		return
 	}
-
-	mu.Lock()
-	cur, ok := byID[a.AccountID]
-	if !ok {
-		mu.Unlock()
+	cur, err := st.UpdateAccount(r.Context(), a.AccountID, func(cur *account) error {
+		if cur.MFAEnabled {
+			return errMFAAlreadyBound
+		}
+		cur.MFASecretCipher = cipher
+		cur.MFAKeyVersion = version
+		cur.MFAEnabled = false
+		return nil
+	})
+	switch {
+	case errors.Is(err, errNotFound):
 		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
 		return
-	}
-	if cur.MFAEnabled {
-		mu.Unlock()
+	case errors.Is(err, errMFAAlreadyBound):
 		writeErr(w, 409, "Auth.MFAAlreadyBound", "已开启 MFA,请先解绑后再重新绑定")
 		return
+	case err != nil:
+		internalError(w, r, "mfa bind", err)
+		return
 	}
-	cur.MFASecretCipher = cipher
-	cur.MFAKeyVersion = version
-	cur.MFAEnabled = false
-	accounts[cur.AccountName] = cur
-	byID[cur.AccountID] = cur
-	mu.Unlock()
-
 	writeJSON(w, 200, "OK", map[string]any{
-		"secret":            totp.SecretBase32(secret),
-		"provisioningUri":   totp.ProvisioningURI(secret, cur.AccountName, "Euler"),
+		"secret":             totp.SecretBase32(secret),
+		"provisioningUri":    totp.ProvisioningURI(secret, cur.AccountName, "Euler"),
 		"activationRequired": true,
 	})
 }
+
+var errMFAAlreadyBound = errors.New("Auth.MFAAlreadyBound")
 
 // handleMFABindVerify implements POST /api/mfa/verify — confirm a code from
 // the freshly bound authenticator and ACTIVATE the factor. From this moment
 // password-only login is refused for the account.
 func handleMFABindVerify(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	cur, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req mfaCodeRequest
 	if !decodeJSON(w, r, &req) {
-		return
-	}
-	mu.RLock()
-	cur := byID[a.AccountID]
-	mu.RUnlock()
-	if cur.AccountID == 0 {
-		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
 		return
 	}
 	if len(cur.MFASecretCipher) == 0 {
 		writeErr(w, 409, "Auth.MFANotBound", "请先绑定 MFA")
 		return
 	}
+	// The seed the code is checked against. Activation below must enable
+	// exactly this seed.
+	verifiedCipher, verifiedVersion := cur.MFASecretCipher, cur.MFAKeyVersion
 	secret, err := mfaSecret(cur)
 	if err != nil {
 		writeErr(w, 500, "Common.InternalError", "读取 MFA 种子失败")
 		return
 	}
-	if err := totpVerifier.Verify(mfaReplayKey(cur.AccountID), secret, req.Code, time.Now()); err != nil {
+	mkey := mfaReplayKey(cur.AccountID)
+	if mfaLimiter.Locked(mkey, time.Now()) {
+		writeErr(w, 429, "Auth.TooManyAttempts", "动态验证码错误次数过多,请 15 分钟后再试")
+		return
+	}
+	if err := totpVerifier.Verify(mkey, secret, req.Code, time.Now()); err != nil {
+		// 6 digits are 10^6 guesses; without a limit the 5-minute MFA
+		// challenge (or a stolen session on bind/unbind) could be brute-forced.
+		mfaLimiter.Fail(mkey, time.Now())
 		writeMFACodeErr(w, err)
 		return
 	}
+	mfaLimiter.Reset(mkey)
 
-	mu.Lock()
-	cur = byID[a.AccountID]
-	cur.MFAEnabled = true
-	accounts[cur.AccountName] = cur
-	byID[cur.AccountID] = cur
-	mu.Unlock()
+	if err := enableVerifiedMFA(r.Context(), cur.AccountID, verifiedCipher, verifiedVersion); err != nil {
+		if errors.Is(err, errMFASeedChanged) || errors.Is(err, errNotFound) {
+			writeErr(w, 409, "Auth.MFASeedChanged", "MFA 种子已变更,请使用最新绑定的验证器重新验证")
+			return
+		}
+		internalError(w, r, "mfa activate", err)
+		return
+	}
 	writeJSON(w, 200, "OK", map[string]any{"mfaEnabled": true})
 }
+
+// enableVerifiedMFA turns the factor on — but only if the stored seed is still the
+// one the code was verified against. The verification runs outside the lock,
+// so a concurrent re-bind (another session calling /api/mfa/bind) could
+// replace the seed in between; enabling whatever is stored then would
+// activate a seed nobody has proven, locking the user out (or arming an
+// attacker's seed).
+func enableVerifiedMFA(ctx context.Context, accountID int64, verifiedCipher []byte, verifiedVersion int) error {
+	_, err := st.UpdateAccount(ctx, accountID, func(cur *account) error {
+		if !bytes.Equal(cur.MFASecretCipher, verifiedCipher) || cur.MFAKeyVersion != verifiedVersion {
+			return errMFASeedChanged
+		}
+		cur.MFAEnabled = true
+		return nil
+	})
+	return err
+}
+
+var errMFASeedChanged = errors.New("Auth.MFASeedChanged")
 
 // handleMFAUnbind implements POST /api/mfa/unbind — remove the factor. A live
 // code is required, not just the session: a stolen access token (XSS shoulder
 // surfing) must not be enough to strip the account's second factor, which is
 // exactly the moment an attacker would otherwise strike.
 func handleMFAUnbind(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	cur, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req mfaCodeRequest
 	if !decodeJSON(w, r, &req) {
-		return
-	}
-	mu.RLock()
-	cur := byID[a.AccountID]
-	mu.RUnlock()
-	if cur.AccountID == 0 {
-		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
 		return
 	}
 	if len(cur.MFASecretCipher) == 0 {
@@ -943,20 +1046,30 @@ func handleMFAUnbind(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "Common.InternalError", "读取 MFA 种子失败")
 		return
 	}
-	if err := totpVerifier.Verify(mfaReplayKey(cur.AccountID), secret, req.Code, time.Now()); err != nil {
+	mkey := mfaReplayKey(cur.AccountID)
+	if mfaLimiter.Locked(mkey, time.Now()) {
+		writeErr(w, 429, "Auth.TooManyAttempts", "动态验证码错误次数过多,请 15 分钟后再试")
+		return
+	}
+	if err := totpVerifier.Verify(mkey, secret, req.Code, time.Now()); err != nil {
+		// 6 digits are 10^6 guesses; without a limit the 5-minute MFA
+		// challenge (or a stolen session on bind/unbind) could be brute-forced.
+		mfaLimiter.Fail(mkey, time.Now())
 		writeMFACodeErr(w, err)
 		return
 	}
+	mfaLimiter.Reset(mkey)
 
-	mu.Lock()
-	cur = byID[a.AccountID]
-	cur.MFASecretCipher = nil
-	cur.MFAKeyVersion = 0
-	cur.MFAEnabled = false
-	accounts[cur.AccountName] = cur
-	byID[cur.AccountID] = cur
-	mu.Unlock()
-	totpVerifier.Forget(mfaReplayKey(a.AccountID))
+	if _, err := st.UpdateAccount(r.Context(), cur.AccountID, func(a *account) error {
+		a.MFASecretCipher = nil
+		a.MFAKeyVersion = 0
+		a.MFAEnabled = false
+		return nil
+	}); err != nil {
+		internalError(w, r, "mfa unbind", err)
+		return
+	}
+	totpVerifier.Forget(mfaReplayKey(cur.AccountID))
 	writeJSON(w, 200, "OK", map[string]any{"mfaEnabled": false})
 }
 
@@ -966,9 +1079,8 @@ func handleMFAUnbind(w http.ResponseWriter, r *http.Request) {
 // Mirrors the shape the console Profile page renders (realName, realNameStatus,
 // createdAt, email, phoneBound, mfaEnabled).
 func handleAccountProfile(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, 200, "OK", map[string]any{
@@ -978,7 +1090,7 @@ func handleAccountProfile(w http.ResponseWriter, r *http.Request) {
 		"realNameStatus": a.RealNameStatus,
 		"createdAt":      a.CreatedAt.UTC().Format(time.RFC3339),
 		"email":          a.AccountName,
-		"phoneBound":     false, // phase-1: no phone-binding flow yet (07§2.5)
+		"phoneBound":     false,        // phase-1: no phone-binding flow yet (07§2.5)
 		"mfaEnabled":     a.MFAEnabled, // real state since M-2: KMS-sealed TOTP seed (07§2.4)
 		// Password status for the security settings card: the account always
 		// authenticates by password in phase-1, so the hash presence IS the truth.
@@ -996,91 +1108,118 @@ type changePasswordRequest struct {
 }
 
 func handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	snap, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req changePasswordRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if len(req.NewPassword) < 8 {
-		writeErr(w, 400, "Common.InvalidParameter", "新密码至少 8 位")
+	if !validPassword(req.NewPassword) {
+		writeErr(w, 400, "Common.InvalidParameter", "新密码 8-128 位")
 		return
 	}
-	// Verify-old + install-new is one critical section: the old-password check
-	// runs against the freshest state and a concurrent update is not lost.
-	mu.Lock()
-	cur, ok := byID[a.AccountID]
-	if !ok {
-		mu.Unlock()
-		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+	pkey := "pwchange:" + strconv.FormatInt(snap.AccountID, 10)
+	if passwordChangeLimiter.Locked(pkey, time.Now()) {
+		writeErr(w, 429, "Auth.TooManyAttempts", "尝试次数过多,请 15 分钟后再试")
 		return
 	}
-	if !verifyPassword(cur.PasswordHash, req.OldPassword) {
-		mu.Unlock()
+	// The (slow) hash work runs outside the atomic update; the install step
+	// re-checks that the stored hash is still the one the old password was
+	// verified against, so a concurrent change is not lost.
+	if !verifyPassword(snap.PasswordHash, req.OldPassword) {
+		passwordChangeLimiter.Fail(pkey, time.Now())
 		writeErr(w, 400, "Auth.OldPasswordMismatch", "原密码不正确")
 		return
 	}
-	salt := randHex(16)
-	cur.PasswordHash = salt + "$" + sha256Hex(salt+req.NewPassword)
-	// Invalidate everything issued before the change: bump TokenVersion so
-	// outstanding access tokens fail verification, and revoke the account's
-	// refresh sessions so they cannot mint new tokens.
-	cur.TokenVersion++
-	accounts[cur.AccountName] = cur
-	byID[cur.AccountID] = cur
-	for tok, s := range sessions {
-		if s.account.AccountID == cur.AccountID {
-			delete(sessions, tok)
+	passwordChangeLimiter.Reset(pkey)
+	newHash := hashPassword(req.NewPassword)
+	_, err := st.UpdateAccount(r.Context(), snap.AccountID, func(cur *account) error {
+		if cur.PasswordHash != snap.PasswordHash {
+			return errConcurrentPassword
 		}
+		cur.PasswordHash = newHash
+		// Invalidate everything issued before the change: the bumped
+		// TokenVersion fails outstanding access tokens and every refresh
+		// session minted under the old version.
+		cur.TokenVersion++
+		return nil
+	})
+	switch {
+	case errors.Is(err, errConcurrentPassword), errors.Is(err, errNotFound):
+		writeErr(w, 409, "Auth.ConcurrentUpdate", "密码已被修改,请重试")
+		return
+	case err != nil:
+		internalError(w, r, "change password", err)
+		return
 	}
-	mu.Unlock()
+	if err := st.RevokeAccountSessions(r.Context(), snap.AccountID, revokePassword, time.Now()); err != nil {
+		// Not fatal: the TokenVersion bump already voids those sessions.
+		slog.Error("revoke sessions after password change failed", "account", snap.AccountID, "err", err)
+	}
 	writeJSON(w, 200, "OK", map[string]any{})
 }
+
+var errConcurrentPassword = errors.New("Auth.ConcurrentUpdate")
 
 // --- RAM sub-users (07§2.6) ---
 
 // handleListRAMUsers returns the (non-deleted) sub-users for the account.
 func handleListRAMUsers(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	mu.RLock()
-	users := ramUsers[a.AccountID]
+	users, err := st.ListRAMUsers(r.Context(), a.AccountID)
+	if err != nil {
+		internalError(w, r, "list ram users", err)
+		return
+	}
 	out := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		if u.Status == 3 { // skip soft-deleted
-			continue
-		}
-		out = append(out, map[string]any{
-			"id":          u.ID,
-			"username":    u.Username,
-			"displayName": u.DisplayName,
-			"remark":      u.Remark,
-			"status":      u.Status,
-			"createdAt":   u.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		out = append(out, ramUserView(u))
 	}
-	mu.RUnlock()
 	writeJSON(w, 200, "OK", map[string]any{"users": out, "total": len(out)})
 }
 
+func ramUserView(u ramUser) map[string]any {
+	return map[string]any{
+		"id":          u.ID,
+		"username":    u.Username,
+		"displayName": u.DisplayName,
+		"remark":      u.Remark,
+		"status":      u.Status,
+		"policies":    nonNilNames(u.Policies),
+		"createdAt":   u.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func nonNilNames(n []string) []string {
+	if n == nil {
+		return []string{}
+	}
+	return n
+}
+
+// writePolicyNotFound answers an attach / simulate request naming policies
+// the account cannot see.
+func writePolicyNotFound(w http.ResponseWriter, names []string) {
+	writeErr(w, 404, "Auth.PolicyNotFound", "策略不存在: "+strings.Join(names, ", "))
+}
+
 type createRAMUserRequest struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
-	Remark      string `json:"remark"`
+	Username    string   `json:"username"`
+	DisplayName string   `json:"displayName"`
+	Remark      string   `json:"remark"`
+	Policies    []string `json:"policies"` // attached policy names (optional)
 }
 
 // handleCreateRAMUser creates a sub-user. Idempotent on accountID+username:
 // a duplicate returns 409 Auth.RAMUserExists (07§2.6).
 func handleCreateRAMUser(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req createRAMUserRequest
@@ -1091,73 +1230,61 @@ func handleCreateRAMUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Common.InvalidParameter", "用户名必填")
 		return
 	}
-	mu.Lock()
-	bucket := ramUsers[a.AccountID]
-	if bucket != nil {
-		if existing, ok := bucket[req.Username]; ok && existing.Status != 3 {
-			mu.Unlock()
-			writeErr(w, 409, "Auth.RAMUserExists", "该子用户已存在")
-			return
-		}
-	} else {
-		bucket = map[string]ramUser{}
-		ramUsers[a.AccountID] = bucket
+	if !ramUsernamePattern.MatchString(req.Username) || !validText(req.DisplayName, 64, false) || !validText(req.Remark, 256, false) {
+		writeErr(w, 400, "Common.InvalidParameter", "用户名 1-64 位字母/数字/._@-,显示名 ≤64 字,备注 ≤256 字")
+		return
 	}
-	u := ramUser{
-		ID: nextRAMID(), AccountID: a.AccountID, Username: req.Username,
+	u, err := st.CreateRAMUser(r.Context(), ramUser{
+		AccountID: a.AccountID, Username: req.Username,
 		DisplayName: req.DisplayName, Remark: req.Remark,
-		Status: 1, CreatedAt: time.Now(),
-	}
-	bucket[req.Username] = u
-	mu.Unlock()
-	writeJSON(w, 201, "OK", map[string]any{
-		"id": u.ID, "username": u.Username, "displayName": u.DisplayName,
-		"remark": u.Remark, "status": u.Status,
-		"createdAt": u.CreatedAt.UTC().Format(time.RFC3339),
+		Status: 1, Policies: dedupeNames(req.Policies), CreatedAt: time.Now(),
 	})
+	var pnf *policyNotFoundError
+	switch {
+	case errors.Is(err, errExists):
+		writeErr(w, 409, "Auth.RAMUserExists", "该子用户已存在")
+		return
+	case errors.As(err, &pnf):
+		writePolicyNotFound(w, pnf.names)
+		return
+	case err != nil:
+		internalError(w, r, "create ram user", err)
+		return
+	}
+	writeJSON(w, 201, "OK", ramUserView(u))
 }
 
 // handleDeleteRAMUser soft-deletes a sub-user (status=3). A missing user
 // returns 404; a deleted one returns 409 to keep DELETE idempotent-ish.
 func handleDeleteRAMUser(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeErr(w, 400, "Common.InvalidParameter", "无效的子用户 ID")
 		return
 	}
-	mu.Lock()
-	bucket := ramUsers[a.AccountID]
-	var found bool
-	for name, u := range bucket {
-		if u.ID == id {
-			found = true
-			if u.Status == 3 {
-				mu.Unlock()
-				writeErr(w, 409, "Auth.RAMUserDeleted", "该子用户已删除")
-				return
-			}
-			u.Status = 3
-			bucket[name] = u
-			break
-		}
-	}
-	mu.Unlock()
-	if !found {
+	switch err := st.DeleteRAMUser(r.Context(), a.AccountID, id); {
+	case errors.Is(err, errNotFound):
 		writeErr(w, 404, "Auth.RAMUserNotFound", "子用户不存在")
 		return
+	case errors.Is(err, errAlreadyDeleted):
+		writeErr(w, 409, "Auth.RAMUserDeleted", "该子用户已删除")
+		return
+	case err != nil:
+		internalError(w, r, "delete ram user", err)
+		return
 	}
+	// A deleted user's keys must not outlive it. CheckAccess already denies a
+	// deleted principal; deleting the keys also stops them verifying at all.
+	deleteOwnerKeys(r.Context(), a.AccountID, accesskey.OwnerRAMUser, id)
 	writeJSON(w, 200, "OK", map[string]any{})
 }
 
 // --- AccessKeys (07§2.7) ---
 
-// handleListAccessKeys returns the account's AKs. The secret is never returned.
 // stsIssuer mints temporary credentials (STS, phase-3 D-3; 03§9.2
 // x-cps-security-token). Initialized in main with the default TTL.
 var stsIssuer *sts.Issuer
@@ -1168,9 +1295,8 @@ var stsIssuer *sts.Issuer
 // token rides x-cps-security-token so the gateway verifier can validate it on
 // top of the CPS1 signature (03§9.2). The plaintext secret is returned once.
 func handleAssumeRole(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -1190,11 +1316,13 @@ func handleAssumeRole(w http.ResponseWriter, r *http.Request) {
 	// Without this lookup the role name is a free-form string that ends up in
 	// the security token's principal — any signed-in tenant could mint itself
 	// a token claiming an arbitrary (e.g. platform-admin) role.
-	mu.RLock()
-	role, found := ramRoles[a.AccountID][roleName]
-	mu.RUnlock()
-	if !found {
+	role, err := st.RAMRoleByName(r.Context(), a.AccountID, roleName)
+	if errors.Is(err, errNotFound) {
 		writeErr(w, 403, "Auth.RoleNotAssumable", "该角色不存在")
+		return
+	}
+	if err != nil {
+		internalError(w, r, "assume role lookup", err)
 		return
 	}
 	if role.Status != 1 {
@@ -1218,255 +1346,354 @@ func handleAssumeRole(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleListAccessKeys returns the AKs of the account root, or of one RAM
+// user (?ramUserId=). The secret is never returned.
 func handleListAccessKeys(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	mu.RLock()
-	aks := accessKeys[a.AccountID]
-	out := make([]map[string]any, 0, len(aks))
-	for _, k := range aks {
-		out = append(out, map[string]any{
-			"akId":          k.AKID,
-			"status":        k.Status,
-			"createdAt":     k.CreatedAt.UTC().Format(time.RFC3339),
-			"lastUsed":      k.LastUsed.UTC().Format(time.RFC3339),
-			"rotationGrace": k.RotationGrace,
-		})
+	var ramUserID int64
+	if v := r.URL.Query().Get("ramUserId"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id <= 0 {
+			writeErr(w, 400, "Common.InvalidParameter", "无效的子用户 ID")
+			return
+		}
+		ramUserID = id
 	}
-	mu.RUnlock()
+	ot, oid, ok := akOwner(w, r, a, ramUserID, false)
+	if !ok {
+		return
+	}
+	recs, err := akStore.ListByOwner(a.AccountID, ot, oid)
+	if err != nil {
+		internalError(w, r, "list access keys", err)
+		return
+	}
+	now := time.Now()
+	out := make([]map[string]any, 0, len(recs))
+	for _, k := range recs {
+		if k.Status == accesskey.StatusDeleted {
+			continue
+		}
+		out = append(out, akView(k, now))
+	}
 	writeJSON(w, 200, "OK", map[string]any{"accessKeys": out, "total": len(out)})
 }
 
-// handleCreateAccessKey creates an AK. Max 2 per account: a third returns 409
-// Auth.AKLimitExceeded. The plaintext secretKey is returned ONCE here; prod
-// never shows it again and stores only the salted hash (07§2.7).
-func handleCreateAccessKey(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
+// akView is the console projection of an AK row. The secret never appears.
+// A superseded key whose rotation grace has closed reports status 2: the
+// verifier already refuses it (07§2.2), whatever the row's flag says.
+func akView(k accesskey.Record, now time.Time) map[string]any {
+	inGrace := !k.GraceUntil.IsZero() && now.Before(k.GraceUntil)
+	status := int(k.Status)
+	if k.Status == accesskey.StatusEnabled && !k.GraceUntil.IsZero() && !inGrace {
+		status = int(accesskey.StatusDisabled)
+	}
+	var lastUsed any // null until the key has been used
+	if !k.LastUsedAt.IsZero() {
+		lastUsed = k.LastUsedAt.UTC().Format(time.RFC3339)
+	}
+	v := map[string]any{
+		"akId":          k.AK,
+		"status":        status,
+		"createdAt":     k.CreatedAt.UTC().Format(time.RFC3339),
+		"lastUsed":      lastUsed,
+		"rotationGrace": inGrace,
+	}
+	if inGrace {
+		v["graceUntil"] = k.GraceUntil.UTC().Format(time.RFC3339)
+	}
+	if k.OwnerType == accesskey.OwnerRAMUser {
+		v["ramUserId"] = k.OwnerID
+	}
+	return v
+}
+
+// akOwner resolves which identity's keys a request manages: the account root
+// (ramUserID 0) or one of the account's RAM users. Creating a key requires an
+// enabled user; listing also works for a disabled one.
+func akOwner(w http.ResponseWriter, r *http.Request, a account, ramUserID int64, forCreate bool) (accesskey.OwnerType, int64, bool) {
+	if ramUserID == 0 {
+		return accesskey.OwnerMaster, 0, true
+	}
+	u, err := st.RAMUserByID(r.Context(), a.AccountID, ramUserID)
+	if errors.Is(err, errNotFound) || (err == nil && u.Status == 3) {
+		writeErr(w, 404, "Auth.RAMUserNotFound", "子用户不存在")
+		return 0, 0, false
+	}
 	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+		internalError(w, r, "access key owner lookup", err)
+		return 0, 0, false
+	}
+	if forCreate && u.Status != 1 {
+		writeErr(w, 409, "Auth.RAMUserDisabled", "子用户已禁用,不能创建 AccessKey")
+		return 0, 0, false
+	}
+	return accesskey.OwnerRAMUser, u.ID, true
+}
+
+// lockAKs takes the per-account AK lock (the 2-key cap is check-then-insert),
+// answering the request itself on failure.
+func lockAKs(w http.ResponseWriter, r *http.Request, accountID int64) (func(), bool) {
+	unlock, err := akLocks.Lock(r.Context(), akLockKey(accountID))
+	if err != nil {
+		internalError(w, r, "access key lock", err)
+		return nil, false
+	}
+	return unlock, true
+}
+
+// ownedKey loads an AK of the caller's account; another account's key, a
+// deleted key and a missing key are all 404.
+func ownedKey(w http.ResponseWriter, r *http.Request, a account) (accesskey.Record, bool) {
+	akID := r.PathValue("akId")
+	if akID == "" {
+		writeErr(w, 400, "Common.InvalidParameter", "缺少 akId")
+		return accesskey.Record{}, false
+	}
+	rec, err := akStore.Get(akID)
+	if errors.Is(err, accesskey.ErrNotFound) || (err == nil && (rec.AccountID != a.AccountID || rec.Status == accesskey.StatusDeleted)) {
+		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
+		return accesskey.Record{}, false
+	}
+	if err != nil {
+		internalError(w, r, "access key lookup", err)
+		return accesskey.Record{}, false
+	}
+	return rec, true
+}
+
+// writeAKErr maps the pkg-go/accesskey lifecycle errors onto wire codes.
+func writeAKErr(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, accesskey.ErrTooManyKeys):
+		writeErr(w, 409, "Auth.AKLimitExceeded", "每个身份最多 2 个 AccessKey(含已禁用),请先删除一个")
+	case errors.Is(err, accesskey.ErrNotFound), errors.Is(err, accesskey.ErrAlreadyDeleted):
+		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
+	case errors.Is(err, accesskey.ErrDisabled):
+		writeErr(w, 409, "Auth.AKDisabled", "已禁用(或宽限期已过)的 AccessKey 不能轮换,请先启用")
+	case errors.Is(err, accesskey.ErrRotationInProgress):
+		writeErr(w, 409, "Auth.AKRotationInProgress", "该 AccessKey 已在轮换宽限期内")
+	default:
+		internalError(w, r, "access key lifecycle", err)
+	}
+}
+
+type createAccessKeyRequest struct {
+	// RAMUserID creates the key for one of the account's RAM users; absent
+	// or 0 creates a key for the account root.
+	RAMUserID int64 `json:"ramUserId"`
+}
+
+// handleCreateAccessKey creates an AK through pkg-go/accesskey: the SK is
+// sealed with the shared KMS key (mk-ak) into the store cmd/verify reads, and
+// returned in plaintext exactly ONCE here (07§2.2). Max 2 keys per identity
+// (enabled or disabled): a third is 409 Auth.AKLimitExceeded.
+func handleCreateAccessKey(w http.ResponseWriter, r *http.Request) {
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	mu.Lock()
-	enabled := countEnabled(accessKeys[a.AccountID])
-	if enabled >= 2 {
-		mu.Unlock()
-		writeErr(w, 409, "Auth.AKLimitExceeded", "每个账号最多 2 个 AccessKey")
+	var req createAccessKeyRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, 400, "Common.InvalidParameter", "malformed body")
 		return
 	}
-	akID, secretPlain, k := issueAccessKey()
-	accessKeys[a.AccountID] = append(accessKeys[a.AccountID], k)
-	mu.Unlock()
-	// WARNING: secretKey is shown exactly once — prod stores only the hash and
-	// never re-displays the plaintext. The client must persist it now.
-	writeJSON(w, 201, "OK", map[string]any{
-		"akId":      akID,
-		"secretKey": secretPlain,
-		"createdAt": k.CreatedAt.UTC().Format(time.RFC3339),
-		"status":    k.Status,
-	})
-}
-
-// issueAccessKey mints a fresh AK (id + one-time plaintext secret + stored
-// record). Caller holds mu. Mirrors the create seed logic so create and rotate
-// produce identical credentials.
-func issueAccessKey() (akID, secretPlain string, k accessKey) {
-	_ = nextAKIDSeq()
-	akID = "EU" + randMasked(14)
-	secretPlain = randHex(20)
-	salt := randHex(16)
-	now := time.Now()
-	k = accessKey{
-		AKID: akID, SecretHash: salt + "$" + sha256Hex(salt+secretPlain),
-		Status: 1, CreatedAt: now, LastUsed: now,
+	if req.RAMUserID < 0 {
+		writeErr(w, 400, "Common.InvalidParameter", "无效的子用户 ID")
+		return
 	}
-	return akID, secretPlain, k
-}
-
-// countEnabled returns how many of the account's AKs are currently enabled.
-func countEnabled(aks []accessKey) int {
-	n := 0
-	for _, k := range aks {
-		if k.Status == 1 {
-			n++
-		}
+	ot, oid, ok := akOwner(w, r, a, req.RAMUserID, true)
+	if !ok {
+		return
 	}
-	return n
-}
-
-// findAKIndex returns the index of the AK with the given id for the account,
-// or -1. Caller holds the appropriate lock.
-func findAKIndex(aks []accessKey, akID string) int {
-	for i, k := range aks {
-		if k.AKID == akID {
-			return i
-		}
+	unlock, ok := lockAKs(w, r, a.AccountID)
+	if !ok {
+		return
 	}
-	return -1
+	created, err := akMgr.Create(a.AccountID, ot, oid)
+	unlock()
+	if err != nil {
+		writeAKErr(w, r, err)
+		return
+	}
+	// WARNING: secretKey is shown exactly once — the store keeps only the KMS
+	// envelope. The client must persist it now.
+	out := map[string]any{
+		"akId":      created.Record.AK,
+		"secretKey": created.SKPlaintext,
+		"createdAt": created.Record.CreatedAt.UTC().Format(time.RFC3339),
+		"status":    int(created.Record.Status),
+	}
+	if ot == accesskey.OwnerRAMUser {
+		out["ramUserId"] = oid
+	}
+	writeJSON(w, 201, "OK", out)
 }
 
 // handleDisableAccessKey disables an AK. A disabled AK cannot sign requests.
 // Disabling an already-disabled AK is a no-op success (idempotent).
 func handleDisableAccessKey(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	akID := r.PathValue("akId")
-	if akID == "" {
-		writeErr(w, 400, "Common.InvalidParameter", "缺少 akId")
+	unlock, ok := lockAKs(w, r, a.AccountID)
+	if !ok {
 		return
 	}
-	mu.Lock()
-	aks := accessKeys[a.AccountID]
-	idx := findAKIndex(aks, akID)
-	if idx < 0 {
-		mu.Unlock()
-		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
+	defer unlock()
+	rec, ok := ownedKey(w, r, a)
+	if !ok {
 		return
 	}
-	aks[idx].Status = 2
-	mu.Unlock()
-	writeJSON(w, 200, "OK", map[string]any{"akId": akID, "status": 2})
+	if err := akMgr.SetStatus(rec.AK, accesskey.StatusDisabled); err != nil {
+		writeAKErr(w, r, err)
+		return
+	}
+	writeJSON(w, 200, "OK", map[string]any{"akId": rec.AK, "status": 2})
 }
 
-// handleEnableAccessKey re-enables a disabled AK. Subject to the 2-enabled limit.
+// handleEnableAccessKey re-enables a disabled AK (and ends a rotation grace:
+// an explicit enable keeps the key). Subject to the per-identity cap.
 func handleEnableAccessKey(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	akID := r.PathValue("akId")
-	if akID == "" {
-		writeErr(w, 400, "Common.InvalidParameter", "缺少 akId")
+	unlock, ok := lockAKs(w, r, a.AccountID)
+	if !ok {
 		return
 	}
-	mu.Lock()
-	aks := accessKeys[a.AccountID]
-	idx := findAKIndex(aks, akID)
-	if idx < 0 {
-		mu.Unlock()
-		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
+	defer unlock()
+	rec, ok := ownedKey(w, r, a)
+	if !ok {
 		return
 	}
-	if aks[idx].Status == 1 {
-		mu.Unlock()
-		writeJSON(w, 200, "OK", map[string]any{"akId": akID, "status": 1})
-		return
-	}
-	// Enabling would add a 3rd active AK if two are already enabled.
-	otherEnabled := 0
-	for i, k := range aks {
-		if i != idx && k.Status == 1 {
-			otherEnabled++
+	if err := akMgr.SetStatus(rec.AK, accesskey.StatusEnabled); err != nil {
+		if errors.Is(err, accesskey.ErrTooManyKeys) {
+			writeErr(w, 409, "Auth.AKLimitExceeded", "每个身份最多同时启用 2 个 AccessKey(轮换宽限期内的旧密钥也计入)")
+			return
 		}
-	}
-	if otherEnabled >= 2 {
-		mu.Unlock()
-		writeErr(w, 409, "Auth.AKLimitExceeded", "每个账号最多 2 个启用的 AccessKey")
+		writeAKErr(w, r, err)
 		return
 	}
-	aks[idx].Status = 1
-	mu.Unlock()
-	writeJSON(w, 200, "OK", map[string]any{"akId": akID, "status": 1})
+	writeJSON(w, 200, "OK", map[string]any{"akId": rec.AK, "status": 1})
 }
 
-// handleRotateAccessKey mints a replacement AK while keeping the old one
-// active through a grace window (07§2.2). The old AK is marked
-// RotationGrace so the owner knows to migrate and delete it. The new
-// secretKey is returned ONCE. Blocked at 2 total AKs (no slot for the replacement).
+// handleRotateAccessKey mints a replacement AK while the old one keeps working
+// through the rotation grace window (≤72h, 07§2.2), after which the verifier
+// refuses it. The new secretKey is returned ONCE.
 func handleRotateAccessKey(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
+	a, ok := authed(w, r)
+	if !ok {
+		return
+	}
+	unlock, ok := lockAKs(w, r, a.AccountID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	rec, ok := ownedKey(w, r, a)
+	if !ok {
+		return
+	}
+	created, err := akMgr.Rotate(rec.AK, accesskey.MaxRotationGrace)
 	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+		writeAKErr(w, r, err)
 		return
 	}
-	akID := r.PathValue("akId")
-	if akID == "" {
-		writeErr(w, 400, "Common.InvalidParameter", "缺少 akId")
-		return
-	}
-	mu.Lock()
-	aks := accessKeys[a.AccountID]
-	idx := findAKIndex(aks, akID)
-	if idx < 0 {
-		mu.Unlock()
-		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
-		return
-	}
-	if countEnabled(aks) >= 2 {
-		mu.Unlock()
-		writeErr(w, 409, "Auth.AKLimitExceeded", "已达 2 个启用 AK 上限,请先禁用或删除一个再轮换")
-		return
-	}
-	// Mint the replacement and mark the outgoing AK for the grace window.
-	newID, secretPlain, k := issueAccessKey()
-	aks[idx].RotationGrace = true
-	accessKeys[a.AccountID] = append(aks, k)
-	mu.Unlock()
 	writeJSON(w, 201, "OK", map[string]any{
-		"akId":      newID,
-		"secretKey": secretPlain,
-		"createdAt": k.CreatedAt.UTC().Format(time.RFC3339),
-		"status":    k.Status,
-		"oldAkId":   akID,
+		"akId":      created.Record.AK,
+		"secretKey": created.SKPlaintext,
+		"createdAt": created.Record.CreatedAt.UTC().Format(time.RFC3339),
+		"status":    int(created.Record.Status),
+		"oldAkId":   rec.AK,
 	})
 }
 
-// handleDeleteAccessKey permanently removes an AK. Allowed during the rotation
-// grace window — deleting the outgoing AK after migration is the intended path.
+// handleDeleteAccessKey deletes an AK (soft delete in the shared store: the
+// verifier refuses it at once, the row stays 7 days for audit). Allowed during
+// the rotation grace window — deleting the outgoing AK after migration is the
+// intended path.
 func handleDeleteAccessKey(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
+	a, ok := authed(w, r)
+	if !ok {
+		return
+	}
+	unlock, ok := lockAKs(w, r, a.AccountID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	rec, ok := ownedKey(w, r, a)
+	if !ok {
+		return
+	}
+	if err := akMgr.Delete(rec.AK); err != nil {
+		writeAKErr(w, r, err)
+		return
+	}
+	writeJSON(w, 200, "OK", map[string]any{"akId": rec.AK})
+}
+
+// deleteOwnerKeys soft-deletes every key of one identity (RAM user removal).
+// Best effort: a failure is logged — CheckAccess denies the deleted principal
+// regardless.
+func deleteOwnerKeys(ctx context.Context, accountID int64, ot accesskey.OwnerType, ownerID int64) {
+	unlock, err := akLocks.Lock(ctx, akLockKey(accountID))
 	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+		slog.Error("delete keys of removed identity: lock failed", "account", accountID, "owner", ownerID, "err", err)
 		return
 	}
-	akID := r.PathValue("akId")
-	if akID == "" {
-		writeErr(w, 400, "Common.InvalidParameter", "缺少 akId")
+	defer unlock()
+	recs, err := akStore.ListByOwner(accountID, ot, ownerID)
+	if err != nil {
+		slog.Error("delete keys of removed identity: list failed", "account", accountID, "owner", ownerID, "err", err)
 		return
 	}
-	mu.Lock()
-	aks := accessKeys[a.AccountID]
-	idx := findAKIndex(aks, akID)
-	if idx < 0 {
-		mu.Unlock()
-		writeErr(w, 404, "Auth.AKNotFound", "AccessKey 不存在")
-		return
+	for _, k := range recs {
+		if k.Status == accesskey.StatusDeleted {
+			continue
+		}
+		if err := akMgr.Delete(k.AK); err != nil && !errors.Is(err, accesskey.ErrAlreadyDeleted) {
+			slog.Error("delete keys of removed identity failed", "account", accountID, "ak", k.AK, "err", err)
+		}
 	}
-	accessKeys[a.AccountID] = append(aks[:idx], aks[idx+1:]...)
-	mu.Unlock()
-	writeJSON(w, 200, "OK", map[string]any{"akId": akID})
 }
 
 // --- RAM roles & policies (07§3.2) + 策略模拟器 (07§3) ---
 
 // handleListRAMRoles returns the account's roles with their attached policy names.
 func handleListRAMRoles(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	mu.RLock()
-	roles := ramRoles[a.AccountID]
+	roles, err := st.ListRAMRoles(r.Context(), a.AccountID)
+	if err != nil {
+		internalError(w, r, "list ram roles", err)
+		return
+	}
 	out := make([]map[string]any, 0, len(roles))
 	for _, role := range roles {
-		out = append(out, map[string]any{
-			"id":          role.ID,
-			"name":        role.Name,
-			"description": role.Description,
-			"policies":    role.Policies,
-			"status":      role.Status,
-			"createdAt":   role.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		out = append(out, ramRoleView(role))
 	}
-	mu.RUnlock()
 	writeJSON(w, 200, "OK", map[string]any{"roles": out, "total": len(out)})
+}
+
+func ramRoleView(role ramRole) map[string]any {
+	return map[string]any{
+		"id":          role.ID,
+		"name":        role.Name,
+		"description": role.Description,
+		"policies":    nonNilNames(role.Policies),
+		"status":      role.Status,
+		"createdAt":   role.CreatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 type createRoleRequest struct {
@@ -1478,9 +1705,8 @@ type createRoleRequest struct {
 // handleCreateRAMRole creates a role. Idempotent on accountID+name: a duplicate
 // returns 409 Auth.RAMRoleExists.
 func handleCreateRAMRole(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req createRoleRequest
@@ -1491,51 +1717,55 @@ func handleCreateRAMRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Common.InvalidParameter", "角色名必填")
 		return
 	}
-	mu.Lock()
-	bucket := ramRoles[a.AccountID]
-	if bucket == nil {
-		bucket = map[string]ramRole{}
-		ramRoles[a.AccountID] = bucket
-	}
-	if _, exists := bucket[req.Name]; exists {
-		mu.Unlock()
-		writeErr(w, 409, "Auth.RAMRoleExists", "该角色已存在")
+	if !validText(req.Name, 64, true) || strings.Contains(req.Name, "/") || !validText(req.Description, 256, false) {
+		writeErr(w, 400, "Common.InvalidParameter", "角色名 ≤64 字且不含 /,描述 ≤256 字")
 		return
 	}
-	role := ramRole{
-		ID: nextRoleID(), AccountID: a.AccountID, Name: req.Name,
-		Description: req.Description, Policies: req.Policies, Status: 1, CreatedAt: time.Now(),
-	}
-	bucket[req.Name] = role
-	mu.Unlock()
-	writeJSON(w, 201, "OK", map[string]any{
-		"id": role.ID, "name": role.Name, "description": role.Description,
-		"policies": role.Policies, "status": role.Status,
-		"createdAt": role.CreatedAt.UTC().Format(time.RFC3339),
+	role, err := st.CreateRAMRole(r.Context(), ramRole{
+		AccountID: a.AccountID, Name: req.Name, Description: req.Description,
+		Policies: dedupeNames(req.Policies), Status: 1, CreatedAt: time.Now(),
 	})
+	var pnf *policyNotFoundError
+	switch {
+	case errors.Is(err, errExists):
+		writeErr(w, 409, "Auth.RAMRoleExists", "该角色已存在")
+		return
+	case errors.As(err, &pnf):
+		writePolicyNotFound(w, pnf.names)
+		return
+	case err != nil:
+		internalError(w, r, "create ram role", err)
+		return
+	}
+	writeJSON(w, 201, "OK", ramRoleView(role))
 }
 
 // handleListRAMPolicies returns the account's policies (system + custom).
 func handleListRAMPolicies(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
-	mu.RLock()
-	pols := ramPolicies[a.AccountID]
+	pols, err := st.ListPolicies(r.Context(), a.AccountID)
+	if err != nil {
+		internalError(w, r, "list ram policies", err)
+		return
+	}
 	out := make([]map[string]any, 0, len(pols))
 	for _, p := range pols {
-		out = append(out, map[string]any{
-			"id":        p.ID,
-			"name":      p.Name,
-			"type":      p.Type,
-			"document":  p.Document,
-			"createdAt": p.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		out = append(out, policyView(p))
 	}
-	mu.RUnlock()
 	writeJSON(w, 200, "OK", map[string]any{"policies": out, "total": len(out)})
+}
+
+func policyView(p storedPolicy) map[string]any {
+	return map[string]any{
+		"id":        p.ID,
+		"name":      p.Name,
+		"type":      p.Type,
+		"document":  p.Document,
+		"createdAt": p.CreatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 type createPolicyRequest struct {
@@ -1547,9 +1777,8 @@ type createPolicyRequest struct {
 // authz.ParsePolicy before storage, so a malformed policy never persists — the
 // same engine the simulator and gateway use decides whether the JSON is valid.
 func handleCreateRAMPolicy(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req createPolicyRequest
@@ -1560,32 +1789,28 @@ func handleCreateRAMPolicy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Common.InvalidParameter", "策略名与文档必填")
 		return
 	}
+	if !validText(req.Name, 64, true) {
+		writeErr(w, 400, "Common.InvalidParameter", "策略名 ≤64 字")
+		return
+	}
 	parsed, err := authz.ParsePolicy([]byte(req.Document))
 	if err != nil {
 		writeErr(w, 400, "Auth.InvalidPolicyDocument", err.Error())
 		return
 	}
-	mu.Lock()
-	bucket := ramPolicies[a.AccountID]
-	if bucket == nil {
-		bucket = map[string]storedPolicy{}
-		ramPolicies[a.AccountID] = bucket
-	}
-	if _, exists := bucket[req.Name]; exists {
-		mu.Unlock()
+	sp, err := st.CreatePolicy(r.Context(), storedPolicy{
+		AccountID: a.AccountID, Name: req.Name, Type: "custom",
+		Document: req.Document, Parsed: parsed, CreatedAt: time.Now(),
+	})
+	if errors.Is(err, errExists) {
 		writeErr(w, 409, "Auth.PolicyExists", "该策略已存在")
 		return
 	}
-	sp := storedPolicy{
-		ID: nextPolicyID(), AccountID: a.AccountID, Name: req.Name, Type: "custom",
-		Document: req.Document, Parsed: parsed, CreatedAt: time.Now(),
+	if err != nil {
+		internalError(w, r, "create ram policy", err)
+		return
 	}
-	bucket[req.Name] = sp
-	mu.Unlock()
-	writeJSON(w, 201, "OK", map[string]any{
-		"id": sp.ID, "name": sp.Name, "type": sp.Type, "document": sp.Document,
-		"createdAt": sp.CreatedAt.UTC().Format(time.RFC3339),
-	})
+	writeJSON(w, 201, "OK", policyView(sp))
 }
 
 // simulateRequest is the 策略模拟器 body. Principal is an audit/display label
@@ -1603,9 +1828,8 @@ type simulateRequest struct {
 // deciding statement. This is the backend for the console 策略模拟器 — an
 // operator tests "would principal X be allowed to do Y on Z?" before committing.
 func handleSimulate(w http.ResponseWriter, r *http.Request) {
-	a, err := requireAuth(r)
-	if err != nil {
-		writeErr(w, 401, err.Error(), "未认证")
+	a, ok := authed(w, r)
+	if !ok {
 		return
 	}
 	var req simulateRequest
@@ -1616,21 +1840,23 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Common.InvalidParameter", "action 与 resource 必填")
 		return
 	}
-	mu.RLock()
-	bucket := ramPolicies[a.AccountID]
+	found, err := st.PoliciesByName(r.Context(), a.AccountID, req.Policies)
+	if err != nil {
+		internalError(w, r, "simulate policy lookup", err)
+		return
+	}
 	named := make([]authz.NamedPolicy, 0, len(req.Policies))
 	unknown := make([]string, 0)
 	for _, name := range req.Policies {
-		sp, ok := bucket[name]
+		sp, ok := found[name]
 		if !ok {
 			unknown = append(unknown, name)
 			continue
 		}
 		named = append(named, authz.NamedPolicy{Name: name, Policy: sp.Parsed})
 	}
-	mu.RUnlock()
 	if len(unknown) > 0 {
-		writeErr(w, 404, "Auth.PolicyNotFound", "策略不存在: "+strings.Join(unknown, ", "))
+		writePolicyNotFound(w, unknown)
 		return
 	}
 	v := authz.Simulate(named, req.Principal, req.Action, req.Resource)
@@ -1649,44 +1875,68 @@ func handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "Auth.NoSession", "无活跃会话")
 		return
 	}
-	mu.Lock()
-	s, ok := sessions[c.Value]
-	if !ok || time.Now().After(s.refreshExp) {
-		delete(sessions, c.Value)
-		mu.Unlock()
+	ctx, now := r.Context(), time.Now()
+	oldHash := hashToken(c.Value)
+	s, err := st.SessionByHash(ctx, oldHash)
+	if err != nil && !errors.Is(err, errNotFound) {
+		internalError(w, r, "refresh lookup", err)
+		return
+	}
+	if err != nil || !s.live(now) {
+		// A token that was rotated away, presented again after the
+		// concurrent-refresh grace, is a replay of a stolen cookie: revoke
+		// the whole chain so the thief's copy dies with the victim's.
+		if err == nil && s.RevokeReason == revokeRotated && now.Sub(s.RevokedAt) > refreshReuseGrace {
+			slog.Warn("refresh token reuse detected — revoking the session chain", "account", s.AccountID)
+			if rerr := st.RevokeSessionFamily(ctx, s.FamilyID, revokeReuse, now); rerr != nil {
+				slog.Error("revoke session chain failed", "account", s.AccountID, "err", rerr)
+			}
+		}
 		writeErr(w, 401, "Auth.SessionExpired", "会话已过期,请重新登录")
 		return
 	}
 	// Re-check the live account: a disabled/closed (or deleted) account must
 	// not be able to refresh into a fresh access token.
-	cur, exists := byID[s.account.AccountID]
-	if !exists || cur.Status != 1 {
-		delete(sessions, c.Value)
-		mu.Unlock()
+	cur, err := st.AccountByID(ctx, s.AccountID)
+	if err != nil && !errors.Is(err, errNotFound) {
+		internalError(w, r, "refresh account lookup", err)
+		return
+	}
+	if err != nil || cur.Status != 1 {
+		_ = st.RevokeSession(ctx, oldHash, revokeAccount, now)
 		writeErr(w, 401, "Auth.AccountUnusable", "账号不可用,请联系管理员")
 		return
 	}
-	// Rotate: revoke the old refresh, issue a new one (02§5.1). The session
-	// carries the fresh account snapshot so the new token reflects current state.
-	delete(sessions, c.Value)
+	// A session minted before a password change / reset is void.
+	if s.TokenVersion != cur.TokenVersion {
+		_ = st.RevokeSession(ctx, oldHash, revokePassword, now)
+		writeErr(w, 401, "Auth.SessionExpired", "会话已过期,请重新登录")
+		return
+	}
+	// Rotate: retire the presented token and mint its successor in the same
+	// chain, atomically (02§5.1).
 	newRefresh := randHex(32)
-	now := time.Now()
-	s.account = cur
-	s.refreshToken = newRefresh
-	s.refreshExp = now.Add(refreshTTL)
-	s.accessExp = now.Add(accessTTL)
-	sessions[newRefresh] = s
-	mu.Unlock()
-	setRefreshCookie(w, newRefresh, s.refreshExp)
+	next := refreshSession{
+		TokenHash: hashToken(newRefresh), AccountID: cur.AccountID, TokenVersion: cur.TokenVersion,
+		FamilyID: s.FamilyID, ParentHash: oldHash, ExpiresAt: now.Add(refreshTTL), CreatedAt: now,
+	}
+	if err := st.RotateSession(ctx, oldHash, next, now); err != nil {
+		if errors.Is(err, errNotFound) { // a concurrent refresh won the rotation
+			writeErr(w, 401, "Auth.SessionExpired", "会话已过期,请重新登录")
+			return
+		}
+		internalError(w, r, "rotate session", err)
+		return
+	}
+	setRefreshCookie(w, newRefresh, next.ExpiresAt)
 	writeJSON(w, 200, "OK", map[string]any{"accessToken": issueAccessToken(cur, now)})
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("eu_refresh")
-	if err == nil {
-		mu.Lock()
-		delete(sessions, c.Value)
-		mu.Unlock()
+	if c, err := r.Cookie("eu_refresh"); err == nil {
+		if err := st.RevokeSession(r.Context(), hashToken(c.Value), revokeLogout, time.Now()); err != nil {
+			slog.Error("logout: revoke session failed", "err", err)
+		}
 	}
 	clearRefreshCookie(w)
 	writeJSON(w, 200, "OK", map[string]any{})
@@ -1703,11 +1953,13 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, err.Error(), "token 无效")
 		return
 	}
-	mu.RLock()
-	a := byID[id]
-	mu.RUnlock()
-	if a.AccountID == 0 {
+	a, err := st.AccountByID(r.Context(), id)
+	if errors.Is(err, errNotFound) {
 		writeErr(w, 401, "Auth.AccountNotFound", "账号不存在")
+		return
+	}
+	if err != nil {
+		internalError(w, r, "session lookup", err)
 		return
 	}
 	if tv != a.TokenVersion {
@@ -1725,7 +1977,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Euler-TraceId")
+		id := httpmw.SanitizeRequestID(r.Header.Get("X-Euler-TraceId"))
 		if id == "" {
 			id = "webauth-" + randHex(8)
 		}
@@ -1746,6 +1998,29 @@ func recoverMiddleware(h http.Handler) http.Handler {
 	})
 }
 
+// seedDemoData provisions the local-development account (100123, password
+// euler123 — published in the README) plus demo RAM users, an AK and RAM
+// roles/policies, so the console pages render real rows on first load. Only
+// reachable with EULER_DEV_SEED=1 outside production.
+func seedDemoData(ctx context.Context) error {
+	created, err := seedAccount(ctx, 100123, "admin@euler.emoera.com", "种子管理员", "euler123")
+	if err != nil {
+		return err
+	}
+	if !created {
+		slog.Info("DEV SEED account already present", "account_id", 100123)
+		return nil
+	}
+	slog.Warn("DEV SEED account provisioned (EULER_DEV_SEED=1)", "email", "admin@euler.emoera.com", "account_id", 100123)
+	if err := seedRAM(ctx, 100123); err != nil {
+		return err
+	}
+	if err := seedAK(100123); err != nil {
+		return err
+	}
+	return seedRAMRolesPolicies(ctx, 100123)
+}
+
 func main() {
 	addr := flag.String("http", ":9101", "HTTP listen address")
 	flag.Parse()
@@ -1753,30 +2028,100 @@ func main() {
 	slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	// Real seeded account with a real salted password hash (not a mock that
-	// always returns success). Credentials are logged once for dev convenience.
-	seedAccount(100123, "admin@euler.emoera.com", "种子管理员", "euler123")
+	// A production process must have a configured signing key: an ephemeral
+	// one would differ per replica and vanish on restart, and "dev mode" must
+	// never be what a forgotten variable silently selects.
+	if jwtSigner.ephemeral && runmode.Production() {
+		slog.Error("refusing to start: no JWT signing key configured", "set", jwtKeyFileEnv, "env", runmode.Env())
+		os.Exit(1)
+	}
+	// Production also needs: the database (a restart must not forget every
+	// account), the KMS root that seals MFA seeds and AK secrets (shared with
+	// the verify container), the identity pepper, the internal token, and
+	// svc-notify for password-reset mail.
+	runmode.MustRequireSecrets(productionSettings()...)
+
+	ctx := context.Background()
+	b, err := backendFromEnv(ctx, runmode.Production())
+	if err != nil {
+		slog.Error("refusing to start: storage", "err", err)
+		os.Exit(1)
+	}
+	installBackend(b)
+	if err := configureIntegrations(); err != nil {
+		slog.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+
+	// Demo data with a PUBLISHED password is opt-in (EULER_DEV_SEED=1) and never
+	// created in production — it used to be seeded unconditionally.
+	if !runmode.DevSeedEnabled() {
+		slog.Info("no demo account seeded (set EULER_DEV_SEED=1 for local development)")
+	} else if err := seedDemoData(ctx); err != nil {
+		slog.Error("dev seed failed", "err", err)
+		os.Exit(1)
+	}
 	// STS temporary-credential issuer (phase-3 D-3). Default TTL; a nil issuer
 	// here would leave the endpoint 503ing, which is better than issuing
 	// permanent credentials by accident.
-	stsIssuer, _ = sts.NewIssuer(sts.DefaultTTL, nil)
-	slog.Warn("DEV SEED account provisioned", "email", "admin@euler.emoera.com",
-		"account_id", 100123, "note", "salted SHA-256; prod uses argon2id")
-	// Seed demo RAM sub-users + one AccessKey + RAM roles/policies so the
-	// console pages render real rows on first load (phase-1 dev only; prod
-	// reads from iam_user / iam_ak / iam_role / iam_role_policy).
-	seedRAM(100123)
-	seedAK(100123)
-	seedRAMRolesPolicies(100123)
+	//
+	// Tokens are sealed with EULER_STS_KEY, which svc-iam verify shares to
+	// validate them. Production without a key leaves STS disabled (503)
+	// rather than minting tokens nobody can check.
+	if key, ok, err := sts.KeyFromEnv(); err != nil {
+		slog.Error("refusing to start: invalid STS key", "err", err)
+		os.Exit(1)
+	} else if ok {
+		stsIssuer, _ = sts.NewIssuer(sts.DefaultTTL, nil, key)
+	} else if !runmode.Production() {
+		devKey := make([]byte, 32)
+		if _, err := rand.Read(devKey); err != nil {
+			panic(err)
+		}
+		stsIssuer, _ = sts.NewIssuer(sts.DefaultTTL, nil, devKey)
+		slog.Warn("no STS key configured — ephemeral key (dev only; tokens will not validate at the gateway)", "set", sts.KeyEnv)
+	} else {
+		slog.Warn("STS disabled: no key configured", "set", sts.KeyEnv)
+	}
 
+	mux := newMux()
+
+	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		slog.Info("svc-iam web-auth listening", "addr", *addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("listen failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	slog.Info("shutdown signal received, draining")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("graceful shutdown failed", "err", err)
+	}
+}
+
+// newMux registers every web-auth route (main and the HTTP tests share it).
+func newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })
+	mux.HandleFunc("GET /api/auth/public-key", handlePublicKey)
 	mux.HandleFunc("POST /api/auth/login", handleLogin)
 	mux.HandleFunc("POST /api/auth/refresh", handleRefresh)
 	mux.HandleFunc("POST /api/auth/logout", handleLogout)
 	mux.HandleFunc("GET /api/auth/session", handleSession)
 	mux.HandleFunc("POST /api/auth/register", handleRegister)
+	// 注册邮箱验证码: no enumeration, rate-limited per email and per IP.
+	mux.HandleFunc("POST /api/auth/register/send-code", handleRegisterSendCode)
+	// 找回密码 (F2): no enumeration, rate-limited per email and per IP.
+	mux.HandleFunc("POST /api/auth/forgot/send-code", handleForgotSendCode)
+	mux.HandleFunc("POST /api/auth/forgot/reset", handleForgotReset)
 	// MFA 强制登录 (M-2): step two of login + factor lifecycle.
 	mux.HandleFunc("POST /api/auth/mfa/verify", handleMFALoginVerify)
 	mux.HandleFunc("POST /api/mfa/bind", handleMFABind)
@@ -1802,23 +2147,10 @@ func main() {
 	mux.HandleFunc("GET /api/ram/policies", handleListRAMPolicies)
 	mux.HandleFunc("POST /api/ram/policies", handleCreateRAMPolicy)
 	mux.HandleFunc("POST /api/ram/simulate", handleSimulate)
-
-	srv := &http.Server{Addr: *addr, Handler: recoverMiddleware(requestIDMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		slog.Info("svc-iam web-auth listening", "addr", *addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("listen failed", "err", err)
-			os.Exit(1)
-		}
-	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	slog.Info("shutdown signal received, draining")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("graceful shutdown failed", "err", err)
-	}
+	// Gateway CheckAccess for eu-authorize (07§3.4). Internal only: guarded
+	// by the shared internal token, and no public route maps /internal/*.
+	mux.Handle("POST /internal/authz/check", internalOnly(http.HandlerFunc(handleAuthzCheck)))
+	// Real-name status for other services (svc-order trial dedup, F4).
+	mux.Handle("GET /internal/accounts/{id}/realname", internalOnly(http.HandlerFunc(handleInternalRealname)))
+	return mux
 }

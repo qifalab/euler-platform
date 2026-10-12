@@ -15,6 +15,34 @@
 #
 # Managed via ADC CLI + GitOps; there is no APISIX Dashboard in any environment
 # (04§3.9). Changes go through MR review like any other manifest.
+#
+# svc-iam endpoints (fixed, one pod / two containers — apps/svc-iam):
+#   eu-auth      verify_endpoint        http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify  (verify)
+#   eu-authorize check_access_endpoint  http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check     (web-auth)
+# Both are set explicitly on every route so a plugin-default change can never
+# silently re-point a route.
+#
+# Upstream: every RPC (Action + Version) route forwards to ONE facade,
+# svc-openapi (services/svc-openapi, apps/svc-openapi, listens :9230; namespace
+# from the ApplicationSet: euler-svc-openapi). It picks the product from the
+# Host header (APISIX passes it through), serves the Action and translates it
+# into calls on svc-catalog / svc-order / svc-orchestrator / svc-monitor with
+# the X-Euler-Account-Id and internal token eu-auth injected. The one route
+# that does not go there is the EUOSS S3 data plane (MinIO).
+#
+# Upstream timeouts on the svc-openapi routes: send/read 30s. A create Action
+# is a purchase run as ~5 sequential internal calls (catalogue SKU + regions,
+# order, payment, fulfilment), which a 5s read cut off mid-flight; the SDKs and
+# the Terraform provider retry the resulting 504 with the same ClientToken, so
+# the window only has to cover one honest create.
+#
+# eu-audit ships to Kafka's SASL_SSL client listener (:9092,
+# platform/middleware/kafka-kraft.yaml), exactly as in console-zone.yaml: TLS
+# verified against the platform CA (the plugin's ssl / ssl_verify default to
+# true) and SCRAM-SHA-512 as user apisix-audit, whose password the gateway pods
+# read from Secret kafka-apisix-audit. All three brokers are listed so the
+# metadata bootstrap survives one broker (one AZ) down. A block without sasl
+# cannot log in, and its audit events are dropped (logged, never surfaced).
 
 routes:
   # ---------------------------------------------------------------------------
@@ -28,19 +56,20 @@ routes:
     uris:
       - /*
     methods: [GET, POST]
-    # Nacos discovery: the subscription string must be {GROUP}@@{serviceName}
-    # and match the registration side exactly, or discovery silently returns no
-    # upstreams (selection pit #2). Group == service name (04§4.3).
+    # Never forward svc-internal paths (/internal/* is service-to-service
+    # only; tools/check-apisix-routes.py enforces this on catch-all routes).
+    vars:
+      - ["uri", "!", "~~", "^/internal(/|$)"]
     upstream:
-      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
-      # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-euecs@@svc-euecs
-      discovery_type: nacos
+      # The OpenAPI facade (see the header): a real cluster Service.
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass   # svc-openapi picks the product from the Host header
       timeout:
         connect: 2
-        send: 5
-        read: 5
+        send: 30
+        read: 30   # creates run ~5 sequential internal calls (see the header)
     plugins:
       ip-restriction:
         # Blacklist / region ban maintained centrally; empty here means the
@@ -58,7 +87,9 @@ routes:
 
       eu-auth:
         mode: signature
-        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/openapi/verify
+        # svc-iam `verify` container (:9100); web-auth (:9101) does not serve
+        # /internal/openapi/verify.
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
         # region/service are bound to the ROUTE. They participate in the
         # derived signing key, so a signature scoped to euecs cannot be
         # replayed against euoss (07§4.1).
@@ -82,7 +113,7 @@ routes:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes:
           - redis-shard-0-headless.mw-cache.svc:6379
@@ -101,6 +132,8 @@ routes:
             port: 9092
           - host: kafka-2.kafka-headless.mw-mq.svc
             port: 9092
+        sasl:
+          user: apisix-audit
 
   # ---------------------------------------------------------------------------
   # EUOSS — 辰云对象存储
@@ -123,12 +156,11 @@ routes:
     vars:
       - ["arg_Action", "~~", ".+"]
     upstream:
-      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
-      # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-euoss@@svc-euoss
-      discovery_type: nacos
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
-      timeout: { connect: 2, send: 5, read: 5 }
+      pass_host: pass   # svc-openapi picks the product from the Host header
+      timeout: { connect: 2, send: 30, read: 30 }   # creates: see the header
     plugins:
       limit-req:
         rate: 200
@@ -138,9 +170,11 @@ routes:
         rejected_code: 429
       eu-auth:
         mode: signature
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
         region: cn-north-1
         service: oss
       eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
         action_from_query: Action
         action_prefix: euoss
         region: cn-north-1
@@ -148,13 +182,16 @@ routes:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
       eu-audit:
         brokers:
           - { host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }
+          - { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }
+          - { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }
+        sasl: { user: apisix-audit }
 
   - id: openapi-euoss-data
     name: openapi-storage-euoss-data
@@ -170,11 +207,26 @@ routes:
       - /*
     upstream:
       # Direct to the MinIO sell cluster; not a Nacos-registered service.
+      # MinIO serves TLS on 9000 (minio-sell-tls, platform/middleware/tls.yaml).
+      # The certificate is verified by config.yaml (proxy_ssl_verify on, the
+      # platform CA as proxy_ssl_trusted_certificate) against the name the
+      # gateway sends, i.e. the client's Host — which is why minio-sell-tls
+      # carries euoss.api.euler.emoera.com.
+      scheme: https
       nodes:
-        "minio-sell.mw-data.svc:9000": 1
+        "minio-sell.mw-storage.svc:9000": 1
       type: roundrobin
       pass_host: pass      # preserve the Host header for virtual-host style
     plugins:
+      # The data plane is the S3 API only. MinIO serves its admin API
+      # (/minio/admin/...), metrics and health on the SAME port, and this route
+      # passes /* through — so the admin API was internet-reachable. Block the
+      # whole /minio prefix (matched on the normalised URI).
+      uri-blocker:
+        block_rules: ["^/minio(/|$)"]
+        case_insensitive: true
+        rejected_code: 403
+        rejected_msg: '{"Code":"Common.Forbidden","Message":"forbidden"}'
       limit-req:
         rate: 2000         # data plane carries far higher volume
         burst: 1000
@@ -185,134 +237,205 @@ routes:
   # ---------------------------------------------------------------------------
   # EURDS / EUVPC / EUBS / EUEIP / EUMON
   #
-  # Same shape as EUECS; each product gets its own subdomain, its own Nacos
-  # service, and an action_prefix pinned to its product code. Adding a product
-  # is filling this template (01§7.3 "填槽" onboarding checklist step 5).
+  # Same shape as EUECS; each product gets its own subdomain, the svc-openapi
+  # upstream, and an action_prefix pinned to its product code. Adding a product
+  # is filling this template plus its Action table in svc-openapi (01§7.3
+  # "填槽" onboarding checklist step 5).
   # ---------------------------------------------------------------------------
   - id: openapi-eurds
     name: openapi-database-eurds
     hosts: [eurds.api.euler.emoera.com]
     uris: [/*]
+    # Never forward svc-internal paths (/internal/* is service-to-service
+    # only; tools/check-apisix-routes.py enforces this on catch-all routes).
+    vars:
+      - ["uri", "!", "~~", "^/internal(/|$)"]
     upstream:
-      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
-      # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-eurds@@svc-eurds
-      discovery_type: nacos
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass   # svc-openapi picks the product from the Host header
+      timeout: { connect: 2, send: 30, read: 30 }   # creates: see the header
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      eu-auth: { mode: signature, region: cn-north-1, service: rds }
-      eu-authorize: { action_from_query: Action, action_prefix: eurds, region: cn-north-1 }
+      eu-auth:
+        mode: signature
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
+        region: cn-north-1
+        service: rds
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action_from_query: Action
+        action_prefix: eurds
+        region: cn-north-1
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   - id: openapi-euvpc
     name: openapi-network-euvpc
     hosts: [euvpc.api.euler.emoera.com]
     uris: [/*]
+    # Never forward svc-internal paths (/internal/* is service-to-service
+    # only; tools/check-apisix-routes.py enforces this on catch-all routes).
+    vars:
+      - ["uri", "!", "~~", "^/internal(/|$)"]
     upstream:
-      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
-      # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-euvpc@@svc-euvpc
-      discovery_type: nacos
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass   # svc-openapi picks the product from the Host header
+      timeout: { connect: 2, send: 30, read: 30 }   # creates: see the header
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      eu-auth: { mode: signature, region: cn-north-1, service: vpc }
-      eu-authorize: { action_from_query: Action, action_prefix: euvpc, region: cn-north-1 }
+      eu-auth:
+        mode: signature
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
+        region: cn-north-1
+        service: vpc
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action_from_query: Action
+        action_prefix: euvpc
+        region: cn-north-1
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   - id: openapi-eubs
     name: openapi-storage-eubs
     hosts: [eubs.api.euler.emoera.com]
     uris: [/*]
+    # Never forward svc-internal paths (/internal/* is service-to-service
+    # only; tools/check-apisix-routes.py enforces this on catch-all routes).
+    vars:
+      - ["uri", "!", "~~", "^/internal(/|$)"]
     upstream:
-      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
-      # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-eubs@@svc-eubs
-      discovery_type: nacos
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass   # svc-openapi picks the product from the Host header
+      timeout: { connect: 2, send: 30, read: 30 }   # creates: see the header
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      eu-auth: { mode: signature, region: cn-north-1, service: bs }
-      eu-authorize: { action_from_query: Action, action_prefix: eubs, region: cn-north-1 }
+      eu-auth:
+        mode: signature
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
+        region: cn-north-1
+        service: bs
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action_from_query: Action
+        action_prefix: eubs
+        region: cn-north-1
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   - id: openapi-eueip
     name: openapi-network-eueip
     hosts: [eueip.api.euler.emoera.com]
     uris: [/*]
+    # Never forward svc-internal paths (/internal/* is service-to-service
+    # only; tools/check-apisix-routes.py enforces this on catch-all routes).
+    vars:
+      - ["uri", "!", "~~", "^/internal(/|$)"]
     upstream:
-      # PLANNED service: no svc-sc* OpenAPI facade exists under services/ yet;
-      # Nacos discovery returns no upstream until the product service ships.
-      service_name: svc-eueip@@svc-eueip
-      discovery_type: nacos
+      nodes:
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass   # svc-openapi picks the product from the Host header
+      timeout: { connect: 2, send: 30, read: 30 }   # creates: see the header
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      eu-auth: { mode: signature, region: cn-north-1, service: eip }
-      eu-authorize: { action_from_query: Action, action_prefix: eueip, region: cn-north-1 }
+      eu-auth:
+        mode: signature
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
+        region: cn-north-1
+        service: eip
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action_from_query: Action
+        action_prefix: eueip
+        region: cn-north-1
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
   - id: openapi-eumon
     name: openapi-monitor-eumon
     hosts: [eumon.api.euler.emoera.com]
     uris: [/*]
+    # Never forward svc-internal paths (/internal/* is service-to-service
+    # only; tools/check-apisix-routes.py enforces this on catch-all routes).
+    vars:
+      - ["uri", "!", "~~", "^/internal(/|$)"]
     upstream:
-      # Real cluster Service (svc-monitor listens :9202; namespace from the
-      # ApplicationSet: euler-svc-monitor).
+      # The facade serves the eumon Actions on top of svc-monitor's REST API
+      # (svc-monitor itself does not speak the RPC Action form).
       nodes:
-        "svc-monitor.euler-svc-monitor.svc:9202": 1
+        "svc-openapi.euler-svc-openapi.svc:9230": 1
       type: roundrobin
+      pass_host: pass   # svc-openapi picks the product from the Host header
+      timeout: { connect: 2, send: 30, read: 30 }   # creates: see the header
     plugins:
       limit-req: { rate: 200, burst: 100, key_type: var, key: remote_addr, rejected_code: 429 }
-      eu-auth: { mode: signature, region: cn-north-1, service: monitor }
-      eu-authorize: { action_from_query: Action, action_prefix: eumon, region: cn-north-1 }
+      eu-auth:
+        mode: signature
+        verify_endpoint: http://svc-iam.euler-svc-iam.svc:9100/internal/openapi/verify
+        region: cn-north-1
+        # service = what the SDKs sign with: serviceNamespace("eumon") = "mon"
+        # (pkg-go/eusdk, sdk/python service_namespace). It feeds the derived
+        # signing key, so "monitor" here rejected every SDK call.
+        service: mon
+      eu-authorize:
+        check_access_endpoint: http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check
+        action_from_query: Action
+        action_prefix: eumon
+        region: cn-north-1
       limit-count:
         count: 1200
         time_window: 60
         key_type: var
-        key: http_x_eu_ak_id
+        key: http_x_euler_ak_id
         policy: redis-cluster
         redis_cluster_nodes: ["redis-shard-0-headless.mw-cache.svc:6379", "redis-shard-1-headless.mw-cache.svc:6379", "redis-shard-2-headless.mw-cache.svc:6379"]
         redis_cluster_name: eu-redis-cluster
       eu-audit:
-        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }]
+        brokers: [{ host: kafka-0.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-1.kafka-headless.mw-mq.svc, port: 9092 }, { host: kafka-2.kafka-headless.mw-mq.svc, port: 9092 }]
+        sasl: { user: apisix-audit }
 
 # Global rules applied to every route in this zone (04§3.1).
 global_rules:

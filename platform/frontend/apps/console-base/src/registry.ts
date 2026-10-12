@@ -3,8 +3,14 @@
  * Source of truth is svc-api-meta GET /api/v1/meta/console/apps; this falls
  * back to a built-in static list so the shell runs with zero backend.
  * Cached in sessionStorage for 5 minutes (02§4.1).
+ *
+ * The gateway requires the shell's JWT on /api/v1/meta/console/apps, so the
+ * call goes through the shell SDK (bearer token from the auth store, one
+ * silent refresh + replay on 401). A bare fetch carried no Authorization and
+ * always 401'd, silently pinning every user to the built-in list.
  */
 import { defineStore } from "pinia";
+import { useSDK } from "./sdk";
 
 export interface RegistryApp {
   appCode: string;
@@ -26,6 +32,11 @@ export interface Registry {
 }
 
 const CACHE_KEY = "eu:console:registry";
+
+// The in-flight load, shared: main.ts's boot load and the router guard's
+// ensureLoaded() (app.use(router) starts the first navigation before the boot
+// load finishes) must wait on the same fetch, not race two.
+let inflight: Promise<void> | null = null;
 const CACHE_TTL = 5 * 60 * 1000;
 
 // Built-in fallback (production pulls this from svc-api-meta). Mirrors the
@@ -61,7 +72,20 @@ export const useRegistry = defineStore("registry", {
     loaded: false,
   }),
   actions: {
-    async load() {
+    load(): Promise<void> {
+      if (!inflight) {
+        inflight = this.fetchRegistry().finally(() => {
+          inflight = null;
+        });
+      }
+      return inflight;
+    },
+    /** Resolve once the registry is applied (loads it if nobody has yet). */
+    async ensureLoaded(): Promise<void> {
+      if (this.loaded) return;
+      await this.load();
+    },
+    async fetchRegistry() {
       // 1) Session cache (5 min).
       try {
         const raw = sessionStorage.getItem(CACHE_KEY);
@@ -76,17 +100,13 @@ export const useRegistry = defineStore("registry", {
 
       // 2) Runtime registry from svc-api-meta. The service returns the
       // platform envelope { Code, Data: { apps, revision, ttl } } (03§9.3);
-      // unwrap Data before applying.
+      // the SDK unwraps Data and throws on any failure (401 included).
       try {
-        const res = await fetch("/api/v1/meta/console/apps");
-        if (res.ok) {
-          const body = await res.json();
-          const data = (body.Data ?? body) as Registry;
-          if (data && Array.isArray(data.apps)) {
-            this.apply(data);
-            sessionStorage.setItem(CACHE_KEY, JSON.stringify({ data, ts: Date.now() }));
-            return;
-          }
+        const { data } = await useSDK().get<Registry>("/api/v1/meta/console/apps");
+        if (data && Array.isArray(data.apps)) {
+          this.apply(data);
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify({ data, ts: Date.now() }));
+          return;
         }
       } catch (e) {
         console.warn("[console-base] registry fetch failed, using fallback", e);

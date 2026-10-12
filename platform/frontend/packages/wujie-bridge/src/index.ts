@@ -27,6 +27,12 @@ export interface SharedProps {
    * itself, so a 401 in a sub-app must go through this.
    */
   refreshToken?: () => Promise<string | undefined>;
+  /**
+   * Cross-app navigation: ask the base router to open a shell route (e.g.
+   * "/billing"). A sub-app's own router cannot reach first-level routes; see
+   * @eu/console-kit navigateShell().
+   */
+  navigate?: (path: string) => void;
   /** Theme token set on :root by the base. */
   theme?: "light" | "dark";
   /** Shared dependency instances (Vue/Pinia/Element Plus) — externals, not MF. */
@@ -69,6 +75,12 @@ export function readSharedProps(): SharedProps {
 
 type Listener = (payload: unknown) => void;
 
+interface WujieBus {
+  $on(e: string, fn: Listener): void;
+  $emit(e: string, p: unknown): void;
+  $off(e: string, fn: Listener): void;
+}
+
 /**
  * Typed bus facade. In sandbox mode it proxies to the live Wujie bus; in
  * standalone mode it falls back to a local EventTarget so the same sub-app code
@@ -77,9 +89,14 @@ type Listener = (payload: unknown) => void;
 class Bridge {
   private local: EventTarget | null = null;
 
-  private bus(): { $on?: (e: string, fn: Listener) => void; $emit?: (e: string, p: unknown) => void; $off?: (e: string, fn: Listener) => void } | EventTarget | null {
+  private bus(): Partial<WujieBus> | EventTarget {
     if (inWujieSandbox()) {
-      return (window as unknown as { $wujie?: { bus: { $on(e: string, fn: Listener): void; $emit(e: string, p: unknown): void; $off(e: string, fn: Listener): void } } }).$wujie?.bus ?? null;
+      const wujieBus = (window as unknown as { $wujie?: { bus?: Partial<WujieBus> } }).$wujie?.bus;
+      if (wujieBus && typeof wujieBus.$on === "function") return wujieBus;
+      // __POWERED_BY_WUJIE__ is set but there is no $wujie bus (a host that
+      // only sets the flag, or the bus is not injected yet). bridge.on() runs
+      // while this module is evaluated, so returning nothing here threw at
+      // import and took the whole sub-app down; degrade to the local bus.
     }
     if (!this.local) this.local = new EventTarget();
     return this.local;
@@ -121,7 +138,45 @@ bridge.on("auth:token-refreshed", (payload) => {
 });
 bridge.on("auth:logout", () => {
   refreshedToken = undefined;
+  standaloneToken = undefined;
 });
+
+// Standalone mode (no shell, e.g. billing.* / ticket.* opened directly): there
+// is no base to refresh for us, so the app redeems the HttpOnly refresh cookie
+// itself (Domain=.euler.emoera.com in prod, so a session minted on the account
+// site reaches every subdomain). Single-flight: concurrent 401s share one call.
+let standaloneToken: string | undefined;
+let standaloneRefresh: Promise<string | undefined> | null = null;
+
+async function redeemRefreshCookie(): Promise<string | undefined> {
+  try {
+    const res = await fetch("/api/auth/refresh", {
+      method: "POST",
+      credentials: "include",
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json().catch(() => null)) as
+      | { Code?: string; Data?: { accessToken?: string } }
+      | null;
+    const token = body?.Code === "OK" ? body.Data?.accessToken : undefined;
+    if (token) standaloneToken = token;
+    return token;
+  } catch {
+    return undefined;
+  }
+}
+
+function refreshStandalone(): Promise<string | undefined> {
+  if (!standaloneRefresh) {
+    const p = redeemRefreshCookie();
+    standaloneRefresh = p;
+    void p.finally(() => {
+      if (standaloneRefresh === p) standaloneRefresh = null;
+    });
+  }
+  return standaloneRefresh;
+}
 
 /**
  * Standard `createSDK` auth options for a sub-app: a live getToken that
@@ -135,7 +190,7 @@ export function subAppAuthOptions(): {
 } {
   const getToken = () => {
     const props = readSharedProps();
-    return props.getToken?.() ?? refreshedToken ?? props.token;
+    return props.getToken?.() ?? refreshedToken ?? props.token ?? standaloneToken;
   };
   return {
     getToken,
@@ -148,12 +203,91 @@ export function subAppAuthOptions(): {
       if (props.refreshToken) {
         const fresh = await props.refreshToken();
         if (fresh) return fresh;
+      } else if (!inWujieSandbox()) {
+        // Standalone: no base to ask — redeem the refresh cookie directly.
+        const fresh = await refreshStandalone();
+        if (fresh) return fresh;
       }
-      // Standalone (no base) or the refresh was rejected: hand back what we
-      // have — the caller will surface the 401 rather than silently looping.
+      // The refresh was rejected: hand back what we have — the caller will
+      // surface the 401 rather than silently looping.
       return getToken();
     },
   };
+}
+
+// --- Sub-app lifecycle (02§3.4) ----------------------------------------------
+
+type LifecycleFn = () => void | Promise<void>;
+
+interface WujieLifecycleWindow {
+  __WUJIE_MOUNT?: () => void;
+  __WUJIE_UNMOUNT?: () => void | Promise<void>;
+  __WUJIE?: { mount?: () => void };
+}
+
+function invoke(fn: LifecycleFn): Promise<void> {
+  try {
+    return Promise.resolve(fn());
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/**
+ * Wire a sub-app's mount/unmount into Wujie, or self-mount when standalone.
+ *
+ * Inside the sandbox Wujie never renders an app on its own: after running the
+ * entry scripts it calls `window.__WUJIE_MOUNT()` (and `__WUJIE_UNMOUNT()` on
+ * destroy / re-mount). An entry that only self-mounts when `!inWujieSandbox()`
+ * therefore shows a blank container inside the shell. Vite entries are ES
+ * modules, which execute after Wujie's own mount attempt, so once the hooks are
+ * registered we ask Wujie to mount now via `window.__WUJIE.mount()` (its mount
+ * is guarded by a flag and never mounts twice).
+ *
+ * Standalone (degradation path, 02§6.6): mount on DOMContentLoaded, or right
+ * away when the document has already been parsed.
+ */
+export function bootstrapSubApp(mount: LifecycleFn, unmount: LifecycleFn): void {
+  if (typeof window === "undefined") return;
+
+  // An unmount that arrives while an async mount is still running waits for
+  // it, so it never tears down a half-mounted app.
+  let mounting: Promise<void> | null = null;
+  const doMount = (): Promise<void> => {
+    const p = invoke(mount).catch((e) => {
+      console.error("[wujie-bridge] sub-app mount failed", e);
+    });
+    mounting = p;
+    return p;
+  };
+  const doUnmount = async (): Promise<void> => {
+    if (mounting) await mounting;
+    mounting = null;
+    // Wujie awaits this hook before clearing the container; a throwing
+    // unmount must not abort that cleanup.
+    await invoke(unmount).catch((e) => {
+      console.error("[wujie-bridge] sub-app unmount failed", e);
+    });
+  };
+
+  if (inWujieSandbox()) {
+    const w = window as unknown as WujieLifecycleWindow;
+    w.__WUJIE_MOUNT = () => {
+      void doMount();
+    };
+    w.__WUJIE_UNMOUNT = () => doUnmount();
+    w.__WUJIE?.mount?.();
+    return;
+  }
+
+  const start = () => {
+    void doMount();
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
 }
 
 /** Latest region id: live getter → bus event payload handled by callers → snapshot. */

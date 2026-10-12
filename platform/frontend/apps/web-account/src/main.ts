@@ -34,8 +34,8 @@ export async function unmount() {
   if (app) { app.unmount(); app = null; }
 }
 
-// Standalone mode (02§6.6 degradation path): self-mount when not in sandbox.
-import { inWujieSandbox } from "@eu/wujie-bridge";
-if (!inWujieSandbox()) {
-  document.addEventListener("DOMContentLoaded", () => void mount());
-}
+// Inside Wujie the shell drives mount/unmount through window.__WUJIE_MOUNT /
+// __WUJIE_UNMOUNT; standalone (02§6.6 degradation path) self-mounts once the
+// DOM is ready.
+import { bootstrapSubApp } from "@eu/wujie-bridge";
+bootstrapSubApp(() => mount(), unmount);

@@ -38,10 +38,11 @@ local plugin_name = "eu-authorize"
 local schema = {
     type = "object",
     properties = {
-        -- svc-iam CheckAccess endpoint.
+        -- svc-iam CheckAccess endpoint (web-auth container, port 9101;
+        -- internal-token protected, never routed publicly).
         check_access_endpoint = {
             type = "string",
-            default = "http://svc-iam.business.svc/internal/authz/check",
+            default = "http://svc-iam.euler-svc-iam.svc:9101/internal/authz/check",
         },
         -- The action this route maps to, formatted {productCode}:{Operation}
         -- (07§3.1, S3). Bound to the route, never taken from the request.
@@ -121,22 +122,33 @@ local function resolve_action(conf)
     return conf.action_prefix .. ":" .. raw
 end
 
--- render_arn expands the ARN template for fine-grained evaluation.
+-- render_arn expands the ARN template for fine-grained evaluation. It
+-- returns nil plus the offending argument name when a $arg_<name> placeholder
+-- cannot be filled with exactly one concrete value: a missing or empty arg, a
+-- repeated one (a table — which instance would the service act on?), a bare
+-- one (`true`), or one carrying wildcard characters. Substituting "" there
+-- produced ".../instance/" and the check ran against an ARN that names no
+-- resource at all; the caller fails closed instead.
 local function render_arn(template, account_id, region)
     if not template then
         return nil
     end
     local args = ngx.req.get_uri_args()
+    local bad
     local arn = template
     arn = string.gsub(arn, "%$account_id", account_id or "")
     arn = string.gsub(arn, "%$region", region or "")
     arn = string.gsub(arn, "%$arg_([A-Za-z0-9_]+)", function(name)
         local v = args[name]
-        if type(v) == "string" then
-            return v
+        if type(v) ~= "string" or v == "" or string.find(v, "[%*%?]") then
+            bad = bad or name
+            return ""
         end
-        return ""
+        return v
     end)
+    if bad then
+        return nil, bad
+    end
     return arn
 end
 
@@ -165,7 +177,10 @@ local function call_check_access(conf, ctx, account_id, identity, action, resour
     local res, req_err = httpc:request_uri(conf.check_access_endpoint, {
         method  = "POST",
         body    = core.json.encode(payload),
-        headers = { ["Content-Type"] = "application/json" },
+        headers = {
+            ["Content-Type"]           = "application/json",
+            ["X-Euler-Internal-Token"] = ctx.eu_internal_token,
+        },
     })
     if not res then
         core.log.error("eu-authorize: check endpoint unreachable: ", req_err)
@@ -203,7 +218,11 @@ function _M.access(conf, ctx)
     end
 
     local identity = ctx.eu_identity or core.request.header(ctx, "X-Euler-Identity") or ""
-    local resource_arn = render_arn(conf.resource_arn_template, account_id, conf.region)
+    local resource_arn, bad_arg = render_arn(conf.resource_arn_template, account_id, conf.region)
+    if bad_arg then
+        -- Fail closed: never evaluate a hole-punched or wildcard ARN.
+        return deny(ctx, 400, "Common.InvalidParameter", "missing or malformed " .. bad_arg)
+    end
 
     -- L1 cache: (identity, action, resource) → decision, 30s TTL.
     local cache_key = account_id .. "|" .. identity .. "|" .. action .. "|" .. (resource_arn or "*")

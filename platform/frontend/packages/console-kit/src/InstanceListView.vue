@@ -15,7 +15,12 @@ export interface InstanceListConfig {
   createLabel: string;
   /** Header of the id/name column; default 实例 ID/名称. */
   idTitle?: string;
-  /** Placement column — ZONAL products show 可用区 (zoneId), REGIONAL ones 地域. */
+  /**
+   * Placement column — ZONAL products show 可用区 (zoneId), REGIONAL ones 地域.
+   * The BFF rows carry the real `Zone`; a zoneId column falls back to the
+   * row's region (and is titled 地域) only when no row carries a zone (an
+   * older BFF without the field).
+   */
   placement?: { key: "region" | "zoneId"; title: string };
   /**
    * Billing column. `prepaid: true` maps the row's ChargeType
@@ -23,8 +28,11 @@ export interface InstanceListConfig {
    * 按量. Omit to hide the column entirely.
    */
   charge?: { title?: string; prepaid?: boolean };
-  /** Extra columns mapped from the raw BFF row (e.g. 到期时间 ← ExpiredAt). */
-  extraColumns?: Array<{ key: string; title: string; from: string; fallback?: string }>;
+  /**
+   * Extra columns mapped from the raw BFF row (e.g. 到期时间 ← ExpiredAt).
+   * `format: "time"` renders an RFC3339 field in local time ("—" when unset).
+   */
+  extraColumns?: Array<{ key: string; title: string; from: string; fallback?: string; format?: "time" }>;
   /** Empty-state copy. */
   empty: { title: string; description: string };
 }
@@ -40,7 +48,7 @@ export interface InstanceListConfig {
  * copies of this page; they now pass their InstanceListConfig instead, so a fix
  * (stale-response handling, polling policy, the error state) lands once.
  */
-import { computed, h } from "vue";
+import { computed, h, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
 import { EmptyGuide, PageHeader, StatusBadge } from "@eu/ui";
@@ -48,6 +56,9 @@ import { createSDK } from "@eu/sdk";
 import { subAppAuthOptions } from "@eu/wujie-bridge";
 import ResourceTable from "./ResourceTable.vue";
 import { useResourceTable, type Column } from "./useResourceTable";
+import { formatTime, EMPTY_TIME } from "./format";
+import { isTransitionalState, paginate, resourceDisplayName, resourceZone } from "./listing";
+import { attributesOf } from "./resourceAttributes";
 
 const props = defineProps<{ config: InstanceListConfig }>();
 const cfg = props.config;
@@ -72,37 +83,78 @@ function buildColumns(c: InstanceListConfig): Column<Row>[] {
   return cols;
 }
 
+/** The row's zone, when the list row carries one (Zone / ZoneId). */
+const zoneOf = (r: Row): string => resourceZone(r);
+// Whether any row of the last fetch carried a zone: a zoneId column titled
+// 可用区 must not silently show regions (the resource list has only Region).
+const zoneSeen = ref(false);
+
+function extraValue(r: Row, extra: NonNullable<InstanceListConfig["extraColumns"]>[number]): string {
+  const raw = r[extra.from] as string | undefined;
+  if (extra.format === "time") {
+    const t = formatTime(raw);
+    return t === EMPTY_TIME ? (extra.fallback || EMPTY_TIME) : t;
+  }
+  return raw || extra.fallback || EMPTY_TIME;
+}
+
 const { rows, loading, error, columns, page, pageSize, total, setPage, refresh } = useResourceTable<Row>({
-  api: async (_params, signal) => {
+  api: async (params, signal) => {
     const res = await sdk.get<Row[]>("/console/resources", { signal });
-    const items = (res.data ?? [])
-      .filter((r) => r.ProductCode === cfg.productCode)
-      .map((r) => {
-        const row: Row = {
-          instanceId: r.ResourceId,
-          instanceName: r.ResourceId,
-          status: String(r.State ?? "").charAt(0).toUpperCase() + String(r.State ?? "").slice(1).toLowerCase(),
-          spec: r.SpecCode,
-        };
-        if (cfg.placement) row[cfg.placement.key] = r.Region;
-        if (cfg.charge) row.chargeType = cfg.charge.prepaid && r.ChargeType === "PREPAID" ? "包年包月" : "按量";
-        for (const extra of cfg.extraColumns ?? []) row[extra.key] = (r[extra.from] as string) || extra.fallback || "—";
-        return row;
-      });
-    return { items, total: items.length };
+    const mine = (res.data ?? []).filter((r) => r.ProductCode === cfg.productCode);
+    zoneSeen.value = mine.some((r) => zoneOf(r) !== "");
+    const items = mine.map((r) => {
+      const row: Row = {
+        instanceId: r.ResourceId,
+        // The customer-given `name` attribute when the row carries one.
+        instanceName: attributesOf(r).name || r.ResourceId,
+        status: String(r.State ?? "").charAt(0).toUpperCase() + String(r.State ?? "").slice(1).toLowerCase(),
+        spec: r.SpecCode,
+      };
+      if (cfg.placement) {
+        // Once rows carry zones, a row without one shows "—" rather than its
+        // region under a 可用区 heading.
+        row[cfg.placement.key] = cfg.placement.key === "zoneId"
+          ? (zoneSeen.value ? (zoneOf(r) || EMPTY_TIME) : r.Region)
+          : r.Region;
+      }
+      if (cfg.charge) row.chargeType = cfg.charge.prepaid && r.ChargeType === "PREPAID" ? "包年包月" : "按量";
+      for (const extra of cfg.extraColumns ?? []) row[extra.key] = extraValue(r, extra);
+      return row;
+    });
+    // /console/resources returns the whole list: page it here, keeping the
+    // full count as total so the pager reaches every page.
+    return paginate(items, params);
   },
   columns: buildColumns(cfg),
-  polling: { interval: 10_000, when: (r) => r.some((x) => x.status === "Creating") },
+  // Poll while any row is in a transitional lifecycle state (CREATING,
+  // UPGRADING, RELEASING, ...) — e.g. a buy that was accepted with 202.
+  polling: { interval: 10_000, when: (r) => r.some((x) => isTransitionalState(x.status)) },
   pageSize: 20,
 });
 
+/** "name (id)" when the resource has a `name` attribute, else the id alone. */
+const displayName = (row: Row): string => resourceDisplayName(String(row.instanceId ?? ""), String(row.instanceName ?? ""));
+
 const tableColumns = computed(() =>
   columns.value.map((c) => {
+    if (c.key === "zoneId" && cfg.placement?.key === "zoneId" && !zoneSeen.value) return { ...c, title: "地域" };
     if (c.key === "status") return { ...c, render: (row: Row) => h(StatusBadge, { status: String(row.status ?? "") }) };
-    if (c.key === "instanceId") return { ...c, link: (row: Row) => `/instances/${row.instanceId}`, render: (row: Row) => `${row.instanceName} (${row.instanceId})` };
+    if (c.key === "instanceId") return { ...c, link: (row: Row) => `/instances/${row.instanceId}`, render: (row: Row) => displayName(row) };
     return c;
   }),
 );
+
+// EmptyGuide renders its action as a plain <a href>. In this history-mode
+// sub-app a hash href ("#/buy") only edited the fragment — a dead link — so the
+// click is routed through vue-router instead.
+const buyHref = computed(() => router.resolve("/buy").href);
+function onEmptyAction(e: MouseEvent) {
+  if ((e.target as HTMLElement | null)?.closest(".eu-empty-action")) {
+    e.preventDefault();
+    void router.push("/buy");
+  }
+}
 </script>
 
 <template>
@@ -117,8 +169,13 @@ const tableColumns = computed(() =>
       <ElButton size="small" @click="refresh">重试</ElButton>
     </div>
     <template v-else>
-      <ResourceTable :rows="rows" :columns="tableColumns" :loading="loading" :total="total" :page="page" :page-size="pageSize" @update:page="setPage" />
-      <EmptyGuide v-if="!loading && rows.length === 0" :title="config.empty.title" :description="config.empty.description" :action-label="config.createLabel" action-href="#/buy" />
+      <ResourceTable :rows="rows" :columns="tableColumns" :loading="loading" :total="total" :page="page" :page-size="pageSize" @update:page="setPage">
+        <template #empty>
+          <div @click.capture="onEmptyAction">
+            <EmptyGuide :title="config.empty.title" :description="config.empty.description" :action-label="config.createLabel" :action-href="buyHref" />
+          </div>
+        </template>
+      </ResourceTable>
     </template>
   </section>
 </template>

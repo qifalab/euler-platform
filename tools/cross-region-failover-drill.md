@@ -34,6 +34,22 @@
 | P4 | 地域台账可查 | `v_resource_by_region` 对 cn-north-1 有预期行数 | `SELECT * FROM v_resource_by_region WHERE region='cn-north-1'` |
 | P5 | DNS 切换路径就绪 | 权威 DNS 已配置 cn-east-1 的接管记录(预置不启用) | DNS 服务商控制台 |
 | P6 | 告警通道验证 | 对客告警通道可达(svc-notify 信任通道不降级) | 一次测试通知 |
+| P7 | 运维只读账号在位 | cn-east-1 Secret kafka-scram-users 含 `kafka-ops`, kafka-scram-users Job 已同步 | `kubectl --context cn-east-1 -n mw-mq get job kafka-scram-users` (Complete) |
+
+P2 的对象存储通道也可直查 MinIO: 跨地域端点 `minio.<region>:9000` 只走 https, 证书逐一
+校验 (**不用** `mc --insecure`). mc 信任 `~/.mc/certs/CAs/` 下的证书, 两个地域各自的
+euler-platform-ca 根证书 (公开) 都要放进去, 与 minio-replication-bootstrap Job 一致:
+
+```
+mkdir -p ~/.mc/certs/CAs
+for r in cn-north-1 cn-east-1; do
+  kubectl --context $r -n mw-storage get secret minio-replication-tls \
+    -o jsonpath='{.data.ca\.crt}' | base64 -d > ~/.mc/certs/CAs/$r-platform-ca.crt
+done
+# 只给 URL, 不带 key: mc 交互读取 access/secret key, 不进 URL、不进命令行历史
+mc alias set src https://minio.cn-north-1:9000
+mc replicate status src/backup-mysql   # 逐个检查 minio-replication-cfg 的 buckets
+```
 
 演练通告: 演练前 24h 内部通告, **不对客公告**(地域级切换是 SLA 内行为, 不是事故).
 
@@ -85,11 +101,36 @@ curl -s https://api.euler.emoera.com/healthz       # 200
 
 ### 3.5 T0+~20min: 验证 Kafka 异地重建 (00§4.5)
 
+Kafka 只有 SASL_SSL 客户端端口 :9092 (SCRAM-SHA-512 + 平台 CA 校验, kafka-kraft.yaml),
+broker 广播的是集群内地址 `kafka-N.kafka-headless.mw-mq.svc`, 所以 CLI 在 cn-east-1 的
+mw-mq 内临时 pod 里跑 (NetworkPolicy kafka-ingress 放行同 namespace). 登录用运维只读账号
+`kafka-ops` (§2 P7; 只有全部 topic 的 DESCRIBE/DESCRIBE_CONFIGS, 不能读写消息 ——
+`--list` 只列出有 DESCRIBE 权限的 topic, 所以必须用它而不是 apisix-audit).
+
 ```
+K() { kubectl --context cn-east-1 -n mw-mq "$@"; }
+K run kafka-cli --restart=Never --image=bitnami/kafka:3.7.0 --command -- sleep 1800
+K wait --for=condition=Ready pod/kafka-cli --timeout=120s
+# CA: cn-east-1 签发 :9092 证书 (kafka-tls) 的 euler-platform-ca 根证书 (公开;
+# 每个地域一个根, 不能用 cn-north-1 的)
+K get secret kafka-tls -o jsonpath='{.data.ca\.crt}' | base64 -d \
+  | K exec -i kafka-cli -- sh -c 'cat > /tmp/ca.crt'
+# --command-config: 密码从 Secret 直接写进 pod 内文件, 不进命令行、不落本机磁盘
+KAFKA_OPS_PW="$(K get secret kafka-scram-users -o jsonpath='{.data.kafka-ops}' | base64 -d)"
+K exec -i kafka-cli -- sh -c 'cat > /tmp/client.properties' <<EOF
+security.protocol=SASL_SSL
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="kafka-ops" password="${KAFKA_OPS_PW}";
+ssl.truststore.type=PEM
+ssl.truststore.location=/tmp/ca.crt
+EOF
+unset KAFKA_OPS_PW
 # 不做跨城镜像: cn-east-1 的 Kafka topic 按 cloud.* 规范重建(重建 = 新集群从
 # 空 topic 起步, 消费方幂等重放, 不是复制主地域的 offset)
-kafka-topics --bootstrap-server cn-east-1-kafka:9092 --list
+K exec kafka-cli -- /opt/bitnami/kafka/bin/kafka-topics.sh \
+  --bootstrap-server kafka.mw-mq.svc:9092 --command-config /tmp/client.properties --list
 # 期望: cloud.trade.order.event / cloud.metering.usage.raw 等核心 topic 已存在
+K delete pod kafka-cli    # 用完即删 (pod 内有密码文件)
 ```
 
 ### 3.6 T0+30min: RTO 判定

@@ -11,8 +11,8 @@
 //	GET    /api/v1/monitor/rules             — list the account's alert rules
 //	POST   /api/v1/monitor/rules             — create a rule (idempotent on account+product+metric)
 //	PUT    /api/v1/monitor/rules/{id}        — update a rule (optimistic version)
-//	DELETE /api/v1/monitor/rules/{id}        — delete a rule
-//	GET    /api/v1/monitor/metrics           — query a metric for a resource (query proxy)
+//	DELETE /api/v1/monitor/rules/{id}        — delete a rule (404 Monitor.RuleNotFound when absent)
+//	GET    /api/v1/monitor/metrics           — query a metric for one of the account's resources (query proxy, metrics.go; ownership via svc-orchestrator, owners.go)
 //	GET    /api/v1/monitor/templates         — list platform rule templates
 //	GET    /api/v1/monitor/slo               — M-9 SLO dashboard: error budget, burn rates, release policy
 //	GET    /api/v1/monitor/chaos             — M-9 chaos drills: six mandatory subjects + remediation verdicts
@@ -31,11 +31,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/qifalab/euler-platform/chaos"
+	"github.com/qifalab/euler-platform/httpmw"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/slo"
 )
 
@@ -80,20 +84,20 @@ func validComparisonOperator(op int) bool {
 
 // AlertRule mirrors alert_rule (sql/V1__support_db_monitor_schema.sql).
 type AlertRule struct {
-	RuleID                 int64             `json:"ruleId"`
-	AccountID              int64             `json:"accountId"`
-	ProductCode            string            `json:"productCode"`
-	ResourceType           string            `json:"resourceType"`
-	Metric                 string            `json:"metric"`
-	Threshold              string            `json:"threshold"` // DECIMAL as string
-	ComparisonOperator     int               `json:"comparisonOperator"` // proto ComparisonOperator: 1> 2≥ 3< 4≤ (monitor.proto:46-52)
-	Period                 int               `json:"period"`             // seconds
-	EvalPeriods            int               `json:"evalPeriods"`
-	NotificationChannels   []string          `json:"notificationChannels"`
-	Status                 int               `json:"status"` // 1 enabled 2 disabled
-	Version                int               `json:"version"`
-	CreatedAt              time.Time         `json:"createdAt"`
-	UpdatedAt              time.Time         `json:"updatedAt"`
+	RuleID               int64     `json:"ruleId"`
+	AccountID            int64     `json:"accountId"`
+	ProductCode          string    `json:"productCode"`
+	ResourceType         string    `json:"resourceType"`
+	Metric               string    `json:"metric"`
+	Threshold            string    `json:"threshold"`          // DECIMAL as string
+	ComparisonOperator   int       `json:"comparisonOperator"` // proto ComparisonOperator: 1> 2≥ 3< 4≤ (monitor.proto:46-52)
+	Period               int       `json:"period"`             // seconds
+	EvalPeriods          int       `json:"evalPeriods"`
+	NotificationChannels []string  `json:"notificationChannels"`
+	Status               int       `json:"status"` // 1 enabled 2 disabled
+	Version              int       `json:"version"`
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
 // ruleStore wires the rule handlers to the persistence boundary. The demo seed
@@ -102,10 +106,23 @@ type AlertRule struct {
 // pointed at it (alert-engine would start evaluating them).
 type ruleStore struct {
 	repo ruleRepo
+	// metrics backs GET /api/v1/monitor/metrics (metrics.go).
+	metrics *metricsBackend
+	// owners checks that a queried resource is the caller's (owners.go).
+	owners *resourceOwnership
 }
 
 func newRuleStore() *ruleStore {
-	s := newRuleStoreWith(newMemRuleRepo())
+	return newRuleStoreFor(newMemRuleRepo())
+}
+
+// newRuleStoreFor is main()'s constructor: it wires the repo and plants the
+// demo rules ONLY when the repo is the in-memory one (see ruleStore).
+func newRuleStoreFor(repo ruleRepo) *ruleStore {
+	s := newRuleStoreWith(repo)
+	if persistentRuleRepo(repo) {
+		return s
+	}
 	// Seeds use proto operator semantics: "cpu ≥ 80" → 2 (GTE), "req > 1000" → 1 (GT).
 	s.seed(100123, "euecs", "instance", "cpu_utilization", "80.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP", "EMAIL"})
 	s.seed(100123, "euecs", "instance", "memory_utilization", "90.0000", cmpGreaterThanOrEqual, 60, 1, []string{"IN_APP"})
@@ -113,10 +130,42 @@ func newRuleStore() *ruleStore {
 	return s
 }
 
+// thresholdPattern is a plain decimal literal (what DECIMAL accepts verbatim).
+var thresholdPattern = regexp.MustCompile(`^([+-]?)([0-9]*)(?:\.([0-9]*))?$`)
+
+// normalizeThreshold validates a threshold and renders it in the canonical
+// form of the alert_rule.threshold column, DECIMAL(18,4): "80" → "80.0000".
+// Both backends then store and return the same string — the MySQL repo used
+// to hand back "80.0000" for a rule the in-memory repo returned as "80".
+// Values DECIMAL(18,4) cannot hold exactly are rejected rather than rounded.
+func normalizeThreshold(raw string) (string, error) {
+	m := thresholdPattern.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil || (m[2] == "" && m[3] == "") {
+		return "", errors.New("threshold must be a decimal number")
+	}
+	intPart := strings.TrimLeft(m[2], "0")
+	if intPart == "" {
+		intPart = "0"
+	}
+	frac := m[3]
+	if len(frac) > 4 {
+		return "", errors.New("threshold allows at most 4 decimal places")
+	}
+	if len(intPart) > 14 {
+		return "", errors.New("threshold is out of range")
+	}
+	frac += strings.Repeat("0", 4-len(frac))
+	sign := m[1]
+	if sign == "+" || (intPart == "0" && frac == "0000") {
+		sign = ""
+	}
+	return sign + intPart + "." + frac, nil
+}
+
 // newRuleStoreWith wires a repo. Tests use it to run the handlers against
 // whichever backend they are exercising.
 func newRuleStoreWith(repo ruleRepo) *ruleStore {
-	return &ruleStore{repo: repo}
+	return &ruleStore{repo: repo, metrics: defaultMetricsBackend(), owners: defaultResourceOwnership()}
 }
 
 func (s *ruleStore) seed(acct int64, product, rtype, metric, threshold string, cmp, period, evalP int, channels []string) {
@@ -203,6 +252,22 @@ func (s *ruleStore) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ProductCode == "" || req.Metric == "" || req.Threshold == "" {
 		writeErr(w, "Common.InvalidParameter", 400, "productCode, metric, threshold are required")
+		return
+	}
+	// The same field rules as the update path (0 = default for period and
+	// evalPeriods on create; a negative value is never a default).
+	threshold, err := normalizeThreshold(req.Threshold)
+	if err != nil {
+		writeErr(w, "Common.InvalidParameter", 400, err.Error())
+		return
+	}
+	req.Threshold = threshold
+	if req.Period < 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "period must be positive seconds")
+		return
+	}
+	if req.EvalPeriods < 0 {
+		writeErr(w, "Common.InvalidParameter", 400, "evalPeriods must be positive")
 		return
 	}
 	if req.Period == 0 {
@@ -326,6 +391,14 @@ func (s *ruleStore) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "Common.InvalidParameter", 400, "comparisonOperator must be 1(>) 2(>=) 3(<) 4(<=)")
 		return
 	}
+	if req.Threshold != nil {
+		threshold, err := normalizeThreshold(*req.Threshold)
+		if err != nil {
+			writeErr(w, "Common.InvalidParameter", 400, err.Error())
+			return
+		}
+		req.Threshold = &threshold
+	}
 	if req.Period != nil && *req.Period <= 0 {
 		writeErr(w, "Common.InvalidParameter", 400, "period must be positive seconds")
 		return
@@ -404,34 +477,19 @@ func (s *ruleStore) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.repo.Delete(acct, id); err != nil {
+		// An unknown id and another account's rule answer alike (no probing
+		// of other tenants' ids). A retried DELETE whose first attempt
+		// succeeded also lands here: the rule is gone either way, which the
+		// 404 says without pretending this call removed it.
+		if errors.Is(err, ErrRuleNotFound) {
+			writeErr(w, "Monitor.RuleNotFound", 404, "告警规则不存在")
+			return
+		}
 		slog.Error("rule delete failed", "ruleId", id, "err", err)
 		writeErr(w, "Monitor.DeleteFailed", 500, "告警规则删除失败")
 		return
 	}
 	writeJSON(w, "OK", map[string]any{"ruleId": id, "deleted": true})
-}
-
-// handleQueryMetrics is the metrics query proxy (03§4.4.1). Phase-1 returns
-// synthetic series points so the console-monitor dashboard renders; prod fans
-// out to the tenant VictoriaMetrics cluster.
-func (s *ruleStore) handleQueryMetrics(w http.ResponseWriter, r *http.Request) {
-	if _, ok := accountIDFrom(w, r); !ok {
-		return
-	}
-	metric := r.URL.Query().Get("metric")
-	if metric == "" {
-		metric = "cpu_utilization"
-	}
-	// Synthetic 12-point series (prod: query tenant VM cluster).
-	points := make([]map[string]any, 12)
-	now := time.Now()
-	for i := 0; i < 12; i++ {
-		ts := now.Add(time.Duration(-11+i) * time.Minute)
-		// Deterministic-ish value varying by index (no Math.random in this context).
-		val := 20 + (i*7)%60
-		points[i] = map[string]any{"timestamp": ts.Format(time.RFC3339), "value": val}
-	}
-	writeJSON(w, "OK", map[string]any{"metric": metric, "points": points})
 }
 
 func (s *ruleStore) handleTemplates(w http.ResponseWriter, r *http.Request) {
@@ -487,21 +545,21 @@ func (s *ruleStore) handleSLO(w http.ResponseWriter, r *http.Request) {
 		budget := o.ErrorBudget()
 		remaining := budget - obs.consumedTotal
 		objectives = append(objectives, map[string]any{
-			"name":           o.Name,
-			"target":         o.Target,
-			"windowMs":       o.Window.Milliseconds(),
-			"errorBudgetMs":  budget.Milliseconds(),
-			"consumed1hMs":   obs.consumed1h.Milliseconds(),
-			"consumed3dMs":   obs.consumed3d.Milliseconds(),
+			"name":            o.Name,
+			"target":          o.Target,
+			"windowMs":        o.Window.Milliseconds(),
+			"errorBudgetMs":   budget.Milliseconds(),
+			"consumed1hMs":    obs.consumed1h.Milliseconds(),
+			"consumed3dMs":    obs.consumed3d.Milliseconds(),
 			"consumedTotalMs": obs.consumedTotal.Milliseconds(),
-			"remainingMs":    remaining.Milliseconds(),
-			"burnRate1h":     o.BurnRate(obs.consumed1h, slo.FastBurnWindow),
-			"burnRate3d":     o.BurnRate(obs.consumed3d, slo.SlowBurnWindow),
-			"alert1h":        string(o.Alert(obs.consumed1h, slo.FastBurnWindow)),
-			"alert3d":        string(o.Alert(obs.consumed3d, slo.SlowBurnWindow)),
-			"budgetPolicy":   string(o.BudgetPolicy(remaining)),
-			"quartersMet":    obs.quartersMet,
-			"slaEligible":    slo.CanCommitSLA(obs.quartersMet),
+			"remainingMs":     remaining.Milliseconds(),
+			"burnRate1h":      o.BurnRate(obs.consumed1h, slo.FastBurnWindow),
+			"burnRate3d":      o.BurnRate(obs.consumed3d, slo.SlowBurnWindow),
+			"alert1h":         string(o.Alert(obs.consumed1h, slo.FastBurnWindow)),
+			"alert3d":         string(o.Alert(obs.consumed3d, slo.SlowBurnWindow)),
+			"budgetPolicy":    string(o.BudgetPolicy(remaining)),
+			"quartersMet":     obs.quartersMet,
+			"slaEligible":     slo.CanCommitSLA(obs.quartersMet),
 		})
 	}
 	writeJSON(w, "OK", map[string]any{
@@ -511,10 +569,10 @@ func (s *ruleStore) handleSLO(w http.ResponseWriter, r *http.Request) {
 			"note":                        "SLA 仅对连续两个季度满足 SLO 的服务开放 (08§10.1)",
 		},
 		"thresholds": map[string]any{
-			"fastBurnWindowMs":   slo.FastBurnWindow.Milliseconds(),
-			"fastBurnThreshold":  slo.FastBurnThreshold,
-			"slowBurnWindowMs":   slo.SlowBurnWindow.Milliseconds(),
-			"slowBurnThreshold":  slo.SlowBurnThreshold,
+			"fastBurnWindowMs":  slo.FastBurnWindow.Milliseconds(),
+			"fastBurnThreshold": slo.FastBurnThreshold,
+			"slowBurnWindowMs":  slo.SlowBurnWindow.Milliseconds(),
+			"slowBurnThreshold": slo.SlowBurnThreshold,
 		},
 	})
 }
@@ -553,21 +611,21 @@ func (s *ruleStore) handleChaosDrills(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		drills = append(drills, map[string]any{
-			"kind":            string(d.plan.Kind),
-			"stage":           string(d.plan.Stage),
-			"blastRadius":     d.plan.BlastRadius,
-			"abortDeadlineMs": d.plan.AbortDeadline.Milliseconds(),
-			"expectedMs":      d.result.Expected.Milliseconds(),
-			"actualMs":        d.result.Actual.Milliseconds(),
+			"kind":             string(d.plan.Kind),
+			"stage":            string(d.plan.Stage),
+			"blastRadius":      d.plan.BlastRadius,
+			"abortDeadlineMs":  d.plan.AbortDeadline.Milliseconds(),
+			"expectedMs":       d.result.Expected.Milliseconds(),
+			"actualMs":         d.result.Actual.Milliseconds(),
 			"needsRemediation": d.result.NeedsRemediation(),
-			"drilledAt":       d.at.Format(time.RFC3339),
+			"drilledAt":        d.at.Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, "OK", map[string]any{
-		"drills":             drills,
+		"drills":              drills,
 		"prodAbortDeadlineMs": chaos.ProdAbortDeadline.Milliseconds(),
-		"mandatoryCount":     len(chaos.MandatoryDrills),
-		"note":               "每季度至少一次全科目演练, 生产演练须具名爆炸半径且 10 分钟内可终止 (08§9.5)",
+		"mandatoryCount":      len(chaos.MandatoryDrills),
+		"note":                "每季度至少一次全科目演练, 生产演练须具名爆炸半径且 10 分钟内可终止 (08§9.5)",
 	})
 }
 
@@ -575,7 +633,7 @@ func (s *ruleStore) handleChaosDrills(w http.ResponseWriter, r *http.Request) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Euler-TraceId")
+		id := httpmw.SanitizeRequestID(r.Header.Get("X-Euler-TraceId"))
 		if id == "" {
 			id = fmt.Sprintf("mon-%d", time.Now().UnixNano())
 		}
@@ -589,17 +647,7 @@ func requestIDMiddleware(h http.Handler) http.Handler {
 // X-Euler-Internal-Token header (defense-in-depth for the gateway-injected
 // X-Euler-Account-Id trust). Unset (dev default) = no check.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("EULER_INTERNAL_TOKEN")
-	if token == "" {
-		return h
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Euler-Internal-Token") != token {
-			writeErr(w, "Common.Forbidden", 403, "invalid internal token")
-			return
-		}
-		h.ServeHTTP(w, r)
-	})
+	return httpmw.InternalToken(h)
 }
 
 func recoverMiddleware(h http.Handler) http.Handler {
@@ -617,6 +665,9 @@ func recoverMiddleware(h http.Handler) http.Handler {
 func main() {
 	addr := flag.String("http", ":9202", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	repo, err := newRuleRepo(context.Background())
@@ -627,7 +678,17 @@ func main() {
 	// Log where the rules live: in-memory rules vanish on restart, and a monitor
 	// that forgets what it should be alerting on is not a recoverable incident.
 	slog.Info("svc-monitor rule repo ready", "persistent", persistentRuleRepo(repo))
-	store := newRuleStoreWith(repo)
+	store := newRuleStoreFor(repo)
+	if store.metrics, err = newMetricsBackendFromEnv(); err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("svc-monitor metrics backend ready", "prometheus", store.metrics.prom != nil)
+	if store.owners, err = newResourceOwnershipFromEnv(); err != nil {
+		slog.Error("startup failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("svc-monitor resource ownership check ready", "orchestrator", store.owners.verifier != nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ready")) })
@@ -658,4 +719,9 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 	}
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

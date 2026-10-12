@@ -11,8 +11,14 @@
 # back to the chart defaults.
 #
 # Adding a new service = adding a directory under apps/; no Application edit.
-# Adding a region/environment = editing the list generator elements below
-# (each (region, env) pair can point at its own destination cluster).
+# Adding a region/environment = editing the list generator elements below.
+#
+# Every (region, env) element deploys to its OWN cluster. All elements share
+# the namespace scheme euler-<svc> and the Helm release name <svc> (so the
+# in-cluster address is always http://<svc>.euler-<svc>.svc:<port>); if two
+# elements pointed at the same cluster their Applications would own the same
+# objects — each one's auto-sync/prune would delete or overwrite the other's,
+# and every Service would select both environments' pods.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -31,23 +37,31 @@ spec:
                 - path: deploy/gitops-manifests/apps/*
           - list:
               elements:
-                # One element per (region, environment). The primary region
-                # cn-north-1 carries dev/staging/prod; the remote standby
-                # cn-east-1 (两地三中心, 00§4.5) carries prod only — it is the
-                # disaster-recovery site, not a dev/staging surface. Replace
-                # the server URLs when those clusters are registered in Argo CD.
+                # One element per (region, environment), each with its own
+                # destination cluster. The primary region cn-north-1 carries
+                # dev/staging/prod; the remote standby cn-east-1 (两地三中心,
+                # 00§4.5) carries prod only — it is the disaster-recovery
+                # site, not a dev/staging surface.
+                #
+                # `cluster` is the Argo CD cluster NAME (destination.name),
+                # one per (region, env): euler-<region>-<env>. These are
+                # placeholders until each cluster is registered with
+                #   argocd cluster add <kube-context> --name euler-<region>-<env>
+                # An unregistered name fails the Application (Unknown
+                # cluster) instead of silently deploying into the Argo CD
+                # host cluster.
                 - env: dev
                   region: cn-north-1
-                  server: https://kubernetes.default.svc
+                  cluster: euler-cn-north-1-dev
                 - env: staging
                   region: cn-north-1
-                  server: https://kubernetes.default.svc   # TODO: staging cluster API URL
+                  cluster: euler-cn-north-1-staging
                 - env: prod
                   region: cn-north-1
-                  server: https://kubernetes.default.svc   # TODO: prod cluster API URL
+                  cluster: euler-cn-north-1-prod
                 - env: prod
                   region: cn-east-1
-                  server: https://kubernetes.default.svc   # TODO: standby prod cluster API URL
+                  cluster: euler-cn-east-1-prod
   template:
     metadata:
       # e.g. euler-svc-iam-cn-north-1-dev
@@ -61,13 +75,20 @@ spec:
         targetRevision: main
         path: '{{path}}'
         helm:
+          # Release name = chart dir name (not Argo's default, the
+          # Application name euler-<svc>-<region>-<env>): the charts name
+          # their Service/Deployment/ConfigMap after .Release.Name, and every
+          # in-cluster caller and gateway route addresses
+          # <svc>.euler-<svc>.svc.
+          releaseName: '{{path.basename}}'
           # Region/env differences live ONLY here (08§4.2 single trunk). A
           # missing override file is fine — the chart defaults then apply as-is.
           ignoreMissingValueFiles: true
           valueFiles:
             - '../../envs/{{region}}/{{env}}/values-overrides/{{path.basename}}.yaml'
       destination:
-        server: '{{server}}'
+        # Per-(region, env) cluster, see the list generator above.
+        name: '{{cluster}}'
         namespace: euler-{{path.basename}}
       syncPolicy:
         automated:
@@ -75,3 +96,9 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+        # Label every platform service namespace so the per-service
+        # NetworkPolicies can admit control-plane traffic by label and deny
+        # everything else (tenant workloads included).
+        managedNamespaceMetadata:
+          labels:
+            euler.platform/plane: control

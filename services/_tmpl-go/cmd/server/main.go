@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/httpmw"
+	"github.com/qifalab/euler-platform/runmode"
 )
 
 func main() {
@@ -35,6 +36,9 @@ func main() {
 		httpAddr = flag.String("http", ":8080", "HTTP listen address")
 	)
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -86,7 +90,7 @@ func main() {
 // itself lives in pkg-go/httpmw so new services start from the same code the
 // running ones use.
 func withMiddleware(h http.Handler) http.Handler {
-	return httpmw.Chain(h)
+	return httpmw.Chain(httpmw.InternalToken(h))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
@@ -106,4 +110,9 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	// Mandatory labels: service, instance, region, env (05§7.2).
 	// FORBIDDEN as labels: account_id, resource_id (high cardinality — 05§7.2).
 	_, _ = w.Write([]byte("# HELP eu_service_dummy 0\n# TYPE eu_service_dummy counter\nsc_service_dummy 0\n"))
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

@@ -91,14 +91,25 @@ func TestIdentityLimitBlocksCrossAccountReclaim(t *testing.T) {
 	}
 }
 
-func TestIdentityLimitIgnoresEmptyIdentityKey(t *testing.T) {
-	// A verified account with no identity key is a caller data bug; the rule
-	// stays silent rather than denying on a field it cannot judge.
+func TestEmptyIdentityKeyFailsClosedWhenRealNameRequired(t *testing.T) {
+	// A verified account with no identity key is a caller data bug. With
+	// real-name required the identity dedup cannot run, so the claim is denied
+	// (fail closed) instead of silently skipping the anti-薅 rule.
 	s := cleanState()
 	s.Account.IdentityKey = ""
 	v := Admit(DefaultPolicy(), s, now)
-	if !v.Allowed {
-		t.Fatalf("empty identity key should not deny: %+v", v)
+	if v.Allowed || v.Rule != RuleRealName {
+		t.Fatalf("empty identity key with real-name required: got %+v, want REALNAME denial", v)
+	}
+	if v.Detail == "" {
+		t.Error("denial must carry an operator-facing detail")
+	}
+
+	// Without the real-name requirement there is no identity to judge.
+	p := DefaultPolicy()
+	p.RequireRealName = false
+	if v := Admit(p, s, now); !v.Allowed {
+		t.Fatalf("empty identity key without real-name requirement denied: %+v", v)
 	}
 }
 

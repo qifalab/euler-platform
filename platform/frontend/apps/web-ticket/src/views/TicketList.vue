@@ -3,11 +3,11 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElButton } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PageHeader } from "@eu/ui";
 import { useTicketMeta } from "@/useTicketMeta";
+import { formatDate } from "@/format";
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
 // 枚举来自 svc-ticket /api/v1/tickets/meta(模块级缓存,与 CreateTicket 共享一次请求)。
 const { priorities, statuses, ready } = useTicketMeta();
 
@@ -21,7 +21,9 @@ interface TicketDTO {
   sla_deadline: string;
   created_at: string;
   updated_at: string;
-  message: string; // first thread message (acts as the title)
+  title?: string;   // human title (svc-ticket stores it separately)
+  contact?: string;
+  message: string; // first thread message (pre-title tickets: acts as the title)
 }
 interface TicketsEnvelope { tickets: TicketDTO[] }
 
@@ -44,11 +46,11 @@ const PRIORITY_CLASS: Record<string, string> = { 紧急: "p-urgent", 普通: "p-
 function toRow(t: TicketDTO): Row {
   return {
     id: t.ticket_id,
-    title: t.message || t.category,
+    title: t.title || t.message || t.category,
     type: t.category,
     priority: priorityLabel.value.get(t.priority) ?? t.priority,
     state: statusLabel.value.get(t.status) ?? t.status,
-    created: t.created_at ? t.created_at.slice(0, 10) : "",
+    created: formatDate(t.created_at),
   };
 }
 

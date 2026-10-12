@@ -26,8 +26,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,6 +37,8 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/errors"
+	"github.com/qifalab/euler-platform/httpmw"
+	"github.com/qifalab/euler-platform/resource"
 )
 
 // accountIDHeader is injected by the APISIX gateway on every request. The BFF
@@ -57,6 +59,9 @@ type consoleStore struct {
 	billingURL      string // e.g. http://localhost:9210 (9206 is svc-metering)
 	orderURL        string // e.g. http://localhost:9204
 	catalogURL      string // e.g. http://localhost:9207
+	// now is the clock the period-based views (bills) are computed from;
+	// tests pin it.
+	now func() time.Time
 }
 
 func newConsoleStore() *consoleStore {
@@ -66,6 +71,7 @@ func newConsoleStore() *consoleStore {
 		billingURL:      envOrDefault("EULER_SVC_BILLING_URL", "http://localhost:9210"),
 		orderURL:        envOrDefault("EULER_SVC_ORDER_URL", "http://localhost:9204"),
 		catalogURL:      envOrDefault("EULER_SVC_CATALOG_URL", "http://localhost:9207"),
+		now:             time.Now,
 	}
 }
 
@@ -143,6 +149,7 @@ type upstreamEnvelope struct {
 //     a 2xx with Code=="OK" is unwrapped to Data; a non-OK Code is surfaced.
 //  2. Bare body (svc-billing success) — the JSON is the payload directly;
 //     errors still use {Code,Message} with a non-2xx status.
+//
 // getJSON detects by whether the body has a top-level "Data" field AND a
 // "Code" field. Bare bodies without those keys are taken as-is.
 func (s *consoleStore) getJSON(ctx context.Context, url string, accountID int64, out any) error {
@@ -151,11 +158,11 @@ func (s *consoleStore) getJSON(ctx context.Context, url string, accountID int64,
 		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "无法构造下游请求")
 	}
 	req.Header.Set(accountIDHeader, strconv.FormatInt(accountID, 10))
+	httpmw.SetInternalToken(req)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable,
-			"下游服务不可达: "+url)
+		return upstreamUnreachable(url, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -166,8 +173,7 @@ func (s *consoleStore) getJSON(ctx context.Context, url string, accountID int64,
 	var env upstreamEnvelope
 	if jsonErr := json.Unmarshal(body, &env); jsonErr == nil && env.Code != "" {
 		if resp.StatusCode >= 500 {
-			return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable,
-				fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
+			return upstreamFailed(url, resp.StatusCode)
 		}
 		if resp.StatusCode != 200 || env.Code != "OK" {
 			status := resp.StatusCode
@@ -186,8 +192,7 @@ func (s *consoleStore) getJSON(ctx context.Context, url string, accountID int64,
 	// Bare-body convention (svc-billing success). A non-2xx here is an error
 	// even though it lacked the envelope Code field.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable,
-			fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
+		return upstreamFailed(url, resp.StatusCode)
 	}
 	if out == nil || len(body) == 0 {
 		return nil
@@ -215,15 +220,16 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	type resourceRow struct {
 		ResourceId string `json:"resourceId"`
+		State      string `json:"state"`
 	}
 	type orderRow struct {
 		State string `json:"state"`
 	}
 
 	var (
-		bal      balanceResp
-		resources []resourceRow
-		orders    []orderRow
+		bal                    balanceResp
+		resources              []resourceRow
+		orders                 []orderRow
 		balErr, resErr, ordErr error
 	)
 
@@ -233,9 +239,14 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 		done[i] = make(chan struct{})
 	}
 	go func() { balErr = s.getJSON(ctx, s.billingURL+"/internal/balance", acct, &bal); close(done[0]) }()
-	go func() { resErr = s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &resources); close(done[1]) }()
+	go func() {
+		resErr = s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &resources)
+		close(done[1])
+	}()
 	go func() { ordErr = s.getJSON(ctx, s.orderURL+"/api/v1/orders", acct, &orders); close(done[2]) }()
-	<-done[0]; <-done[1]; <-done[2]
+	<-done[0]
+	<-done[1]
+	<-done[2]
 
 	for _, e := range []error{balErr, resErr, ordErr} {
 		if e != nil {
@@ -252,6 +263,15 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 			pending++
 		}
 	}
+	// The orchestrator lists every ledger row, released and failed ones
+	// included (they are kept for audit); the overview counts what the
+	// account actually has.
+	var live int
+	for _, r0 := range resources {
+		if countsAsLiveResource(r0.State) {
+			live++
+		}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"AccountId": acct,
@@ -261,16 +281,63 @@ func (s *consoleStore) handleOverview(w http.ResponseWriter, r *http.Request) {
 			"Total":     bal.Total,
 		},
 		"ResourceCount": map[string]any{
-			"Total": len(resources),
+			"Total": live,
 		},
 		"PendingOrders": pending,
 	})
 }
 
+// countsAsLiveResource reports whether a resource row in this state is one the
+// account holds. RELEASED is the lifecycle's terminal state and CREATE_FAILED a
+// rolled-back create (pkg-go/resource): both stay in the ledger for audit and
+// cost traceability but are not resources the customer has.
+func countsAsLiveResource(state string) bool {
+	switch resource.State(strings.ToUpper(strings.TrimSpace(state))) {
+	case resource.StateReleased, resource.StateCreateFailed:
+		return false
+	}
+	return true
+}
+
+// orchResourceAttrs is a resource's customer attributes as svc-orchestrator
+// lists them (name, description, ... — never its system keys). It is always
+// re-emitted as a JSON object: an orchestrator that predates attributes, or a
+// resource without any, yields {} rather than null so the console can index it
+// unconditionally.
+type orchResourceAttrs map[string]any
+
+func (a orchResourceAttrs) object() map[string]any {
+	if a == nil {
+		return map[string]any{}
+	}
+	return a
+}
+
+// name is the resource's customer-given name attribute ("" when unset or not
+// a string).
+func (a orchResourceAttrs) name() string {
+	n, _ := a["name"].(string)
+	return n
+}
+
+// orchestratorResourcesURL is the svc-orchestrator list URL, narrowed to one
+// product code when the console asked for one (?product=, applied by the
+// orchestrator itself, after its account scoping).
+func (s *consoleStore) orchestratorResourcesURL(r *http.Request) string {
+	u := s.orchestratorURL + "/api/v1/orchestrator/resources"
+	if product := strings.TrimSpace(r.URL.Query().Get("product")); product != "" {
+		u += "?product=" + url.QueryEscape(product)
+	}
+	return u
+}
+
 // handleResources returns the account's resource list, fanned out to
 // svc-orchestrator (03§4 console 资源列表). Orchestrator returns camelCase;
 // the BFF re-maps to the PascalCase contract the frontend already consumes
-// (sdk.ts ResourceItem), so the frontend does not change.
+// (sdk.ts ResourceItem), so the frontend does not change. Zone and Attributes
+// (the customer attributes object, e.g. Attributes.name) ride along so the
+// shared console list can show names; ?product= is forwarded to narrow the
+// list to one product.
 func (s *consoleStore) handleResources(w http.ResponseWriter, r *http.Request) {
 	acct, ok := accountIDFrom(w, r)
 	if !ok {
@@ -279,18 +346,20 @@ func (s *consoleStore) handleResources(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	type orchResource struct {
-		ResourceId   string `json:"resourceId"`
-		ProductCode  string `json:"productCode"`
-		Region       string `json:"region"`
-		ChargeType   string `json:"chargeType"`
-		State        string `json:"state"`
-		SpecCode     string `json:"specCode"`
-		BillingStart string `json:"billingStart"`
-		CreatedAt    string `json:"createdAt"`
-		ExpiredAt    string `json:"expiredAt"`
+		ResourceId   string            `json:"resourceId"`
+		ProductCode  string            `json:"productCode"`
+		Region       string            `json:"region"`
+		Zone         string            `json:"zone"`
+		ChargeType   string            `json:"chargeType"`
+		State        string            `json:"state"`
+		SpecCode     string            `json:"specCode"`
+		BillingStart string            `json:"billingStart"`
+		CreatedAt    string            `json:"createdAt"`
+		ExpiredAt    string            `json:"expiredAt"`
+		Attributes   orchResourceAttrs `json:"attributes"`
 	}
 	var orch []orchResource
-	if err := s.getJSON(ctx, s.orchestratorURL+"/api/v1/orchestrator/resources", acct, &orch); err != nil {
+	if err := s.getJSON(ctx, s.orchestratorResourcesURL(r), acct, &orch); err != nil {
 		writeError(w, e2ptr(err))
 		return
 	}
@@ -301,12 +370,14 @@ func (s *consoleStore) handleResources(w http.ResponseWriter, r *http.Request) {
 			"ResourceId":   o.ResourceId,
 			"ProductCode":  o.ProductCode,
 			"Region":       o.Region,
+			"Zone":         o.Zone,
 			"ChargeType":   o.ChargeType,
 			"State":        o.State,
 			"SpecCode":     o.SpecCode,
 			"BillingStart": o.BillingStart,
 			"ExpiredAt":    o.ExpiredAt,
 			"CreatedAt":    o.CreatedAt,
+			"Attributes":   o.Attributes.object(),
 		})
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -324,12 +395,7 @@ func (s *consoleStore) handleBills(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	now := time.Now().UTC()
-	periods := make([]string, 0, 6)
-	for i := 0; i < 6; i++ {
-		t := now.AddDate(0, -i, 0)
-		periods = append(periods, t.Format("2006-01"))
-	}
+	periods := billPeriods(s.now(), 6)
 
 	type billRow struct {
 		BillPeriod        string `json:"BillPeriod"`
@@ -398,7 +464,34 @@ func (s *consoleStore) handleBills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bills)
 }
 
+// billPeriods returns the n billing periods ("2006-01") ending with now's
+// month, newest first. It steps from the first of the month: AddDate on the
+// 29th–31st normalises through short months (Oct 31 − 1 month = "Sep 31" =
+// Oct 1), which repeated one period and skipped another.
+func billPeriods(now time.Time, n int) []string {
+	now = now.UTC()
+	first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	periods := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		periods = append(periods, first.AddDate(0, -i, 0).Format("2006-01"))
+	}
+	return periods
+}
+
 // --- error helpers ------------------------------------------------------------
+
+// upstreamUnreachable / upstreamFailed log the internal URL and status for
+// operators but return a generic message: internal service addresses used to
+// be echoed to the browser in the error body.
+func upstreamUnreachable(url string, err error) *errorsx.Error {
+	slog.Warn("downstream unreachable", "url", url, "err", err)
+	return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "下游服务暂不可用,请稍后重试")
+}
+
+func upstreamFailed(url string, status int) *errorsx.Error {
+	slog.Warn("downstream error", "url", url, "status", status)
+	return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "下游服务异常,请稍后重试")
+}
 
 // postJSON forwards a POST to a downstream service, streaming the request body
 // through and unwrapping the response with the same envelope/bare-body logic as
@@ -411,10 +504,11 @@ func (s *consoleStore) postJSON(ctx context.Context, url string, accountID int64
 		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "无法构造下游请求")
 	}
 	req.Header.Set(accountIDHeader, strconv.FormatInt(accountID, 10))
+	httpmw.SetInternalToken(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, "下游服务不可达: "+url)
+		return upstreamUnreachable(url, err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
@@ -422,7 +516,7 @@ func (s *consoleStore) postJSON(ctx context.Context, url string, accountID int64
 	var env upstreamEnvelope
 	if jsonErr := json.Unmarshal(respBody, &env); jsonErr == nil && env.Code != "" {
 		if resp.StatusCode >= 500 {
-			return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
+			return upstreamFailed(url, resp.StatusCode)
 		}
 		if resp.StatusCode != 200 || env.Code != "OK" {
 			status := resp.StatusCode
@@ -437,7 +531,7 @@ func (s *consoleStore) postJSON(ctx context.Context, url string, accountID int64
 		return json.Unmarshal(env.Data, out)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errorsx.New("Common.UpstreamUnavailable", errorsx.StatusUnavailable, fmt.Sprintf("下游响应异常 (HTTP %d): %s", resp.StatusCode, url))
+		return upstreamFailed(url, resp.StatusCode)
 	}
 	if out == nil || len(respBody) == 0 {
 		return nil
@@ -612,7 +706,8 @@ func (s *consoleStore) handleCostAnalysis(w http.ResponseWriter, r *http.Request
 // backend (02§7.1). It fans out concurrently to the account's resources
 // (svc-orchestrator) and the product catalogue (svc-catalog) and server-side
 // filters both by the query against the fields a user can see (resource id /
-// spec / state; product code / name / category). Catalogue search is
+// name attribute / spec / state / product; product code / name / category).
+// Resource hits carry zone and the attributes object as well. Catalogue search is
 // anonymous-grade data, but the resource leg is account-scoped, so the whole
 // endpoint stays behind the account-id gate.
 func (s *consoleStore) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -624,11 +719,13 @@ func (s *consoleStore) handleSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	type orchResource struct {
-		ResourceId  string `json:"resourceId"`
-		ProductCode string `json:"productCode"`
-		Region      string `json:"region"`
-		State       string `json:"state"`
-		SpecCode    string `json:"specCode"`
+		ResourceId  string            `json:"resourceId"`
+		ProductCode string            `json:"productCode"`
+		Region      string            `json:"region"`
+		Zone        string            `json:"zone"`
+		State       string            `json:"state"`
+		SpecCode    string            `json:"specCode"`
+		Attributes  orchResourceAttrs `json:"attributes"`
 	}
 	type catalogProduct struct {
 		ProductCode string `json:"productCode"`
@@ -676,10 +773,11 @@ func (s *consoleStore) handleSearch(w http.ResponseWriter, r *http.Request) {
 	resHits := make([]map[string]any, 0)
 	if resErr == nil {
 		for _, r0 := range resources {
-			if matches(r0.ResourceId, r0.SpecCode, r0.State, r0.ProductCode) {
+			if matches(r0.ResourceId, r0.Attributes.name(), r0.SpecCode, r0.State, r0.ProductCode) {
 				resHits = append(resHits, map[string]any{
 					"resourceId": r0.ResourceId, "productCode": r0.ProductCode,
-					"region": r0.Region, "state": r0.State, "specCode": r0.SpecCode,
+					"region": r0.Region, "zone": r0.Zone, "state": r0.State, "specCode": r0.SpecCode,
+					"attributes": r0.Attributes.object(),
 				})
 			}
 		}
@@ -702,14 +800,18 @@ func (s *consoleStore) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// e2ptr narrows an error returned by getJSON back to the *errorsx.Error it
-// always produces. getJSON only ever returns *errorsx.Error, so this is safe.
+// e2ptr narrows an error returned by getJSON/postJSON back to an
+// *errorsx.Error. Most are already one; the rest are local failures — chiefly
+// decoding a downstream body into the BFF's shapes — whose raw text
+// ("json: cannot unmarshal ...") describes internal payloads, so it is logged
+// and the client gets a generic message.
 func e2ptr(err error) *errorsx.Error {
 	if err == nil {
-		return errorsx.New("Common.InternalError", errorsx.StatusInternalError, "")
+		return errorsx.New("Common.InternalError", errorsx.StatusInternalError, "internal error")
 	}
 	if e, ok := err.(*errorsx.Error); ok {
 		return e
 	}
-	return errorsx.New("Common.InternalError", errorsx.StatusInternalError, err.Error())
+	slog.Error("console-bff internal error", "err", err)
+	return errorsx.New("Common.InternalError", errorsx.StatusInternalError, "internal error")
 }

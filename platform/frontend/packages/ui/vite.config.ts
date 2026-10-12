@@ -9,6 +9,9 @@ export default defineConfig({
       entry: resolve(__dirname, "src/index.ts"),
       formats: ["es", "cjs"],
       fileName: (format) => (format === "es" ? "index.js" : "index.cjs"),
+      // Vite 6 names the extracted stylesheet after the package (ui.css);
+      // package.json exports it as ./dist/style.css, so pin the name.
+      cssFileName: "style",
     },
     rollupOptions: {
       // Shared layer — Vue & Element Plus are externals, injected by the base

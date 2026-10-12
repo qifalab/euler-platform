@@ -17,7 +17,7 @@ func newSQLTestActionRepo(t *testing.T) *sqlActionRepo {
 func testAction(product, name string) *Action {
 	return &Action{
 		ID: actionID(product, name), ProductCode: product, ActionName: name,
-		Version: "2026-08-01",
+		Version:     "2026-08-01",
 		ParamSchema: json.RawMessage(`{"type":"object","required":["InstanceId"],"properties":{"InstanceId":{"type":"string"}}}`),
 		ErrorCodes:  []string{product + ".NotFound", product + ".QuotaExceeded"},
 		UpdatedBy:   "100123",

@@ -32,6 +32,18 @@ local ngx    = ngx
 
 local plugin_name = "eu-audit"
 
+-- SCRAM password for conf.sasl (see the schema). Read once per worker, like
+-- EULER_INTERNAL_TOKEN in eu-auth. A trailing newline (a Secret created from
+-- a file) is dropped, as the kafka-scram-users Job does when it registers the
+-- same value.
+local sasl_password = os.getenv("EULER_KAFKA_SASL_PASSWORD")
+if sasl_password then
+    sasl_password = string.gsub(sasl_password, "[\r\n]+$", "")
+    if sasl_password == "" then
+        sasl_password = nil
+    end
+end
+
 local schema = {
     type = "object",
     properties = {
@@ -51,6 +63,31 @@ local schema = {
                 required = { "host", "port" },
             },
             minItems = 1,
+        },
+        -- Transport security. The brokers' client listener (:9092) is SASL_SSL
+        -- (platform/middleware/kafka-kraft.yaml): TLS whose broker certificate
+        -- is verified, name included, against the platform CA — the gateway's
+        -- lua_ssl_trusted_certificate, set by apisix.ssl.ssl_trusted_certificate
+        -- in config.yaml — plus a SCRAM login. Both TLS switches default ON;
+        -- turning one off has to be explicit.
+        ssl = { type = "boolean", default = true },
+        ssl_verify = { type = "boolean", default = true },
+        -- SCRAM identity. Only the user name is configured here: route files
+        -- live in Git and the control API dumps plugin confs, so the password
+        -- comes from the EULER_KAFKA_SASL_PASSWORD env var (Secret
+        -- kafka-apisix-audit, exposed to the workers by nginx_config.envs).
+        sasl = {
+            type = "object",
+            properties = {
+                mechanism = {
+                    type = "string",
+                    enum = { "SCRAM-SHA-512", "SCRAM-SHA-256" },
+                    default = "SCRAM-SHA-512",
+                },
+                user = { type = "string", minLength = 1 },
+            },
+            required = { "user" },
+            additionalProperties = false,
         },
         -- Request parameters are recorded for the audit trail, but secrets must
         -- never land in the log. These parameter names are redacted.
@@ -107,6 +144,37 @@ local function mask_ak(ak)
     return "EU****" .. string.sub(ak, -2)
 end
 
+-- producer_args builds lua-resty-kafka's broker list and client config. The
+-- broker entries are fresh tables: conf is the cached route config (visible
+-- through the control API), so the password never lands in it. With SASL
+-- configured but no password available it returns nil and a reason: emitting
+-- fails closed instead of attempting a session the broker must refuse.
+local function producer_args(conf)
+    local sasl_config
+    if conf.sasl then
+        if not sasl_password then
+            return nil, nil, "sasl is configured but EULER_KAFKA_SASL_PASSWORD is not set"
+        end
+        sasl_config = {
+            mechanism = conf.sasl.mechanism or "SCRAM-SHA-512",
+            user      = conf.sasl.user,
+            password  = sasl_password,
+        }
+    end
+    local brokers = {}
+    for i, b in ipairs(conf.brokers) do
+        brokers[i] = { host = b.host, port = b.port, sasl_config = sasl_config }
+    end
+    -- `~= false`: secure unless explicitly disabled, even for a conf that
+    -- reached us without the schema defaults filled in.
+    local ssl = conf.ssl ~= false
+    return brokers, {
+        producer_type = "async",
+        ssl           = ssl,
+        ssl_verify    = ssl and conf.ssl_verify ~= false,
+    }
+end
+
 function _M.log(conf, ctx)
     -- Build the audit event per the unified schema in 07§6.1.
     local account_id = ctx.eu_account_id
@@ -150,9 +218,14 @@ function _M.log(conf, ctx)
         -- Partition by account_id so a tenant's events preserve ordering
         -- (04§5.4). Emission is fire-and-forget: an audit pipeline problem
         -- must never surface as a business error.
+        local brokers, producer_conf, conf_err = producer_args(conf)
+        if not brokers then
+            core.log.error("eu-audit: kafka emit skipped: ", conf_err)
+            return
+        end
         local ok, kafka_err = pcall(function()
             local producer = require("resty.kafka.producer")
-            local bp = producer:new(conf.brokers, { producer_type = "async" })
+            local bp = producer:new(brokers, producer_conf)
             return bp:send(conf.topic, tostring(account_id or "anonymous"), payload)
         end)
         if not ok then

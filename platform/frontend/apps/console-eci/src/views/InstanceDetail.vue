@@ -10,8 +10,9 @@
  */
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElTag, ElEmpty, ElMessage } from "element-plus";
+import { formatTime, InstanceActions } from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 interface ResourceDetail {
   resourceId: string;
@@ -28,18 +29,18 @@ interface ResourceDetail {
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
-const sdk = createSDK({ baseURL: "" });
 
 const inst = ref<ResourceDetail | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const activeTab = ref("monitor");
 
-onMounted(async () => {
-  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+/** (Re)load the resource record — on mount and after every lifecycle action. */
+async function fetchDetail() {
   try {
     const res = await sdk.get<ResourceDetail>(`/api/v1/orchestrator/resources/${id.value}`);
     inst.value = res.data;
+    error.value = null;
   } catch (e) {
     // Branch on the structured error the SDK attaches (status/code): matching
     // the message TEXT missed 404s whose wording differs from those literals.
@@ -49,15 +50,18 @@ onMounted(async () => {
       ElMessage.error("实例不存在");
       router.push("/instances");
     }
-  } finally {
-    loading.value = false;
   }
+}
+
+onMounted(async () => {
+  if (!id.value) { error.value = "缺少实例 ID"; loading.value = false; return; }
+  await fetchDetail();
+  loading.value = false;
 });
 
-function fmt(s: string): string {
-  if (!s) return "—";
-  return s.replace("T", " ").replace(/\+.*$/, "");
-}
+// RFC3339 → viewer-local time; "—" for unset ("" / zero-year) values. The old
+// textual strip showed UTC wall-clock (with a stray "Z") as if it were local.
+const fmt = formatTime;
 const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按量(按秒)" : "—");
 </script>
 
@@ -71,9 +75,14 @@ const chargeLabel = computed(() => inst.value?.chargeType === "POSTPAID" ? "按�
         <p class="detail-id">ID:{{ id }} · {{ inst?.region ?? "—" }}</p>
       </div>
       <div class="detail-actions">
-        <ElButton size="small">停止</ElButton>
-        <ElButton size="small">重启</ElButton>
-        <ElButton size="small" type="danger">释放</ElButton>
+        <InstanceActions
+          :sdk="sdk"
+          :resource-id="id"
+          :instance="inst"
+          :actions="['stop', 'start', 'restart', 'release']"
+          @changed="fetchDetail"
+          @released="router.push('/instances')"
+        />
       </div>
     </header>
 

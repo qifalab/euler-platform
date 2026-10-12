@@ -22,6 +22,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,12 +34,15 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/qifalab/euler-platform/alertcenter"
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/notify"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/storage"
 )
 
@@ -45,12 +51,12 @@ const accountIDHeader = "X-Euler-Account-Id"
 // notification is one emitted customer notification (the MVP record standing in
 // for the cloud.notify.message fan-out to svc-notify).
 type notification struct {
-	AlertID   string                  `json:"alertId"`
-	TenantID  int64                   `json:"tenantId"`
-	Product   string                  `json:"product"`
-	Severity  alertcenter.Severity    `json:"severity"`
-	Channels  []string                `json:"channels"`
-	EmittedAt time.Time               `json:"emittedAt"`
+	AlertID   string               `json:"alertId"`
+	TenantID  int64                `json:"tenantId"`
+	Product   string               `json:"product"`
+	Severity  alertcenter.Severity `json:"severity"`
+	Channels  []string             `json:"channels"`
+	EmittedAt time.Time            `json:"emittedAt"`
 }
 
 // store buffers ingested alerts and retains emitted notifications. When a
@@ -84,12 +90,12 @@ func (s *store) ingest(a alertcenter.Alert) {
 }
 
 // flushForTenant converges the CALLER's buffered alerts and emits their
-// notifications. The buffer is shared by every tenant the process serves, so
+// notifications, returning them and how many groups the rate limit deferred. The buffer is shared by every tenant the process serves, so
 // the flush must both converge only the caller's alerts and leave everyone
 // else's in place — the pre-fix global flush returned other tenants'
 // notifications in the response and let any tenant consume alerts it does not
 // own.
-func (s *store) flushForTenant(tenantID int64) []notification {
+func (s *store) flushForTenant(tenantID int64) ([]notification, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -102,14 +108,20 @@ func (s *store) flushForTenant(tenantID int64) []notification {
 		}
 		others = append(others, a)
 	}
-	s.buffer = others
-	// Four-stage convergence over the caller's batch.
+	// Four-stage convergence over the caller's batch. Converge returns the
+	// groups in priority order (most severe first), so the rate limit below
+	// cuts the least important groups, never a CRITICAL behind INFO noise.
 	converged := alertcenter.Converge(mine, s.silence)
 
 	var emitted []notification
 	for _, a := range converged {
 		if !s.limiter.Allow(a.TenantID, now) {
-			continue // 10 条/分钟 rate limit (03§4.4.6), per tenant
+			// 10 条/分钟 rate limit (03§4.4.6), per tenant. The group is
+			// deferred, not dropped: it goes back into the buffer and is
+			// re-converged (with anything newer for the same group) on a
+			// later flush, once the window has room.
+			others = append(others, a)
+			continue
 		}
 		n := notification{
 			AlertID:   a.AlertID,
@@ -123,10 +135,11 @@ func (s *store) flushForTenant(tenantID int64) []notification {
 		emitted = append(emitted, n)
 		s.persistNotification(n)
 	}
+	s.buffer = others
 	sort.Slice(s.notifications, func(i, j int) bool {
 		return s.notifications[i].EmittedAt.After(s.notifications[j].EmittedAt)
 	})
-	return emitted
+	return emitted, len(converged) - len(emitted)
 }
 
 func (s *store) list() []notification {
@@ -148,9 +161,11 @@ func (s *store) persistNotification(n notification) {
 	}
 	// The notification table's identity is the business key pair (account,
 	// class, biz_key); the alert id is the biz key, so a re-emitted alert
-	// upserts rather than duplicating the record.
+	// upserts rather than duplicating the record. notification_id is the
+	// table's GLOBAL primary key, so it is scoped by tenant: two tenants that
+	// both send alertId "cpu-high" must not overwrite each other's record.
 	nn := notify.Notification{
-		NotificationID: "alert-" + n.AlertID,
+		NotificationID: alertNotificationID(n.TenantID, n.AlertID),
 		AccountID:      n.TenantID,
 		Class:          notify.ClassAlert,
 		TemplateID:     "alert-center-" + string(n.Severity),
@@ -171,13 +186,41 @@ func (s *store) persistNotification(n notification) {
 	}
 }
 
+// maxIDLen is the width of notification.notification_id and biz_key.
+const maxIDLen = 64
+
+// alertNotificationID derives the durable notification id for a tenant's
+// alert: alert-<tenant>-<alertId>, deterministic so a re-emission upserts.
+// When that would not fit the column, a tenant-scoped hash keeps it
+// deterministic and unique instead of truncating into a collision.
+func alertNotificationID(tenantID int64, alertID string) string {
+	id := fmt.Sprintf("alert-%d-%s", tenantID, alertID)
+	if len(id) <= maxIDLen {
+		return id
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s", tenantID, alertID)))
+	return "alert-" + hex.EncodeToString(sum[:])[:40]
+}
+
+// newAlertID generates an id for an alert the producer sent without one. An
+// empty id would make every such alert share notification "alert-".
+func newAlertID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand does not fail on supported platforms; a time-based id
+		// is still unique enough for one process.
+		return fmt.Sprintf("alc-%d", time.Now().UnixNano())
+	}
+	return "alc-" + hex.EncodeToString(b[:])
+}
+
 // --- handlers ------------------------------------------------------------------
 
 type ingestReq struct {
 	AlertID  string            `json:"alertId"`
 	Product  string            `json:"product"`
 	Metric   string            `json:"metric"`
-	Severity alertcenter.Severity `json:"severity"`
+	Severity string            `json:"severity"`
 	Labels   map[string]string `json:"labels"`
 }
 
@@ -196,19 +239,35 @@ func (s *store) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "AlertCenter.InvalidAlert", "product and metric are required")
 		return
 	}
-	if req.Severity == "" {
-		req.Severity = alertcenter.SeverityWarning
+	if len(req.AlertID) > maxIDLen {
+		writeErr(w, 400, "AlertCenter.InvalidAlert", "alertId must be at most 64 characters")
+		return
+	}
+	if req.AlertID == "" {
+		req.AlertID = newAlertID()
+	}
+	// Severity drives inhibition and notification priority by rank; the
+	// console sends lowercase, and an unrecognised label ranks 0. Normalize,
+	// and reject what cannot be ranked.
+	severity := alertcenter.SeverityWarning
+	if strings.TrimSpace(req.Severity) != "" {
+		sev, ok := alertcenter.ParseSeverity(req.Severity)
+		if !ok {
+			writeErr(w, 400, "AlertCenter.InvalidSeverity", "severity must be CRITICAL, WARNING or INFO")
+			return
+		}
+		severity = sev
 	}
 	s.ingest(alertcenter.Alert{
 		AlertID:    req.AlertID,
 		TenantID:   tenantID,
 		Product:    req.Product,
 		Metric:     req.Metric,
-		Severity:   req.Severity,
+		Severity:   severity,
 		Labels:     req.Labels,
 		OccurredAt: time.Now(),
 	})
-	writeOK(w, map[string]any{"buffered": true})
+	writeOK(w, map[string]any{"buffered": true, "alertId": req.AlertID})
 }
 
 func (s *store) handleFlush(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +275,8 @@ func (s *store) handleFlush(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeOK(w, map[string]any{"notifications": s.flushForTenant(tenantID)})
+	emitted, deferred := s.flushForTenant(tenantID)
+	writeOK(w, map[string]any{"notifications": emitted, "deferred": deferred})
 }
 
 func (s *store) handleList(w http.ResponseWriter, r *http.Request) {
@@ -270,12 +330,15 @@ func newMux(s *store) http.Handler {
 	mux.HandleFunc("POST /api/v1/alertcenter/ingest", s.handleIngest)
 	mux.HandleFunc("POST /api/v1/alertcenter/flush", s.handleFlush)
 	mux.HandleFunc("GET /api/v1/alertcenter/alerts", s.handleList)
-	return mux
+	return httpmw.InternalToken(mux)
 }
 
 func main() {
 	addr := flag.String("http", ":9213", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	s := newStore()
@@ -315,4 +378,9 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 	}
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

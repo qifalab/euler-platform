@@ -23,8 +23,10 @@ async function submit() {
       openapiUrl: form.value.openapiUrl,
       partnerRateBps: Math.round(rate * 100), // % → bps (10000 bps = 100%)
     });
-    ElMessage.success("已提交,等待平台审核");
-    router.push("/review");
+    // The review desk is operator-only (403 for partners): return to the
+    // catalogue, where the listing appears once the platform approves it.
+    ElMessage.success("已提交,等待平台审核;审核通过后将出现在商品目录");
+    router.push("/storefront");
   } catch (e) {
     ElMessage.error(`提交失败:${(e as Error).message}`);
   } finally {

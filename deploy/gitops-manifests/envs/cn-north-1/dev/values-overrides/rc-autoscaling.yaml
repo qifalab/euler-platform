@@ -3,3 +3,7 @@ image:
   tag: latest
   pullPolicy: Always   # mutable dev tag => always re-pull
 replicas: 1
+
+# Dev cluster: demo data is still opt-in (EULER_DEV_SEED=1).
+extraEnv:
+  EULER_ENV: dev

@@ -3,11 +3,12 @@
  * Realname authentication page (01§4.5 compliance, 02§5).
  * web-account collects KYC material before a tenant may open resources:
  * two modes — 个人 (姓名/身份证号) and 企业 (企业名称/统一社会信用代码/法人).
- * On submit the form is validated locally (mock backend); a success toast
- * is shown and the user is routed back to /profile.
+ * On submit the form is validated locally and verified by svc-iam; on success
+ * the user continues to the validated `?redirect` target (the console sends
+ * unverified users here with one) or, without one, to /profile.
  */
 import { onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import {
   ElForm,
@@ -21,6 +22,8 @@ import {
   type FormRules,
 } from "element-plus";
 import { useAccountAuth } from "../stores/auth";
+import { resolveSafeRedirect } from "../safeRedirect";
+import type { ApiError } from "../http";
 
 type AuthMode = "personal" | "enterprise";
 
@@ -35,8 +38,16 @@ interface EnterpriseForm {
   legalPerson: string;
 }
 
+const route = useRoute();
 const router = useRouter();
 const auth = useAccountAuth();
+
+/** Continue where the user came from (same-site allowlist), else /profile. */
+function continueAfterVerification() {
+  const target = resolveSafeRedirect(route.query.redirect);
+  if (target) window.location.href = target;
+  else router.push("/profile");
+}
 
 // Real-name status from the backend (svc-iam /api/realname/status).
 const status = ref<"unverified" | "pending" | "verified">("unverified");
@@ -117,8 +128,15 @@ async function onSubmit() {
     const res = await auth.verifyRealname(payload);
     status.value = res.status >= 1 ? "verified" : "pending";
     ElMessage.success("实名认证已通过,可开通资源");
-    router.push("/profile");
+    continueAfterVerification();
   } catch (e) {
+    if ((e as ApiError).code === "Auth.RealNameAlreadyVerified") {
+      // Verified meanwhile (another tab / the status check lagged): carry on.
+      status.value = "verified";
+      ElMessage.info((e as Error).message || "已完成实名认证");
+      continueAfterVerification();
+      return;
+    }
     ElMessage.error((e as Error).message || "实名认证提交失败");
   } finally {
     submitting.value = false;

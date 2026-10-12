@@ -25,7 +25,6 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -41,13 +40,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qifalab/euler-platform/httpmw"
 	"github.com/qifalab/euler-platform/pricing"
+	"github.com/qifalab/euler-platform/runmode"
 	"github.com/qifalab/euler-platform/settlement"
 )
 
 const accountIDHeader = "X-Euler-Account-Id"
-
-const internalTokenHeader = "X-Euler-Internal-Token"
 
 // devOperatorAccount is the seeded dev account that acts as the platform
 // operator when no allowlist is configured. Tests and the local console use
@@ -71,7 +70,11 @@ func parseOperators(raw string) map[int64]bool {
 			out[id] = true
 		}
 	}
-	if len(out) == 0 {
+	// No configured operators means NOBODY can review or settle. The seeded
+	// dev account (100123, whose demo password is public) is an operator only
+	// when demo data was explicitly requested outside production — it used to
+	// be the silent default, including in production.
+	if len(out) == 0 && runmode.DevSeedEnabled() {
 		out[devOperatorAccount] = true
 	}
 	return out
@@ -95,17 +98,7 @@ func requireOperator(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // service-to-service calls (EULER_INTERNAL_TOKEN). Unset (dev default) = off;
 // production turns it on in addition to the operator allowlist.
 func internalTokenMiddleware(h http.Handler) http.Handler {
-	token := os.Getenv("EULER_INTERNAL_TOKEN")
-	if token == "" {
-		return h
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get(internalTokenHeader)), []byte(token)) != 1 {
-			writeErr(w, http.StatusForbidden, "Common.Forbidden", "invalid internal token")
-			return
-		}
-		h.ServeHTTP(w, r)
-	})
+	return httpmw.InternalToken(h)
 }
 
 // --- Marketplace domain -----------------------------------------------------
@@ -136,28 +129,28 @@ const (
 
 // Listing is one marketplace product listing.
 type Listing struct {
-	ListingID     int64           `json:"listingId"`
-	PartnerID     int64           `json:"partnerId"`
-	Name          string          `json:"name"`
-	Category      ListingCategory `json:"category"`
-	OpenAPIURL    string          `json:"openapiUrl"`
-	Status        ListingStatus   `json:"status"`
-	PartnerRateBps int64          `json:"partnerRateBps"`
-	CreatedAt     time.Time       `json:"createdAt"`
-	UpdatedAt     time.Time       `json:"updatedAt"`
+	ListingID      int64           `json:"listingId"`
+	PartnerID      int64           `json:"partnerId"`
+	Name           string          `json:"name"`
+	Category       ListingCategory `json:"category"`
+	OpenAPIURL     string          `json:"openapiUrl"`
+	Status         ListingStatus   `json:"status"`
+	PartnerRateBps int64           `json:"partnerRateBps"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
 // SettlementRecord is one settled order split (immutable, 对账用).
 type SettlementRecord struct {
-	SettlementID   int64           `json:"settlementId"`
-	OrderID        string          `json:"orderId"`
-	ListingID      int64           `json:"listingId"`
-	PartnerID      int64           `json:"partnerId"`
-	Gross          pricing.Amount  `json:"gross"`          // micro-units
-	PartnerRateBps int64           `json:"partnerRateBps"`
-	Partner        pricing.Amount  `json:"partner"`        // micro-units
-	Platform       pricing.Amount  `json:"platform"`       // micro-units
-	SettledAt      time.Time       `json:"settledAt"`
+	SettlementID   int64          `json:"settlementId"`
+	OrderID        string         `json:"orderId"`
+	ListingID      int64          `json:"listingId"`
+	PartnerID      int64          `json:"partnerId"`
+	Gross          pricing.Amount `json:"gross"` // micro-units
+	PartnerRateBps int64          `json:"partnerRateBps"`
+	Partner        pricing.Amount `json:"partner"`  // micro-units
+	Platform       pricing.Amount `json:"platform"` // micro-units
+	SettledAt      time.Time      `json:"settledAt"`
 }
 
 // --- Store ------------------------------------------------------------------
@@ -176,6 +169,14 @@ type Store interface {
 	GetSettlementByOrder(orderID string) (*SettlementRecord, bool, error)
 }
 
+// errAlreadySettled is the store's "this order already has a settlement" verdict
+// (the in-memory map key / uk_order). handleSettle answers it with the existing
+// record: a concurrent duplicate settle is a replay, not a failure.
+var errAlreadySettled = errors.New("marketplace: order already settled")
+
+// memoryStore hands out COPIES of its records: handlers read (and JSON-encode)
+// what the store returns after the lock is released, while UpdateListingStatus
+// writes under it — sharing the pointers was a data race.
 type memoryStore struct {
 	mu          sync.RWMutex
 	listings    map[int64]*Listing
@@ -204,7 +205,8 @@ func (s *memoryStore) CreateListing(l *Listing) error {
 	if _, exists := s.listings[l.ListingID]; exists {
 		return fmt.Errorf("marketplace: duplicate listing id %d", l.ListingID)
 	}
-	s.listings[l.ListingID] = l
+	cp := *l
+	s.listings[l.ListingID] = &cp
 	return nil
 }
 
@@ -215,7 +217,8 @@ func (s *memoryStore) GetListing(id int64) (*Listing, error) {
 	if !ok {
 		return nil, fmt.Errorf("marketplace: listing %d not found", id)
 	}
-	return l, nil
+	cp := *l
+	return &cp, nil
 }
 
 func (s *memoryStore) ListApproved(category ListingCategory) ([]*Listing, error) {
@@ -233,7 +236,8 @@ func (s *memoryStore) ListByStatus(status ListingStatus, category ListingCategor
 		if category != "" && l.Category != category {
 			continue
 		}
-		out = append(out, l)
+		cp := *l
+		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ListingID < out[j].ListingID })
 	return out, nil
@@ -251,19 +255,21 @@ func (s *memoryStore) UpdateListingStatus(id int64, from, to ListingStatus) (*Li
 	}
 	l.Status = to
 	l.UpdatedAt = time.Now()
-	return l, nil
+	cp := *l
+	return &cp, nil
 }
 
 func (s *memoryStore) CreateSettlement(r *SettlementRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.settlements[r.OrderID]; exists {
-		return fmt.Errorf("marketplace: order %s already settled", r.OrderID)
+		return fmt.Errorf("%w: %s", errAlreadySettled, r.OrderID)
 	}
 	if r.SettlementID == 0 {
 		r.SettlementID = s.nextID()
 	}
-	s.settlements[r.OrderID] = r
+	cp := *r
+	s.settlements[r.OrderID] = &cp
 	return nil
 }
 
@@ -271,7 +277,11 @@ func (s *memoryStore) GetSettlementByOrder(orderID string) (*SettlementRecord, b
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.settlements[orderID]
-	return r, ok, nil
+	if !ok {
+		return nil, false, nil
+	}
+	cp := *r
+	return &cp, true, nil
 }
 
 // --- Application + handlers --------------------------------------------------
@@ -299,10 +309,10 @@ func accountFrom(w http.ResponseWriter, r *http.Request) (int64, bool) {
 
 // publishReq is POST /api/v1/marketplace/listings.
 type publishReq struct {
-	Name          string          `json:"name"`
-	Category      ListingCategory `json:"category"`
-	OpenAPIURL    string          `json:"openapiUrl"`
-	PartnerRateBps int64          `json:"partnerRateBps"`
+	Name           string          `json:"name"`
+	Category       ListingCategory `json:"category"`
+	OpenAPIURL     string          `json:"openapiUrl"`
+	PartnerRateBps int64           `json:"partnerRateBps"`
 }
 
 func (a *app) handlePublish(w http.ResponseWriter, r *http.Request) {
@@ -476,7 +486,20 @@ func (a *app) handleSettle(w http.ResponseWriter, r *http.Request) {
 		SettledAt:      a.now(),
 	}
 	if err := a.store.CreateSettlement(rec); err != nil {
-		writeErr(w, 409, "Marketplace.AlreadySettled", err.Error())
+		if !errors.Is(err, errAlreadySettled) {
+			slog.Error("settlement create failed", "orderId", req.OrderID, "err", err)
+			writeErr(w, 500, "Marketplace.SettlementFailed", "settlement create failed")
+			return
+		}
+		// A concurrent settle of the same order won between the lookup above
+		// and this insert. That is a replay, and replays are idempotent: answer
+		// with the record that won, exactly as the pre-check would have.
+		existing, ok, gerr := a.store.GetSettlementByOrder(req.OrderID)
+		if gerr != nil || !ok {
+			writeErr(w, 409, "Marketplace.AlreadySettled", err.Error())
+			return
+		}
+		writeOK(w, existing)
 		return
 	}
 	writeOK(w, rec)
@@ -501,7 +524,7 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 
 func requestIDMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Euler-TraceId")
+		id := httpmw.SanitizeRequestID(r.Header.Get("X-Euler-TraceId"))
 		if id == "" {
 			id = fmt.Sprintf("mkt-%d", time.Now().UnixNano())
 		}
@@ -538,6 +561,9 @@ func newMux(a *app) http.Handler {
 func main() {
 	addr := flag.String("http", ":9212", "HTTP listen address")
 	flag.Parse()
+	// Production refuses to start without the internal shared secret: the
+	// X-Euler-Account-Id this service trusts must provably come from the gateway.
+	runtimeRequireSecrets()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	store, err := newStore(context.Background())
@@ -565,4 +591,9 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 	}
+}
+
+// runtimeRequireSecrets enforces the production secret set (pkg-go/runmode).
+func runtimeRequireSecrets() {
+	runmode.MustRequireSecrets(httpmw.InternalTokenEnv)
 }

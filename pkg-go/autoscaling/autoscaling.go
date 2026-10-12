@@ -144,6 +144,8 @@ func (r ScalingRule) matches(value float64) bool {
 // is unit-testable and re-runnable.
 //
 // The decision order is:
+//  0. Bounds: a group outside [Min,Max] is moved to the nearest bound
+//     ("bounds_correction", RuleIndex -1) before anything else.
 //  1. Cooldown: any action within CooldownSeconds of lastActionAt is suppressed.
 //  2. First matching rule wins; a rule matches only if its metric is present.
 //  3. The target is clamped to [Min,Max]; a clamped-equal target is "at_cap".
@@ -151,6 +153,22 @@ func (r ScalingRule) matches(value float64) bool {
 func Evaluate(policy ScalingPolicy, currentReplicas int, metrics map[string]float64, lastActionAt, now time.Time) (Decision, error) {
 	if err := policy.Validate(); err != nil {
 		return Decision{}, err
+	}
+
+	// Bounds first. A group outside [Min,Max] (a manual edit, a policy whose
+	// bounds were narrowed, a lost scale action) violates the policy itself.
+	// Correcting it used to wait for a metric rule to fire — and with the
+	// metric missing or quiet it never did, so a group could sit below its
+	// floor indefinitely. The cooldown does not apply either: it exists to stop
+	// metric-driven flapping, and a correction lands inside the bounds, so it
+	// cannot flap.
+	if currentReplicas > policy.MaxReplicas {
+		return Decision{Action: ActionScaleDown, TargetReplicas: policy.MaxReplicas, RuleIndex: -1,
+			Reason: "bounds_correction"}, nil
+	}
+	if currentReplicas < policy.MinReplicas {
+		return Decision{Action: ActionScaleUp, TargetReplicas: policy.MinReplicas, RuleIndex: -1,
+			Reason: "bounds_correction"}, nil
 	}
 
 	// Cooldown suppresses any action while open. lastActionAt zero-value means

@@ -1,0 +1,10 @@
+# dev overrides for svc-openapi (values merge on top of the chart defaults).
+image:
+  tag: latest
+  pullPolicy: Always   # mutable dev tag => always re-pull
+replicas: 1
+
+# Dev cluster: non-production mode (the internal token is not enforced at
+# startup; set it anyway when the gateway injects one).
+extraEnv:
+  EULER_ENV: dev

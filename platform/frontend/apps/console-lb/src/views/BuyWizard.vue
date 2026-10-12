@@ -20,12 +20,11 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@eu/sdk";
-import { useCatalogMeta } from "@eu/console-kit";
+import { yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta, useOrderCheckout, fulfilledMessage } from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
-const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
@@ -78,7 +77,10 @@ function specLabel(spec: SkuSpec): string {
 onMounted(async () => {
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=eulb");
-    skus.value = res.data ?? [];
+    // Only on-sale POSTPAID SKUs: EULB is postpaid-only, and the quote
+    // rejects an off-sale SKU (Catalog.NotOnSale) or a chargeType other than
+    // the SKU's own (Catalog.ChargeTypeMismatch).
+    skus.value = (res.data ?? []).filter((s) => s.status === "1" && s.chargeType === "POSTPAID");
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
       form.value.lbType = specs.value[0].type;
@@ -173,62 +175,55 @@ function parseBackends(): string[] {
     .filter((s) => s.length > 0);
 }
 
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one.
+const { submitting, pending, checkout, resume } = useOrderCheckout({
+  sdk,
+  onFulfilled: (res) => {
+    ElMessage.success(fulfilledMessage("负载均衡", res));
+    router.push("/instances");
+  },
+});
+
 async function submit() {
   const specCode = form.value.spec;
   if (!specCode) { ElMessage.error("请选择实例规格"); active.value = 0; return; }
   const backends = parseBackends();
   if (backends.length === 0) { ElMessage.warning("请填写至少一个后端服务器"); active.value = 1; return; }
-  submitting.value = true;
-  try {
-    // 1) Quote — the authoritative per-hour payable comes from the pricing engine.
-    const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "eulb", specCode,
-      chargeType: "POSTPAID", quantity: 1,
-      regionId: form.value.region,
-    });
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo. EULB is
-    // usage-billed postpaid; the initial amount is the per-hour unit (rounded
-    // in 分 (yuanToMinor); actual billing accrues from metering
-    // (lcu_hour/traffic_gb), settled hourly.
-    const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
-    const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
-      "/api/v1/orders",
-      {
+  await checkout(
+    async () => {
+      // 1) Quote — the authoritative payable comes from the pricing engine.
+      const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
+        productCode: "eulb", specCode,
+        chargeType: "POSTPAID", quantity: 1,
+        regionId: form.value.region,
+      });
+      // Usage-billed postpaid: the initial amount is the per-hour unit in 分;
+      // actual billing accrues from metering (lcu_hour/traffic_gb), hourly.
+      const amountMinor = Math.max(1, yuanToMinor(q.data.payableAmount));
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>("/api/v1/orders", {
         type: "NEW", productCode: "eulb", skuCode: specCode,
+        chargeType: "POSTPAID",
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
-      },
-    );
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
-      paymentId: `pay-${created.data.orderId}`,
-      paidAmountMinor: amountMinor,
-    });
-
-    // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-    // resource CREATING→RUNNING) and returns the new resource id. The
-    // productCode=eulb routes it to the DriverK8s binding.
-    const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-      "/api/v1/orchestrator/fulfill",
-      {
-        orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "eulb", region: form.value.region,
-        specCode, chargeType: "POSTPAID",
-        lbType: form.value.lbType,
-        listenPort: form.value.listenPort,
-        protocol: form.value.protocol,
-        backends,
-      },
-    );
-    ElMessage.success(`负载均衡已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-    router.push("/instances");
-  } catch (e) {
-    ElMessage.error((e as Error).message || "创建失败");
-  } finally {
-    submitting.value = false;
-  }
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil run in the composable (saga: order PAID→FULFILLING→
+    // COMPLETED, resource CREATING→RUNNING; productCode=eulb routes it to the
+    // DriverK8s binding). The body is captured now so a retry repeats exactly
+    // what was ordered.
+    {
+      productCode: "eulb", region: form.value.region,
+      specCode, chargeType: "POSTPAID",
+      lbType: form.value.lbType,
+      listenPort: form.value.listenPort,
+      protocol: form.value.protocol,
+      backends,
+    },
+  );
 }
 </script>
 
@@ -283,7 +278,8 @@ async function submit() {
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 2" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 2" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="active === 2 && !pending" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pending" type="warning" :loading="submitting" @click="resume">{{ pending.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pending.orderNo }})</ElButton>
         </div>
       </div>
 

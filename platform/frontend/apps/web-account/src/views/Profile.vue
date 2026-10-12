@@ -6,6 +6,7 @@
 import { computed, onMounted, ref } from "vue";
 import { ElButton, ElEmpty, ElTag } from "element-plus";
 import { useAccountAuth } from "../stores/auth";
+import { formatTime } from "../format";
 
 const auth = useAccountAuth();
 
@@ -13,28 +14,25 @@ const auth = useAccountAuth();
 // The envelope {RequestId,Code,Message,Data} is unwrapped here; Data holds the
 // account profile (realNameStatus, mfaEnabled, phoneBound, etc.).
 interface AccountProfile {
+  id?: number;
+  /** Login name (the email) — the display name. */
+  name?: string;
   createdAt?: string;
   phone?: string;
   phoneBound?: boolean;
+  /** Login email; svc-iam has no separate "bound" flag — non-empty = bound. */
   email?: string;
-  emailBound?: boolean;
   mfaEnabled?: boolean;
   passwordSet?: boolean;
-  realNameStatus?: "verified" | "unverified";
+  /** 0 unverified, 1 individual verified, 2 enterprise verified (07§2.3). */
+  realNameStatus?: number;
 }
 const profile = ref<AccountProfile>({});
 
 async function fetchProfile() {
   if (!auth.isAuthenticated) return;
   try {
-    const res = await fetch("/api/account/profile", {
-      headers: { Authorization: `Bearer ${auth.accessToken}` },
-    });
-    const body = await res.json();
-    if (!res.ok || body.Code !== "OK") {
-      throw new Error(body.Message ?? "profile fetch failed");
-    }
-    profile.value = (body.Data ?? {}) as AccountProfile;
+    profile.value = (await auth.request<AccountProfile>("/api/account/profile")) ?? {};
   } catch {
     /* leave profile empty — rows fall back to "—" */
   }
@@ -42,26 +40,25 @@ async function fetchProfile() {
 
 onMounted(fetchProfile);
 
-const realNameStatus = computed(() =>
-  profile.value.realNameStatus === "verified" || auth.user?.realName
-    ? "已认证"
-    : "未认证",
-);
+const REALNAME_LABELS: Record<number, string> = { 1: "已认证(个人)", 2: "已认证(企业)" };
+const realNameVerified = computed(() => (profile.value.realNameStatus ?? 0) >= 1);
+const realNameStatus = computed(() => REALNAME_LABELS[profile.value.realNameStatus ?? 0] ?? "未认证");
+const emailBound = computed(() => Boolean(profile.value.email));
 
 type TagType = "primary" | "success" | "warning" | "info" | "danger";
 interface InfoRow { label: string; value: string; tag?: TagType; status?: string }
 interface SecurityItem { key: string; label: string; desc: string; tag: TagType; status: string }
 
 const infoRows = computed<InfoRow[]>(() => [
-  { label: "账号ID", value: String(auth.user?.id ?? "—") },
-  { label: "账号名", value: auth.user?.name ?? "—" },
+  { label: "账号ID", value: String(profile.value.id ?? auth.user?.id ?? "—") },
+  { label: "账号名", value: profile.value.name || auth.user?.name || "—" },
   {
     label: "实名状态",
     value: realNameStatus.value,
-    tag: realNameStatus.value === "已认证" ? "success" : "warning",
+    tag: realNameVerified.value ? "success" : "warning",
     status: realNameStatus.value,
   },
-  { label: "注册时间", value: profile.value.createdAt ?? "—" },
+  { label: "注册时间", value: formatTime(profile.value.createdAt) },
   {
     label: "手机绑定",
     value: profile.value.phoneBound ? (profile.value.phone ?? "已绑定") : "未绑定",
@@ -69,8 +66,8 @@ const infoRows = computed<InfoRow[]>(() => [
   },
   {
     label: "邮箱绑定",
-    value: profile.value.emailBound ? (profile.value.email ?? "已绑定") : "未绑定",
-    tag: profile.value.emailBound ? "success" : "info",
+    value: emailBound.value ? (profile.value.email ?? "已绑定") : "未绑定",
+    tag: emailBound.value ? "success" : "info",
   },
 ]);
 
@@ -93,8 +90,8 @@ const securityItems = computed<SecurityItem[]>(() => [
     key: "email",
     label: "邮箱",
     desc: profile.value.email ?? "—",
-    status: profile.value.emailBound ? "已绑定" : "未绑定",
-    tag: profile.value.emailBound ? "success" : "warning",
+    status: emailBound.value ? "已绑定" : "未绑定",
+    tag: emailBound.value ? "success" : "warning",
   },
   {
     key: "mfa",

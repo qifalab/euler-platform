@@ -70,6 +70,8 @@ spec:
               name: http
             - containerPort: 9091
               name: metrics
+            - containerPort: 7085
+              name: status
           env:
             - name: NACOS_APISIX_PASSWORD
               valueFrom:
@@ -81,17 +83,42 @@ spec:
                 secretKeyRef:
                   name: apisix-etcd-credentials
                   key: root-password
+            # Internal shared secret injected upstream by eu-auth after
+            # authentication (services require it via httpmw.InternalToken).
+            # Exposed to the Lua workers by nginx_config.envs in config.yaml.
+            - name: EULER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: euler-internal-token
+                  key: token
+            # SCRAM password of the eu-audit Kafka user (apisix-audit) — the
+            # same value as mw-mq/kafka-scram-users[apisix-audit]. Exposed to
+            # the Lua workers by nginx_config.envs in config.yaml.
+            - name: EULER_KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-apisix-audit
+                  key: password
           volumeMounts:
             - name: apisix-config
               mountPath: /usr/local/apisix/conf/config.yaml
               subPath: config.yaml
+            # Custom plugins: require("apisix.plugins.eu-auth") resolves via
+            # apisix.extra_lua_path (/opt/eu-plugins/?.lua) to
+            # /opt/eu-plugins/apisix/plugins/eu-auth.lua.
             - name: eu-plugins
-              mountPath: /opt/eu-plugins
+              mountPath: /opt/eu-plugins/apisix/plugins
+              readOnly: true
             # JWT public key for the console-zone eu-auth plugin. Route files
             # cannot interpolate env vars, so the plugin reads this mounted
             # Secret via jwt_public_key_file.
             - name: eu-jwt
               mountPath: /opt/eu-secrets/jwt
+              readOnly: true
+            # Platform CA (apisix.ssl.ssl_trusted_certificate in config.yaml):
+            # verifies the Kafka brokers (eu-audit) and https upstreams.
+            - name: platform-ca
+              mountPath: /opt/eu-secrets/platform-ca
               readOnly: true
           resources:
             # 4C8G per node (09§3.4 baseline). The signature path is CPU
@@ -100,11 +127,11 @@ spec:
             requests: { cpu: "2", memory: "4Gi" }
             limits:   { cpu: "4", memory: "8Gi" }
           readinessProbe:
-            httpGet: { path: /apisix/status, port: 9080 }
+            httpGet: { path: /status/ready, port: 7085 }
             initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
-            httpGet: { path: /apisix/status, port: 9080 }
+            httpGet: { path: /status, port: 7085 }
             initialDelaySeconds: 15
             periodSeconds: 10
           lifecycle:
@@ -124,6 +151,13 @@ spec:
         - name: eu-jwt
           secret:
             secretName: eu-jwt-public-key
+        # Only ca.crt of the cert-manager Secret (platform/middleware/tls.yaml,
+        # apisix-gateway-tls): the gateway needs the CA, not that leaf's key.
+        - name: platform-ca
+          secret:
+            secretName: apisix-gateway-tls
+            items:
+              - { key: ca.crt, path: ca.crt }
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -224,6 +258,8 @@ spec:
           ports:
             - containerPort: 9080
             - containerPort: 9091
+            - containerPort: 7085
+              name: status
           env:
             - name: NACOS_APISIX_PASSWORD
               valueFrom:
@@ -231,22 +267,38 @@ spec:
             - name: APISIX_ETCD_PASSWORD
               valueFrom:
                 secretKeyRef: { name: apisix-etcd-credentials, key: root-password }
+            - name: EULER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: euler-internal-token, key: token }
+            - name: EULER_KAFKA_SASL_PASSWORD     # eu-audit, as in apisix-openapi
+              valueFrom:
+                secretKeyRef: { name: kafka-apisix-audit, key: password }
           volumeMounts:
             - name: apisix-config
               mountPath: /usr/local/apisix/conf/config.yaml
               subPath: config.yaml
+            # Same layout as apisix-openapi (apisix.extra_lua_path).
             - name: eu-plugins
-              mountPath: /opt/eu-plugins
+              mountPath: /opt/eu-plugins/apisix/plugins
+              readOnly: true
             # Mounted eu-jwt-public-key Secret, read by eu-auth via
             # jwt_public_key_file (route files cannot interpolate env vars).
             - name: eu-jwt
               mountPath: /opt/eu-secrets/jwt
               readOnly: true
+            # Platform CA, as in apisix-openapi.
+            - name: platform-ca
+              mountPath: /opt/eu-secrets/platform-ca
+              readOnly: true
           resources:
             requests: { cpu: "1", memory: "2Gi" }
             limits:   { cpu: "4", memory: "8Gi" }
           readinessProbe:
-            httpGet: { path: /apisix/status, port: 9080 }
+            httpGet: { path: /status/ready, port: 7085 }
+          livenessProbe:
+            httpGet: { path: /status, port: 7085 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
           lifecycle:
             preStop:
               exec: { command: ["/bin/sh", "-c", "sleep 15"] }
@@ -258,6 +310,11 @@ spec:
           configMap: { name: apisix-eu-plugins }
         - name: eu-jwt
           secret: { secretName: eu-jwt-public-key }
+        - name: platform-ca
+          secret:
+            secretName: apisix-gateway-tls
+            items:
+              - { key: ca.crt, path: ca.crt }
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -311,6 +368,40 @@ spec:
         - name: etcd
           image: bitnami/etcd:3.5.16
           env:
+            # Static 3-member cluster bootstrapped over the headless Service
+            # (apisix-etcd-{0,1,2}.apisix-etcd-headless.mw-gateway.svc, the
+            # same names config/config.yaml connects to). Without these the
+            # bitnami image starts every replica as its own single-node
+            # cluster: three diverging route tables and no quorum at all.
+            # Bootstrap-only settings — a member whose data dir already holds
+            # a cluster ignores them, so PVCs left from single-node starts
+            # must be wiped (or the members re-joined) once.
+            - name: MY_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ETCD_ON_K8S
+              value: "yes"
+            - name: ETCD_NAME
+              value: "$(MY_POD_NAME)"
+            - name: ETCD_DATA_DIR
+              value: /bitnami/etcd/data
+            - name: ETCD_CLUSTER_DOMAIN
+              value: apisix-etcd-headless.mw-gateway.svc
+            - name: ETCD_LISTEN_CLIENT_URLS
+              value: "http://0.0.0.0:2379"
+            - name: ETCD_LISTEN_PEER_URLS
+              value: "http://0.0.0.0:2380"
+            - name: ETCD_ADVERTISE_CLIENT_URLS
+              value: "http://$(MY_POD_NAME).apisix-etcd-headless.mw-gateway.svc:2379"
+            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
+              value: "http://$(MY_POD_NAME).apisix-etcd-headless.mw-gateway.svc:2380"
+            - name: ETCD_INITIAL_CLUSTER_TOKEN
+              value: apisix-etcd
+            - name: ETCD_INITIAL_CLUSTER_STATE
+              value: new
+            - name: ETCD_INITIAL_CLUSTER
+              value: "apisix-etcd-0=http://apisix-etcd-0.apisix-etcd-headless.mw-gateway.svc:2380,apisix-etcd-1=http://apisix-etcd-1.apisix-etcd-headless.mw-gateway.svc:2380,apisix-etcd-2=http://apisix-etcd-2.apisix-etcd-headless.mw-gateway.svc:2380"
             - name: ETCD_QUOTA_BACKEND_BYTES
               value: "8589934592"        # 8G (04§3.9)
             # Auth is ON — a passwordless etcd holding the whole gateway route

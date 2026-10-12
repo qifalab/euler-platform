@@ -10,6 +10,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,27 +95,73 @@ func TestExplorerSignsAndVerifiesGoldenInputs(t *testing.T) {
 		t.Errorf("Host = %q, want euecs.api.euler.emoera.com", sig.Host)
 	}
 
-	// The proof: the Authorization the Explorer produced must verify through
-	// cps1.Verify. We reconstruct a cps1.Request from the signature material at
-	// the signed date and confirm Verify accepts it.
-	date, err := time.Parse("20060102T150405Z", sig.Date)
-	if err != nil {
-		t.Fatalf("parse date %q: %v", sig.Date, err)
+	// The proof: a live call through the Explorer must verify, at the receiving
+	// end, through cps1.Verify — using only what arrived on the wire (Host,
+	// headers including Authorization, path, query, body). Nothing is added by
+	// the test: a request that left without Authorization, or with the dial
+	// target as Host, fails here.
+	var verifyErr error
+	var gotHost, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdrs := map[string]string{"host": r.Host}
+		for k := range r.Header {
+			hdrs[strings.ToLower(k)] = r.Header.Get(k)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		gotHost, gotPath = r.Host, r.URL.Path
+		verifyErr = cps1.Verify(cps1.Request{
+			Method:  r.Method,
+			Host:    r.Host,
+			Path:    r.URL.Path, // the decoded path, as the gateway verifies it
+			Query:   r.URL.Query(),
+			Headers: hdrs,
+			Body:    raw,
+		}, cps1.Credentials{AK: gAK, SK: gSK}, gRegion, "ecs", time.Now())
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	t.Setenv("EULER_EXPLORER_TARGET", upstream.URL)
+
+	body.Path = "/v1/a%20b"
+	raw, _ = json.Marshal(body)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/apimeta/explorer", bytes.NewReader(raw))
+	req.Header.Set("X-Euler-Account-Id", "100123")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("live call: status = %d; body=%s", rec.Code, rec.Body.String())
 	}
-	hdrs := make(map[string]string, len(sig.Headers))
-	for k, v := range sig.Headers {
-		hdrs[k] = v
+	var live struct {
+		Data explorerResponse `json:"Data"`
 	}
-	hdrs["Authorization"] = sig.Authorization
-	if err := cps1.Verify(cps1.Request{
-		Method:  sig.Method,
-		Host:    sig.Host,
-		Path:    sig.Path,
-		Query:   toValues(sig.Query),
-		Headers: hdrs,
-		Body:    []byte(sig.Body),
-	}, cps1.Credentials{AK: gAK, SK: gSK}, gRegion, "ecs", date); err != nil {
-		t.Fatalf("Explorer signature did not verify via cps1.Verify: %v", err)
+	if err := json.Unmarshal(rec.Body.Bytes(), &live); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !live.Data.Executed || live.Data.Upstream == nil || live.Data.Upstream.Error != "" {
+		t.Fatalf("live call not executed cleanly: %+v", live.Data.Upstream)
+	}
+	if gotHost != "euecs.api.euler.emoera.com" {
+		t.Errorf("upstream Host = %q, want the signed routing host", gotHost)
+	}
+	if gotPath != "/v1/a b" {
+		t.Errorf("upstream path = %q, want %q (escape sent once, not double-encoded)", gotPath, "/v1/a b")
+	}
+	if verifyErr != nil {
+		t.Fatalf("the live request did not verify via cps1.Verify: %v", verifyErr)
+	}
+}
+
+func TestValidExplorerPathPercentEscapes(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/v1/a%20b": true,
+		"/v1/%2Fx":  true,
+		"/v1/%":     false,
+		"/v1/%2":    false,
+		"/v1/%zz":   false,
+	} {
+		if got := validExplorerPath(p); got != want {
+			t.Errorf("validExplorerPath(%q) = %v, want %v", p, got, want)
+		}
 	}
 }
 
@@ -166,12 +213,4 @@ func TestServiceNamespace(t *testing.T) {
 			t.Errorf("serviceNamespace(%q) = %q, want %q", product, got, want)
 		}
 	}
-}
-
-func toValues(m map[string]string) (q map[string][]string) {
-	q = make(map[string][]string, len(m))
-	for k, v := range m {
-		q[k] = []string{v}
-	}
-	return q
 }

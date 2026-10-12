@@ -17,6 +17,7 @@ type memStore struct {
 	defs         map[string]Definition
 	usage        map[string]Usage
 	tokens       map[string]Token
+	idem         map[idemKey]IdempotencyRecord
 	failPutToken bool
 }
 
@@ -89,9 +90,15 @@ func (m *memStore) GetToken(id string) (Token, error) {
 	return t, nil
 }
 
+// DeleteToken reports ErrTokenNotFound for a token that is already gone, like
+// SQLStore: the claim-first protocol (commit/release/sweep) depends on exactly
+// one deleter winning.
 func (m *memStore) DeleteToken(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.tokens[id]; !ok {
+		return ErrTokenNotFound
+	}
 	delete(m.tokens, id)
 	return nil
 }
@@ -124,11 +131,9 @@ func newManager(now time.Time) (*Manager, *memStore) {
 		DefaultValue: 100,
 		Scope:        ScopeGlobal,
 	}
-	var seq int64
-	return NewManager(store, func() time.Time { return now }, func() string {
-		seq++
-		return fmt.Sprintf("qt-%d", seq)
-	}), store
+	// seqTokens is goroutine-safe: the concurrency tests mint from many
+	// goroutines at once, and a bare seq++ is a data race under -race.
+	return NewManager(store, func() time.Time { return now }, seqTokens("qt")), store
 }
 
 const acct = int64(100123)

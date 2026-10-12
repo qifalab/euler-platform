@@ -4,10 +4,9 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { useTicketMeta } from "@/useTicketMeta";
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
 const { categories, priorities, ready } = useTicketMeta();
 
 const form = ref({ type: "", priority: "", title: "", desc: "", contact: "" });
@@ -29,6 +28,7 @@ async function submit() {
       priority: form.value.priority,
       title: form.value.title,
       message: form.value.desc,
+      contact: form.value.contact.trim(),
     });
     const id = res.data?.ticket_id ?? "";
     ElMessage.success(`工单已提交,编号 ${id}`);

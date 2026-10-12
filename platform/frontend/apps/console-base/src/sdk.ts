@@ -38,6 +38,10 @@ export interface ResourceItem {
   ResourceId: string;
   ProductCode: string;
   Region: string;
+  /** Availability zone ("" / absent for REGIONAL resources). */
+  Zone?: string;
+  /** Customer-facing attributes (e.g. `name`) set at creation. */
+  Attributes?: Record<string, unknown> | null;
   ChargeType: string;
   State: string;
   SpecCode: string;

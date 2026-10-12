@@ -2,8 +2,9 @@
 /**
  * RAM 用户列表 (02§5, 07§2.2 子账号).
  * Lists RAM sub-accounts under the principal and provides create/delete demo
- * CRUD. AccessKey management (incl. the max-2-AK rule) lives in AccessKeys;
- * this view only manages the user identity rows.
+ * CRUD. Each user's AccessKeys (svc-iam /api/ak?ramUserId= — 2 per identity,
+ * disabled keys included) are managed in a dialog that embeds the
+ * AccessKeys view scoped to that user.
  */
 import { onMounted, reactive, ref } from "vue";
 import {
@@ -24,6 +25,8 @@ import {
   type FormRules,
 } from "element-plus";
 import { useAccountAuth } from "../stores/auth";
+import { formatTime } from "../format";
+import AccessKeys from "./AccessKeys.vue";
 
 const auth = useAccountAuth();
 
@@ -35,49 +38,45 @@ interface RamUser {
   createdAt: string;
   status: "active" | "disabled";
   access: ("password" | "program")[];
+  /** Attached policy names (the user's effective policy set). */
+  policies: string[];
 }
 
 // RAM sub-accounts under the principal (07§2.2). Loaded from svc-iam
 // GET /api/ram/users; created/deleted via POST/DELETE on the same path.
 const users = reactive<RamUser[]>([]);
 
+// svc-iam wire shape: GET returns {users, total}; status is the account enum
+// (1 enabled, 2 disabled; soft-deleted users are not listed).
 interface RamUserDto {
   id?: number;
   username: string;
   displayName: string;
   remark?: string;
   createdAt?: string;
-  status?: "active" | "disabled";
+  status?: number;
+  policies?: string[] | null;
   access?: ("password" | "program")[];
 }
+interface RamUserListDto { users?: RamUserDto[] | null; total?: number }
 
-// Unwrap the platform envelope {RequestId,Code,Message,Data} (03§9.3).
-async function readEnvelope<T>(res: Response): Promise<T> {
-  const body = await res.json();
-  if (!res.ok || body.Code !== "OK") {
-    throw new Error(body.Message ?? `request failed (HTTP ${res.status})`);
-  }
-  return body.Data as T;
-}
-
-function authHeaders(): HeadersInit {
-  return auth.accessToken
-    ? { Authorization: `Bearer ${auth.accessToken}` }
-    : {};
+function toStatus(s: number | undefined): RamUser["status"] {
+  return (s ?? 1) === 1 ? "active" : "disabled";
 }
 
 async function fetchUsers() {
   if (!auth.isAuthenticated) return;
   try {
-    const data = await readEnvelope<RamUserDto[]>(await fetch("/api/ram/users", { headers: authHeaders() }));
-    users.splice(0, users.length, ...(data ?? []).map((u) => ({
+    const data = await auth.request<RamUserListDto>("/api/ram/users");
+    users.splice(0, users.length, ...(data?.users ?? []).map((u) => ({
       id: u.id ?? 0,
       username: u.username,
       displayName: u.displayName,
       remark: u.remark ?? "",
-      createdAt: u.createdAt ?? "—",
-      status: u.status ?? "active",
+      createdAt: formatTime(u.createdAt),
+      status: toStatus(u.status),
       access: u.access ?? [],
+      policies: u.policies ?? [],
     })));
   } catch (e) {
     ElMessage.error(`加载 RAM 用户失败：${(e as Error).message}`);
@@ -128,26 +127,24 @@ async function submitCreate() {
     return;
   }
   try {
-    const created = await readEnvelope<RamUserDto>(
-      await fetch("/api/ram/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          username: form.username,
-          displayName: form.displayName,
-          remark: form.remark,
-          access: form.access,
-        }),
+    const created = await auth.request<RamUserDto>("/api/ram/users", {
+      method: "POST",
+      body: JSON.stringify({
+        username: form.username,
+        displayName: form.displayName,
+        remark: form.remark,
+        access: form.access,
       }),
-    );
+    });
     users.push({
       id: created.id ?? 0,
       username: created.username ?? form.username,
       displayName: created.displayName ?? form.displayName,
       remark: created.remark ?? form.remark,
-      createdAt: created.createdAt ?? "—",
-      status: created.status ?? "active",
+      createdAt: formatTime(created.createdAt),
+      status: toStatus(created.status),
       access: created.access ?? [...form.access],
+      policies: created.policies ?? [],
     });
     dialogVisible.value = false;
     ElMessage.success(`RAM 用户「${form.displayName}」已创建`);
@@ -172,18 +169,23 @@ async function removeUser(row: RamUser) {
     return;
   }
   try {
-    await readEnvelope<unknown>(
-      await fetch(`/api/ram/users/${row.id}`, {
-        method: "DELETE",
-        headers: authHeaders(),
-      }),
-    );
+    await auth.request<unknown>(`/api/ram/users/${row.id}`, {
+      method: "DELETE",
+    });
     const idx = users.findIndex((u) => u.id === row.id);
     if (idx !== -1) users.splice(idx, 1);
     ElMessage.success(`已删除「${row.displayName}」`);
   } catch (e) {
     ElMessage.error(`删除失败：${(e as Error).message}`);
   }
+}
+
+// Per-user AccessKeys: the AccessKeys view, scoped by ramUserId.
+const akUser = ref<RamUser | null>(null);
+const akDialogVisible = ref(false);
+function openAccessKeys(row: RamUser) {
+  akUser.value = row;
+  akDialogVisible.value = true;
 }
 
 function statusText(s: RamUser["status"]) {
@@ -209,8 +211,8 @@ function accessText(a: RamUser["access"]) {
         <div class="heading">
           <h1 class="page-title">RAM 用户</h1>
           <p class="page-desc">
-            管理主账号下的 RAM 子用户身份；AccessKey 与最多 2 组密钥规则见「AccessKey
-            管理」。
+            管理主账号下的 RAM 子用户身份；每个子用户可单独管理 AccessKey（每个身份最多 2
+            个，含已禁用）。
           </p>
         </div>
         <ElButton type="primary" @click="openCreate">创建 RAM 用户</ElButton>
@@ -221,6 +223,11 @@ function accessText(a: RamUser["access"]) {
           <ElTableColumn prop="username" label="用户名" min-width="140" />
           <ElTableColumn prop="displayName" label="显示名" min-width="120" />
           <ElTableColumn prop="remark" label="备注" min-width="200" show-overflow-tooltip />
+          <ElTableColumn label="策略" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ (row as RamUser).policies.length ? (row as RamUser).policies.join("、") : "—" }}
+            </template>
+          </ElTableColumn>
           <ElTableColumn prop="createdAt" label="创建时间" min-width="160" />
           <ElTableColumn label="状态" width="100">
             <template #default="{ row }">
@@ -229,8 +236,16 @@ function accessText(a: RamUser["access"]) {
               </ElTag>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="操作" width="100" fixed="right">
+          <ElTableColumn label="操作" width="170" fixed="right">
             <template #default="{ row }">
+              <ElButton
+                link
+                type="primary"
+                size="small"
+                @click="openAccessKeys(row as RamUser)"
+              >
+                AccessKey
+              </ElButton>
               <ElButton
                 link
                 type="danger"
@@ -287,6 +302,16 @@ function accessText(a: RamUser["access"]) {
           <ElButton type="primary" @click="submitCreate">确定创建</ElButton>
         </template>
       </ElDialog>
+
+      <ElDialog
+        v-model="akDialogVisible"
+        :title="akUser ? `AccessKey — ${akUser.displayName}（${akUser.username}）` : 'AccessKey'"
+        width="880px"
+        destroy-on-close
+      >
+        <p v-if="akUser && akUser.status !== 'active'" class="ak-user-hint">该子用户已禁用，不能新建 AccessKey；已有的 AccessKey 仍可禁用或删除。</p>
+        <AccessKeys v-if="akUser" :ram-user-id="akUser.id" embedded />
+      </ElDialog>
     </template>
   </div>
 </template>
@@ -314,6 +339,11 @@ function accessText(a: RamUser["access"]) {
   font-size: 22px;
   font-weight: 600;
   color: var(--eu-text-primary);
+}
+.ak-user-hint {
+  margin: 0 0 var(--eu-spacing-3);
+  font-size: 13px;
+  color: var(--eu-color-warning-text);
 }
 .page-desc {
   margin: 0;

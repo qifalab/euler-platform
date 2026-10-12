@@ -34,6 +34,7 @@ func testOrder(id int64, token string) (*order.Order, order.Event) {
 		OrderID: id, OrderNo: "SO20260915000001", AccountID: 100123,
 		Type: order.TypeNew, State: order.StatePendingPayment,
 		ProductCode: "euecs", ChargeType: pricing.ChargePrepaid,
+		SKUCode: "euecs.c1", RegionID: "cn-north-1", Quantity: 2, Duration: 3, DurationUnit: pricing.DurationMonth,
 		SnapshotID: "", OriginalAmount: pricing.MustParseAmount("100"),
 		DiscountAmount: pricing.MustParseAmount("0"), PayableAmount: pricing.MustParseAmount("100"),
 		ClientToken: token, Version: 0,
@@ -57,7 +58,7 @@ func TestSQLRepoOrderLifecycle(t *testing.T) {
 	}
 
 	o, evt := testOrder(repo.NewOrderID(), "tok-1")
-	if err := repo.Create(o, evt); err != nil {
+	if err := repo.Create(o, evt, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +135,7 @@ func TestSQLRepoStaleVersionCannotMoveAnOrder(t *testing.T) {
 	const acct = int64(100123)
 
 	o, evt := testOrder(repo.NewOrderID(), "tok-stale")
-	if err := repo.Create(o, evt); err != nil {
+	if err := repo.Create(o, evt, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,7 +206,7 @@ func TestSQLRepoMatchesMemoryStore(t *testing.T) {
 	run := func(repo orderRepo) (*order.Order, *order.Order) {
 		t.Helper()
 		o, evt := testOrder(repo.NewOrderID(), "tok-parity")
-		if err := repo.Create(o, evt); err != nil {
+		if err := repo.Create(o, evt, nil); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		from, prevVersion := o.State, o.Version
@@ -238,8 +239,46 @@ func TestSQLRepoMatchesMemoryStore(t *testing.T) {
 		sqlCancelled.PayableAmount != memCancelled.PayableAmount ||
 		sqlCancelled.OriginalAmount != memCancelled.OriginalAmount ||
 		sqlCancelled.DiscountAmount != memCancelled.DiscountAmount ||
-		sqlCancelled.ClientToken != memCancelled.ClientToken {
+		sqlCancelled.ClientToken != memCancelled.ClientToken ||
+		sqlCancelled.SKUCode != memCancelled.SKUCode || sqlCancelled.RegionID != memCancelled.RegionID ||
+		sqlCancelled.Quantity != memCancelled.Quantity || sqlCancelled.Duration != memCancelled.Duration ||
+		sqlCancelled.DurationUnit != memCancelled.DurationUnit {
 		t.Fatalf("sql %+v, memory %+v", sqlCancelled, memCancelled)
+	}
+}
+
+// The purchased line must survive the database: fulfilment provisions the SKU
+// recorded on the order, so an order read back without it would be unfulfillable
+// (or, worse, fulfilled with whatever spec the caller asks for).
+func TestSQLRepoPersistsOrderLine(t *testing.T) {
+	repo := newSQLTestRepo(t)
+	o, evt := testOrder(repo.NewOrderID(), "tok-line")
+	if err := repo.Create(o, evt, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for name, get := range map[string]func() (*order.Order, error){
+		"Get":           func() (*order.Order, error) { return repo.Get(100123, o.OrderID) },
+		"ByClientToken": func() (*order.Order, error) { return repo.ByClientToken(100123, "tok-line") },
+		"List": func() (*order.Order, error) {
+			l, err := repo.List(100123)
+			if err != nil || len(l) == 0 {
+				return nil, err
+			}
+			return l[0], nil
+		},
+	} {
+		got, err := get()
+		if err != nil || got == nil {
+			t.Fatalf("%s: %v %v", name, got, err)
+		}
+		if got.SKUCode != "euecs.c1" || got.RegionID != "cn-north-1" || got.Quantity != 2 ||
+			got.Duration != 3 || got.DurationUnit != pricing.DurationMonth {
+			t.Fatalf("%s lost the order line: %+v", name, got)
+		}
+	}
+	// Another account must not see the line through the join.
+	if other, err := repo.Get(999, o.OrderID); err != nil || other != nil {
+		t.Fatalf("cross-account read = %v, %v", other, err)
 	}
 }
 

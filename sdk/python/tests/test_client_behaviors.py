@@ -260,6 +260,28 @@ def test_env_fallback_for_credentials(monkeypatch):
     assert creds.sk == "SKCFG"
 
 
+@pytest.mark.parametrize(
+    "ak_var,sk_var",
+    [
+        ("EULER_ACCESS_KEY", "EULER_SECRET_KEY"),  # Terraform provider spelling
+        ("EULER_AK", "EULER_SK"),  # short spelling (svc-iam e2e-verify)
+    ],
+)
+def test_env_fallback_accepts_other_tools_names(monkeypatch, ak_var, sk_var):
+    for name in ("EULER_ACCESS_KEY_ID", "EULER_SECRET_ACCESS_KEY", "EULER_ACCESS_KEY",
+                 "EULER_SECRET_KEY", "EULER_AK", "EULER_SK"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(ak_var, "AKALIAS")
+    monkeypatch.setenv(sk_var, "SKALIAS")
+    creds = _resolve_credentials(Config(ak="", sk="", region="r"))
+    assert (creds.ak, creds.sk) == ("AKALIAS", "SKALIAS")
+    # The SDK's own names keep precedence.
+    monkeypatch.setenv("EULER_ACCESS_KEY_ID", "AKOWN")
+    monkeypatch.setenv("EULER_SECRET_ACCESS_KEY", "SKOWN")
+    creds = _resolve_credentials(Config(ak="", sk="", region="r"))
+    assert (creds.ak, creds.sk) == ("AKOWN", "SKOWN")
+
+
 def test_credentials_repr_does_not_leak_secret():
     creds = Credentials(ak="AKVISIBLE", sk="SUPERSECRET", security_token="TOKSECRET")
     r = repr(creds)

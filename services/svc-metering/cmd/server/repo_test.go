@@ -15,7 +15,6 @@ func newSQLTestAggRepo(t *testing.T) *sqlAggRepo {
 	return newSQLAggRepo(context.Background(), db)
 }
 
-
 var aggHour = time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
 
 func testUsage(aggID string, qty string) metering.HourlyUsage {
@@ -104,5 +103,88 @@ func TestSQLAggRepoInMemoryMode(t *testing.T) {
 	}
 	if len(s.aggCache) == 0 {
 		t.Fatal("in-memory store did not seed its demo aggregates")
+	}
+}
+
+// E4: a partial re-aggregation (fewer windows than the stored row) must not
+// overwrite the more complete total; a fuller one replaces it, batch/source
+// included.
+func TestSQLAggRepoUpsertIsMonotonic(t *testing.T) {
+	repo := newSQLTestAggRepo(t)
+	ctx := context.Background()
+
+	full := testUsage("agg-mono-0001", "1")
+	full.WindowsSeen, full.CoveredRatio = 30, 50
+	if err := repo.UpsertHourly(ctx, full); err != nil {
+		t.Fatal(err)
+	}
+	partial := testUsage("agg-mono-0001", "0.033333")
+	partial.WindowsSeen, partial.CoveredRatio, partial.BatchID = 1, 1, metering.BatchLate
+	if err := repo.UpsertHourly(ctx, partial); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repo.LoadAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].TotalQuantity.String() != "1" || loaded[0].WindowsSeen != 30 ||
+		loaded[0].CoveredRatio != 50 || loaded[0].BatchID != metering.BatchRealtime {
+		t.Fatalf("partial upsert overwrote the stored aggregate: %+v", loaded)
+	}
+
+	fuller := testUsage("agg-mono-0001", "1.5")
+	fuller.WindowsSeen, fuller.CoveredRatio, fuller.BatchID = 45, 75, metering.BatchBackfill
+	if err := repo.UpsertHourly(ctx, fuller); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = repo.LoadAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded[0].TotalQuantity.String() != "1.5" || loaded[0].WindowsSeen != 45 ||
+		loaded[0].CoveredRatio != 75 || loaded[0].BatchID != metering.BatchBackfill {
+		t.Fatalf("fuller upsert did not replace: %+v", loaded[0])
+	}
+	var source int
+	if err := repo.db.QueryRow(`SELECT source FROM metering_record`).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if source != 3 {
+		t.Fatalf("source = %d, want 3 (backfill) moved with batch_id", source)
+	}
+}
+
+// E4: after a restart the first ingest of an hour re-aggregated only the new
+// window and upserted that over the persisted total, losing every window
+// collected before the restart.
+func TestRestartedStoreKeepsEarlierWindows(t *testing.T) {
+	repo := newSQLTestAggRepo(t)
+	ctx := context.Background()
+	const res = "euecs-cn-north-1-01-a1b2c3d4"
+	before := testUsage(metering.AggID(res, "cpu_core_hour", aggHour), "30")
+	before.WindowsSeen, before.CoveredRatio = 30, 50 // minutes 0-29
+	if err := repo.UpsertHourly(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := newMeteringStoreWith(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return aggHour.Add(40 * time.Minute) }
+	if rr := ingest(t, s, 100123, res, "cpu_core_hour", "1"); rr.Code != 200 {
+		t.Fatalf("ingest: %d %s", rr.Code, rr.Body.String())
+	}
+
+	cached := s.aggCache[before.AggID]
+	if cached.TotalQuantity.String() != "31" || cached.WindowsSeen != 31 {
+		t.Fatalf("cached aggregate = %s over %d windows, want 31 over 31", cached.TotalQuantity, cached.WindowsSeen)
+	}
+	loaded, err := repo.LoadAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].TotalQuantity.String() != "31" || loaded[0].WindowsSeen != 31 {
+		t.Fatalf("ledger after post-restart ingest = %+v, want 31 over 31 windows", loaded)
 	}
 }

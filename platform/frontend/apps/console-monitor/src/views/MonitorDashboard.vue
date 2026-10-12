@@ -5,9 +5,11 @@
  * rule list's name link (#/eumon/dashboard/:id).
  *
  * The header + config tab render the real rule from GET /api/v1/monitor/rules
- * (svc-monitor), filtered to this rule's id. The metric chart, sample stat
- * cards, and operation-log rows are owned by svc-monitor/svc-audit and are
- * shown as an honest empty state rather than fabricated values.
+ * (svc-monitor), filtered to this rule's id. The 监控 tab charts the rule's
+ * metric for one of the account's resources of the rule's product
+ * (GET /api/v1/monitor/metrics with resourceId + start/end/period — see
+ * ../components/MetricsPanel.vue). Operation-log rows are owned by svc-audit
+ * and are shown as an honest empty state rather than fabricated values.
  */
 import { ref, computed, onMounted } from "vue";
 import {
@@ -21,7 +23,8 @@ import {
   ElEmpty,
 } from "element-plus";
 import { StatusBadge } from "@eu/ui";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "../sdk";
+import MetricsPanel from "../components/MetricsPanel.vue";
 import "@eu/tokens/style.css";
 
 interface MonitorRule {
@@ -42,7 +45,6 @@ const ruleId = computed(() => {
   return m ? decodeURIComponent(m[1]) : "—";
 });
 
-const sdk = createSDK({ baseURL: "" });
 const rule = ref<MonitorRule | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -102,7 +104,8 @@ function copyId() {
 
     <ElTabs v-model="activeTab" class="mon-tabs">
       <ElTabPane label="监控" name="monitor">
-        <ElEmpty description="监控指标图表由云监控(svc-monitor)提供,该端点接入后在此展示" />
+        <p v-if="loading" class="mon-loading">加载中…</p>
+        <MetricsPanel v-else :key="rule?.ruleId ?? 'all'" :product-code="rule?.productCode" :metric="rule?.metric" />
       </ElTabPane>
 
       <ElTabPane label="配置信息" name="config">

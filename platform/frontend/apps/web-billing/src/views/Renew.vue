@@ -3,11 +3,11 @@
  *  filtered to PREPAID resources; autorenew flags from svc-order. */
 import { ref, onMounted } from "vue";
 import { ElSwitch, ElMessage } from "element-plus";
-import { createSDK } from "@eu/sdk";
+import { sdk } from "@/sdk";
 import { PageHeader } from "@eu/ui";
+import { formatTime } from "@eu/console-kit";
 import { useProductLabels } from "@/useProductLabels";
 
-const sdk = createSDK({ baseURL: "" });
 const { label } = useProductLabels();
 
 interface ResourceRow {
@@ -49,7 +49,7 @@ onMounted(async () => {
         id: r.ResourceId,
         productCode: r.ProductCode,
         spec: r.SpecCode,
-        expired: r.ExpiredAt || "—",
+        expired: formatTime(r.ExpiredAt),
         autoRenew: autoRenewMap.get(r.ResourceId) ?? false,
         state: stateLabels[r.State] ?? r.State,
         toggling: false,

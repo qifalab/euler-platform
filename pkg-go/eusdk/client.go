@@ -13,6 +13,9 @@
 //	client := eusdk.New(eusdk.Config{
 //	    AK: "EU...", SK: "...", Region: "cn-north-1", Service: "ecs",
 //	})
+//
+// AK/SK left empty fall back to the environment (CredentialsFromEnv).
+//
 //	resp, err := client.Call(eusdk.ApiRequest{
 //	    ProductCode: "euecs", Method: "POST", Path: "/",
 //	    Query: url.Values{"Action": {"RunInstances"}, "Version": {"2026-08-01"}},
@@ -33,6 +36,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -62,6 +66,9 @@ type Config struct {
 
 	// Endpoint overrides the default routing subdomain
 	// ({product}.api.euler.emoera.com). Used for on-prem / test deployments.
+	// It may carry a path prefix (https://gw.example.com/api/v1): the prefix
+	// is prepended to every request path, signed and sent — the Python SDK's
+	// behaviour (cloudsdk Client._host_and_prefix).
 	Endpoint string
 
 	// HTTPClient overrides the default transport. Defaults to a client with a
@@ -76,9 +83,44 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// New constructs a Client. AK, SK, and Region are required; a missing one is a
-// programmer error surfaced at the first call as a cps1 error.
+// Credential environment variables, first non-empty wins — the same names in
+// the same order as the Python SDK (cloudsdk ENV_*_ALIASES): its own
+// EULER_ACCESS_KEY_ID/EULER_SECRET_ACCESS_KEY, then the Terraform provider's
+// EULER_ACCESS_KEY/EULER_SECRET_KEY, then the short EULER_AK/EULER_SK.
+var (
+	envAccessKeyNames = []string{"EULER_ACCESS_KEY_ID", "EULER_ACCESS_KEY", "EULER_AK"}
+	envSecretKeyNames = []string{"EULER_SECRET_ACCESS_KEY", "EULER_SECRET_KEY", "EULER_SK"}
+)
+
+// CredentialsFromEnv returns the access key pair from the environment. AK and
+// SK are each the first non-empty variable of their list (resolved
+// independently, as the Python SDK does); "" when none is set.
+func CredentialsFromEnv() (ak, sk string) {
+	return firstEnv(envAccessKeyNames), firstEnv(envSecretKeyNames)
+}
+
+func firstEnv(names []string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// New constructs a Client. AK, SK, and Region are required; an AK or SK left
+// empty falls back to the environment (CredentialsFromEnv), and one still
+// missing is a programmer error surfaced at the first call as a cps1 error.
 func New(cfg Config) *Client {
+	if cfg.AK == "" || cfg.SK == "" {
+		envAK, envSK := CredentialsFromEnv()
+		if cfg.AK == "" {
+			cfg.AK = envAK
+		}
+		if cfg.SK == "" {
+			cfg.SK = envSK
+		}
+	}
 	hc := cfg.HTTPClient
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
@@ -94,9 +136,11 @@ type ApiRequest struct {
 	ProductCode string
 
 	Method string // GET/POST/PUT/DELETE; default GET
-	Path   string // raw path; default "/"
-	Query  url.Values
-	Body   []byte
+	// Path is the DECODED path ("/buckets/my bucket"), default "/". It is
+	// signed as given and sent escaped exactly once; do not pre-escape it.
+	Path  string
+	Query url.Values
+	Body  []byte
 
 	// ExtraHeaders are additional request headers that are NOT part of the CPS1
 	// signature (only host + x-cps-* are signed; 07§4.1). Use for content-type,
@@ -122,7 +166,7 @@ func (c *Client) Call(req ApiRequest) (*ApiResponse, error) {
 	}
 	creds := cps1.Credentials{AK: c.cfg.AK, SK: c.cfg.SK, SecurityToken: c.cfg.SecurityToken}
 
-	host := c.hostFor(req.ProductCode)
+	host, pathPrefix := c.hostAndPrefix(req.ProductCode)
 	service := c.cfg.Service
 	if service == "" {
 		service = serviceNamespace(req.ProductCode)
@@ -133,6 +177,15 @@ func (c *Client) Call(req ApiRequest) (*ApiResponse, error) {
 	}
 	if req.Path == "" {
 		req.Path = "/"
+	}
+	// An Endpoint path prefix is part of the path the gateway sees, so it is
+	// part of the signed path too (and of the URL urlFor builds from it).
+	if pathPrefix != "" {
+		if req.Path == "/" {
+			req.Path = pathPrefix
+		} else {
+			req.Path = pathPrefix + req.Path
+		}
 	}
 	if req.Query == nil {
 		req.Query = url.Values{}
@@ -193,30 +246,74 @@ func (c *Client) Call(req ApiRequest) (*ApiResponse, error) {
 // hostFor resolves the signing host: the configured Endpoint if set, else the
 // routing subdomain {product}.api.euler.emoera.com (04-middleware §3.2).
 func (c *Client) hostFor(productCode string) string {
-	if c.cfg.Endpoint != "" {
-		// Strip the scheme so the host header is bare, matching what cps1 signs.
-		h := c.cfg.Endpoint
-		h = strings.TrimPrefix(h, "https://")
-		h = strings.TrimPrefix(h, "http://")
-		if i := strings.Index(h, "/"); i >= 0 {
-			h = h[:i]
-		}
-		return h
+	host, _ := c.hostAndPrefix(productCode)
+	return host
+}
+
+// hostAndPrefix splits the configured Endpoint into the bare signing host and
+// its path prefix ("" when none; trailing slashes dropped), exactly as the
+// Python SDK's Client._host_and_prefix does: "https://gw.example.com/api/v1/"
+// is ("gw.example.com", "/api/v1"). Without an Endpoint the host is the
+// routing subdomain and there is no prefix.
+func (c *Client) hostAndPrefix(productCode string) (host, prefix string) {
+	if c.cfg.Endpoint == "" {
+		return productAPIHost(productCode), ""
 	}
-	return productAPIHost(productCode)
+	// Strip the scheme so the host header is bare, matching what cps1 signs.
+	h := c.cfg.Endpoint
+	h = strings.TrimPrefix(h, "https://")
+	h = strings.TrimPrefix(h, "http://")
+	if i := strings.Index(h, "/"); i >= 0 {
+		if rest := strings.TrimRight(h[i+1:], "/"); rest != "" {
+			prefix = "/" + rest
+		}
+		h = h[:i]
+	}
+	return h, prefix
 }
 
 // urlFor builds the full request URL, prefixing http(s):// onto the host.
+//
+// req.Path is the decoded path: that is what cps1 signs (golden vector
+// "path-with-encoding" signs "/buckets/my bucket/objects") and what the gateway
+// verifies after unescaping the wire path once. Appending it raw put "/a b" on
+// the wire, and a pre-escaped "/a%20b" was signed as its escaped text — either
+// way the gateway's decoded path differed from the signed one. The wire path
+// is therefore the signed path escaped once, segment by segment, with the same
+// strict RFC 3986 encoding as cps1's canonical URI (svc-api-meta's Explorer
+// sends its paths the same way).
 func (c *Client) urlFor(host string, req ApiRequest) string {
 	scheme := "https"
 	if c.cfg.Endpoint != "" && strings.HasPrefix(c.cfg.Endpoint, "http://") {
 		scheme = "http"
 	}
-	u := scheme + "://" + host + req.Path
+	u := scheme + "://" + host + escapePath(req.Path)
 	if len(req.Query) > 0 {
 		u += "?" + req.Query.Encode()
 	}
 	return u
+}
+
+// escapePath percent-encodes each "/"-separated segment of a decoded path:
+// only the RFC 3986 unreserved set [A-Za-z0-9-._~] passes through, everything
+// else becomes %XX (uppercase hex) — byte for byte what cps1's canonical URI
+// produces for the same path.
+func escapePath(path string) string {
+	segs := strings.Split(path, "/")
+	for i, seg := range segs {
+		var b strings.Builder
+		for j := 0; j < len(seg); j++ {
+			ch := seg[j]
+			if ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' ||
+				ch == '-' || ch == '.' || ch == '_' || ch == '~' {
+				b.WriteByte(ch)
+			} else {
+				fmt.Fprintf(&b, "%%%02X", ch)
+			}
+		}
+		segs[i] = b.String()
+	}
+	return strings.Join(segs, "/")
 }
 
 // newNonce returns a fresh anti-replay nonce per call (07§4.2 layer 2). cps1.Sign

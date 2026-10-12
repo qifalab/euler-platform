@@ -1,6 +1,9 @@
 package pricing
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func mustPanic(t *testing.T, name string, f func()) {
 	t.Helper()
@@ -89,5 +92,30 @@ func TestParseAmountOverflowBeforeWrap(t *testing.T) {
 	}
 	if a, err := ParseAmount("9223372036854.775807"); err != nil || int64(a) != 1<<63-1 {
 		t.Fatalf("max amount should parse: %v, %v", a, err)
+	}
+}
+
+// Vouchers with the SAME non-zero expiry are consumed in CouponID order, like
+// vouchers without an expiry: before the fix the tie fell back to input order,
+// so the same coupon set split differently depending on how the rows were read.
+func TestVoucherEqualExpiryTieBreaksOnCouponID(t *testing.T) {
+	exp := now.Add(72 * time.Hour)
+	a := Coupon{CouponID: "v-a", AccountID: 1, RemainValue: MustParseAmount("150"), ExpireAt: exp}
+	b := Coupon{CouponID: "v-b", AccountID: 1, RemainValue: MustParseAmount("150"), ExpireAt: exp}
+	e := Engine{}
+	for _, coupons := range [][]Coupon{{a, b}, {b, a}} {
+		res, err := e.Calculate(baseReq(), basicRules(), nil, coupons)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.AppliedCoupons) != 2 {
+			t.Fatalf("applied = %+v, want both vouchers", res.AppliedCoupons)
+		}
+		first, second := res.AppliedCoupons[0], res.AppliedCoupons[1]
+		if first.CouponID != "v-a" || first.Amount.String() != "150" ||
+			second.CouponID != "v-b" || second.Amount.String() != "30" {
+			t.Fatalf("input %s,%s: applied = %+v, want v-a 150 then v-b 30",
+				coupons[0].CouponID, coupons[1].CouponID, res.AppliedCoupons)
+		}
 	}
 }

@@ -71,6 +71,7 @@ func TestReservePackPurchaseIsPaidFor(t *testing.T) {
 func TestInvoiceVoidRequiresReversalID(t *testing.T) {
 	a := newInMemoryApp()
 	const acct = int64(3001)
+	spend(t, a, acct, "100")
 	draft := doReq(t, a.handleInvoices, http.MethodPost, "/internal/invoices", acct, map[string]any{
 		"invoiceId": "inv-x", "billPeriod": "2026-08", "title": "t", "taxNo": "n",
 		"items": []map[string]string{{"description": "compute", "amount": "10"}},

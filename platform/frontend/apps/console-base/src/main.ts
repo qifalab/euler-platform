@@ -19,8 +19,10 @@ import { router } from "./router";
 import { i18n } from "./i18n";
 import { useRegistry, type RegistryApp } from "./registry";
 import { useAuthStore } from "./stores/auth";
+import { useSDK } from "./sdk";
 import { setupSubApp } from "./wujie-setup";
 import { preloadApp } from "wujie";
+import { setCatalogClient } from "@eu/console-kit";
 
 async function bootstrap() {
   const app = createApp(App);
@@ -29,16 +31,21 @@ async function bootstrap() {
   app.use(ElementPlus);
   app.use(i18n);
 
+  // The shell is not inside the Wujie sandbox, so console-kit's catalogue
+  // metadata (the top-bar RegionSelector) must use the shell's auth-wired SDK.
+  setCatalogClient(useSDK());
+
+  // Establish the login state first: the registry endpoint is JWT-protected,
+  // and registering sub-apps pre-auth would let a pre-executed sub-app fire
+  // its first requests with no token at all (shared props carry a live
+  // getToken()). silentRefresh is single-flight with the router guard's.
+  const auth = useAuthStore();
+  if (!auth.accessToken) await auth.silentRefresh();
+
   // Fetch the sub-app registry (runtime → fallback) before mounting, so the
   // router guard can resolve productCode → sub-app on first navigation.
   const registry = useRegistry();
   await registry.load();
-
-  // Establish the login state BEFORE registering sub-apps: shared props carry
-  // a live getToken(), but registering pre-auth would let a pre-executed
-  // sub-app fire its first requests with no token at all.
-  const auth = useAuthStore();
-  if (!auth.accessToken) await auth.silentRefresh();
 
   // Pre-register every sub-app with Wujie: setupApp wires the sandbox, shared
   // props, and keep-alive. Actual fetch/mount happens on first navigation.

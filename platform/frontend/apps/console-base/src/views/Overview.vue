@@ -8,6 +8,7 @@ import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useSDK, type OverviewData, type ResourceItem } from "../sdk";
 import { PriceText } from "@eu/ui";
+import { attributesOf, resourceDisplayName } from "@eu/console-kit";
 
 const router = useRouter();
 const sdk = useSDK();
@@ -67,13 +68,13 @@ const PRODUCT_LABEL: Record<string, string> = {
       <h2 class="overview-section">全部资源</h2>
       <table class="overview-table" v-if="resources.length">
         <thead>
-          <tr><th>资源 ID</th><th>产品</th><th>地域</th><th>规格</th><th>计费</th><th>状态</th></tr>
+          <tr><th>资源名称/ID</th><th>产品</th><th>地域/可用区</th><th>规格</th><th>计费</th><th>状态</th></tr>
         </thead>
         <tbody>
           <tr v-for="r in resources" :key="r.ResourceId">
-            <td>{{ r.ResourceId }}</td>
+            <td>{{ resourceDisplayName(r.ResourceId, attributesOf(r).name) }}</td>
             <td>{{ PRODUCT_LABEL[r.ProductCode] ?? r.ProductCode }}</td>
-            <td>{{ r.Region }}</td>
+            <td>{{ r.Zone ? `${r.Region} / ${r.Zone}` : r.Region }}</td>
             <td>{{ r.SpecCode }}</td>
             <td>{{ r.ChargeType }}</td>
             <td>{{ r.State }}</td>

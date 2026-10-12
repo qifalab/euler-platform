@@ -19,12 +19,11 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@eu/sdk";
-import { useCatalogMeta } from "@eu/console-kit";
+import { yuanToMinor } from "@eu/sdk";
+import { useCatalogMeta, useOrderCheckout, fulfilledMessage } from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
-const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
@@ -71,7 +70,10 @@ function parseSpec(json: string): SkuSpec {
 onMounted(async () => {
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=eueci");
-    skus.value = res.data ?? [];
+    // Only on-sale POSTPAID SKUs: EUECI is postpaid-only, and the quote
+    // rejects an off-sale SKU (Catalog.NotOnSale) or a chargeType other than
+    // the SKU's own (Catalog.ChargeTypeMismatch).
+    skus.value = (res.data ?? []).filter((s) => s.status === "1" && s.chargeType === "POSTPAID");
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
       form.value.cpu = specs.value[0].cpu;
@@ -135,6 +137,9 @@ onUnmounted(() => {
 async function refreshQuote() {
   const specCode = form.value.spec;
   if (!specCode) { quote.value = null; return; }
+  // ZONAL: the quote needs the AZ — wait for the zone default instead of
+  // firing a request that can only 400 (Catalog.ZoneRequired).
+  if (!form.value.zone && (placement.value?.zoneRequired ?? true)) { quote.value = null; return; }
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
@@ -166,60 +171,54 @@ watch(
 function next() { if (active.value < 2) active.value++; }
 function prev() { if (active.value > 0) active.value--; }
 
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one.
+const { submitting, pending, checkout, resume } = useOrderCheckout({
+  sdk,
+  onFulfilled: (res) => {
+    ElMessage.success(fulfilledMessage("容器实例", res));
+    router.push("/instances");
+  },
+});
+
 async function submit() {
   const specCode = form.value.spec;
   if (!specCode) { ElMessage.error("请选择实例规格"); active.value = 0; return; }
   if (!form.value.image) { ElMessage.warning("请填写容器镜像"); active.value = 1; return; }
-  submitting.value = true;
-  try {
-    // 1) Quote — the authoritative per-second payable comes from the pricing engine.
-    const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "eueci", specCode,
-      chargeType: "POSTPAID", quantity: 1,
-      regionId: form.value.region, zoneId: form.value.zone,
-    });
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo. ECI is
-    // postpaid, so the initial amount is the per-second price annualised to one
-    // hour (×3600), in 分; actual billing accrues per-second from metering,
-    // settled hourly.
-    const amountMinor = Math.max(1, yuanToMinor(Number(q.data.payableAmount) * 3600));
-    const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
-      "/api/v1/orders",
-      {
+  await checkout(
+    async () => {
+      // 1) Quote — the authoritative payable comes from the pricing engine.
+      const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
+        productCode: "eueci", specCode,
+        chargeType: "POSTPAID", quantity: 1,
+        regionId: form.value.region, zoneId: form.value.zone,
+      });
+      // ECI is postpaid per second: the initial amount is the per-second price
+      // annualised to one hour (×3600), in 分; actual billing accrues
+      // per-second from metering, settled hourly.
+      const amountMinor = Math.max(1, yuanToMinor(Number(q.data.payableAmount) * 3600));
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>("/api/v1/orders", {
         type: "NEW", productCode: "eueci", skuCode: specCode,
+        chargeType: "POSTPAID", zoneId: form.value.zone,
         regionId: form.value.region, quantity: 1,
         duration: 1, amountMinor,
-      },
-    );
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
-      paymentId: `pay-${created.data.orderId}`,
-      paidAmountMinor: amountMinor,
-    });
-
-    // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-    // resource CREATING→RUNNING) and returns the new resource id. The
-    // productCode=eueci routes it to the DriverK8s binding.
-    const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-      "/api/v1/orchestrator/fulfill",
-      {
-        orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "eueci", region: form.value.region,
-        specCode, chargeType: "POSTPAID",
-        zone: form.value.zone, image: form.value.image,
-        command: form.value.command,
-        cpu: form.value.cpu, memoryGb: form.value.memory,
-      },
-    );
-    ElMessage.success(`容器实例已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-    router.push("/instances");
-  } catch (e) {
-    ElMessage.error((e as Error).message || "创建失败");
-  } finally {
-    submitting.value = false;
-  }
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil run in the composable (saga: order PAID→FULFILLING→
+    // COMPLETED, resource CREATING→RUNNING; productCode=eueci routes it to the
+    // DriverK8s binding). The body is captured now so a retry repeats exactly
+    // what was ordered.
+    {
+      productCode: "eueci", region: form.value.region,
+      specCode, chargeType: "POSTPAID",
+      zone: form.value.zone, image: form.value.image,
+      command: form.value.command,
+      cpu: form.value.cpu, memoryGb: form.value.memory,
+    },
+  );
 }
 </script>
 
@@ -268,7 +267,8 @@ async function submit() {
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 2" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 2" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="active === 2 && !pending" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pending" type="warning" :loading="submitting" @click="resume">{{ pending.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pending.orderNo }})</ElButton>
         </div>
       </div>
 

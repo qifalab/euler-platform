@@ -1,10 +1,10 @@
 // Package provider wires the platform OpenAPI surface into Terraform.
 //
 // The provider is thin by design: its only job is to take provider config
-// (endpoint + AK/SK from env) into an *eusdk.Client, and to declare the product
-// resources. All product logic is "call the signed OpenAPI action" — the same
-// shape the console BFF and the SDKs use. There is deliberately no provider
-// secret-handling or retry logic beyond what eusdk already provides.
+// (endpoint + region, AK/SK from env) into a signed client (pkg-go/eusdk), and
+// to declare the product resources. All product logic is "call the signed
+// OpenAPI Action" against the svc-openapi facade — the same shape the console
+// BFF and the SDKs use. There is deliberately no provider secret handling.
 package provider
 
 import (
@@ -31,8 +31,35 @@ type euProviderModel struct {
 	Endpoint types.String `tfsdk:"endpoint"`
 	Region   types.String `tfsdk:"region"`
 	// AK/SK are NOT configurable in HCL — they come from the environment
-	// (EULER_ACCESS_KEY / EULER_SECRET_KEY), matching the SDK convention. Secrets in
-	// HCL state would leak them; env vars keep them out of the plan file.
+	// (EULER_ACCESS_KEY_ID / EULER_SECRET_ACCESS_KEY, or EULER_ACCESS_KEY /
+	// EULER_SECRET_KEY, or EULER_AK / EULER_SK; see credentialsFromEnv).
+	// Secrets in HCL state would leak them; env vars keep them out of the plan
+	// file.
+}
+
+// Credential environment variables, in precedence order. The platform's tools
+// grew three spellings (the SDKs' EULER_ACCESS_KEY_ID, this provider's
+// EULER_ACCESS_KEY, the short form used by svc-iam's e2e tool), so each is
+// accepted and a user can export one pair for all of them. The names and their
+// order are the ones eusdk and the Python SDK (cloudsdk ENV_*_ALIASES) use, so
+// a shell exporting more than one spelling resolves to the same key everywhere.
+var (
+	envAccessKeyNames = []string{"EULER_ACCESS_KEY_ID", "EULER_ACCESS_KEY", "EULER_AK"}
+	envSecretKeyNames = []string{"EULER_SECRET_ACCESS_KEY", "EULER_SECRET_KEY", "EULER_SK"}
+)
+
+// credentialsFromEnv returns the first non-empty AK and SK from the accepted
+// environment variable names.
+func credentialsFromEnv(getenv func(string) string) (ak, sk string) {
+	first := func(names []string) string {
+		for _, name := range names {
+			if v := getenv(name); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	return first(envAccessKeyNames), first(envSecretKeyNames)
 }
 
 // Metadata names the provider.
@@ -45,12 +72,13 @@ func (p *euProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
-				Optional:    true,
-				Description: "OpenAPI endpoint. Defaults to the regional endpoint derived from region.",
+				Optional: true,
+				Description: "OpenAPI endpoint override (scheme://host[:port][/prefix]) used for every product. " +
+					"Defaults to the product API hosts {product}.api.euler.emoera.com.",
 			},
 			"region": schema.StringAttribute{
 				Optional:    true,
-				Description: "Default region for resources (cn-north-1).",
+				Description: "Signing region and the default region of resources (cn-north-1).",
 			},
 		},
 	}
@@ -64,12 +92,11 @@ func (p *euProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		return
 	}
 
-	ak := os.Getenv("EULER_ACCESS_KEY")
-	sk := os.Getenv("EULER_SECRET_KEY")
+	ak, sk := credentialsFromEnv(os.Getenv)
 	if ak == "" || sk == "" {
 		resp.Diagnostics.AddError(
 			"Missing credentials",
-			"EULER_ACCESS_KEY and EULER_SECRET_KEY must be set in the environment (the provider never stores secrets in state).",
+			"EULER_ACCESS_KEY_ID and EULER_SECRET_ACCESS_KEY (or EULER_ACCESS_KEY/EULER_SECRET_KEY, or EULER_AK/EULER_SK) must be set in the environment (the provider never stores secrets in state).",
 		)
 		return
 	}
@@ -79,7 +106,7 @@ func (p *euProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		region = cfg.Region.ValueString()
 	}
 
-	client := eusdk.New(eusdk.Config{
+	client := newAPIClient(eusdk.Config{
 		AK:       ak,
 		SK:       sk,
 		Endpoint: cfg.Endpoint.ValueString(),
@@ -89,8 +116,8 @@ func (p *euProvider) Configure(ctx context.Context, req provider.ConfigureReques
 	resp.ResourceData = client
 }
 
-// DataSources declares the provider's data sources (phase-3 MVP: none yet —
-// the acceptance criterion is resource coverage; data sources are additive).
+// DataSources declares the provider's data sources (none yet — the acceptance
+// criterion is resource coverage; data sources are additive).
 func (p *euProvider) DataSources(_ context.Context) []func() datasource.DataSource { return nil }
 
 // Resources declares the product resources (C3: 覆盖核心产品).
@@ -100,5 +127,7 @@ func (p *euProvider) Resources(_ context.Context) []func() resource.Resource {
 		NewScossResource,
 		NewScvpcResource,
 		NewScrdsResource,
+		NewScbsResource,
+		NewSceipResource,
 	}
 }

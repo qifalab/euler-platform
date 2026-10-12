@@ -38,14 +38,7 @@ func mfaMux() http.Handler {
 // seedMFAAccount provisions a fresh account and returns its bearer token.
 func seedMFAAccount(t *testing.T, id int64, email string) string {
 	t.Helper()
-	seedAccount(id, email, "MFA测试账号", mfaPass)
-	mu.RLock()
-	a := byID[id]
-	mu.RUnlock()
-	if a.AccountID == 0 {
-		t.Fatalf("account %d not seeded", id)
-	}
-	return issueAccessToken(a, time.Now())
+	return issueAccessToken(mustSeed(t, id, email, "MFA测试账号", mfaPass), time.Now())
 }
 
 func mfaDo(t *testing.T, method, path, bearer string, body any) (int, map[string]any, *httptest.ResponseRecorder) {
@@ -100,10 +93,7 @@ func activateMFA(t *testing.T, bearer string) []byte {
 	if code != 200 {
 		t.Fatalf("activation failed: %d %v", code, out)
 	}
-	mu.RLock()
-	a := byID[accountIDOfBearer(bearer)]
-	mu.RUnlock()
-	totpVerifier.Forget(mfaReplayKey(a.AccountID))
+	totpVerifier.Forget(mfaReplayKey(accountIDOfBearer(bearer)))
 	return seed
 }
 

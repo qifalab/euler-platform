@@ -20,6 +20,7 @@
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElTabs, ElTabPane, ElDescriptions, ElDescriptionsItem, ElButton, ElTag, ElEmpty, ElMessage, ElMessageBox, ElDialog, ElRadioGroup, ElRadio } from "element-plus";
+import { formatTime, navigateShell, canRunAction } from "@eu/console-kit";
 import { sdk } from "../sdk";
 
 interface ResourceDetail {
@@ -30,6 +31,8 @@ interface ResourceDetail {
   state: string;      // RUNNING | STOPPED | CREATING | ...
   specCode: string;
   billingStart: string;
+  /** Prepaid term end (RFC3339); "" for postpaid / not yet delivered. */
+  expiredAt?: string;
   createdAt: string;
   version: number;
 }
@@ -49,6 +52,12 @@ const acting = ref<"stop" | "start" | "restart" | "release" | null>(null);
 const state = computed(() => inst.value?.state ?? "");
 /** 仅 RUNNING/STOPPED 可操作;CREATING/RELEASING 等过渡态全部禁用。 */
 const operable = computed(() => state.value === "RUNNING" || state.value === "STOPPED");
+/**
+ * 释放另外放开 CREATE_FAILED(开通失败)/ LOCKED(欠费锁定)/ EXPIRED(已到期):
+ * 这些终局状态只能由客户释放清理(svc-orchestrator release 接受这些状态)。
+ */
+const releasable = computed(() => canRunAction("release", state.value));
+const releaseReason: Record<string, string> = { CREATE_FAILED: "开通失败,", LOCKED: "已因欠费锁定,", EXPIRED: "已到期," };
 
 async function fetchDetail() {
   if (!id.value) return;
@@ -73,10 +82,9 @@ onMounted(async () => {
   loading.value = false;
 });
 
-function fmt(s: string): string {
-  if (!s) return "—";
-  return s.replace("T", " ").replace(/\+.*$/, "");
-}
+// RFC3339 → viewer-local time; "—" for unset ("" / zero-year) values. The old
+// textual strip showed UTC wall-clock (with a stray "Z") as if it were local.
+const fmt = formatTime;
 const chargeLabel = computed(() => inst.value?.chargeType === "PREPAID" ? "包年包月" : inst.value?.chargeType === "POSTPAID" ? "按量付费" : "—");
 
 /** 后端错误体 message 透出;SDK 兜底文案时退回错误码。 */
@@ -118,8 +126,11 @@ async function runAction(action: "stop" | "start" | "restart") {
 
 async function releaseInstance() {
   try {
+    const reason = releaseReason[state.value];
     await ElMessageBox.confirm(
-      `释放后实例 ${id.value} 及其数据不可恢复,确定释放吗?`,
+      reason
+        ? `该实例${reason}释放后 ${id.value} 及其数据不可恢复,确定释放吗?`
+        : `释放后实例 ${id.value} 及其数据不可恢复,确定释放吗?`,
       "危险操作",
       { type: "warning", confirmButtonText: "确定释放", cancelButtonText: "取消" },
     );
@@ -152,27 +163,45 @@ interface UpgradeSku { skuCode: string; cpu: number; memGb: number; label: strin
 const upgradeVisible = ref(false);
 const skuLoading = ref(false);
 const upgrading = ref(false);
-const upgradeSkus = ref<UpgradeSku[]>([]);
+const catalogSkus = ref<Sku[]>([]);
 const targetSpec = ref("");
 
+/**
+ * 包年包月实例不能直接变配:订单按原规格付了整个周期,orchestrator 对
+ * PREPAID 的 upgrade 一律 409(需走变配订单补差价,尚未接入)。
+ */
+const upgradeBlocked = computed(() => inst.value?.chargeType === "PREPAID");
+
+/**
+ * 可选目标规格:在售、与实例同计费方式(orchestrator 拒绝跨计费方式的 SKU),
+ * 且不是当前规格。按当前实例实时过滤,变配后列表随之更新。
+ */
+const upgradeSkus = computed<UpgradeSku[]>(() =>
+  catalogSkus.value
+    .filter((s) => s.status === "1" && s.chargeType === inst.value?.chargeType && s.skuCode !== inst.value?.specCode)
+    .map((s) => {
+      let cpu = 0, memGb = 0;
+      try {
+        const p = JSON.parse(s.specJson) as Partial<{ cpu: number; mem_gb: number }>;
+        cpu = p.cpu ?? 0; memGb = p.mem_gb ?? 0;
+      } catch { /* 解析失败按 0 排序置底 */ }
+      return { skuCode: s.skuCode, cpu, memGb, label: `${cpu} 核 ${memGb} GiB` };
+    })
+    .sort((a, b) => a.cpu - b.cpu || a.memGb - b.memGb),
+);
+
 async function openUpgrade() {
+  if (upgradeBlocked.value) {
+    ElMessage.warning("包年包月实例暂不支持直接变配,请通过变配订单办理");
+    return;
+  }
   upgradeVisible.value = true;
   targetSpec.value = "";
-  if (upgradeSkus.value.length) return; // 已加载过,复用
+  if (catalogSkus.value.length) return; // 已加载过,复用
   skuLoading.value = true;
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euecs");
-    upgradeSkus.value = (res.data ?? [])
-      .filter((s) => s.status === "1" && s.skuCode !== inst.value?.specCode)
-      .map((s) => {
-        let cpu = 0, memGb = 0;
-        try {
-          const p = JSON.parse(s.specJson) as Partial<{ cpu: number; mem_gb: number }>;
-          cpu = p.cpu ?? 0; memGb = p.mem_gb ?? 0;
-        } catch { /* 解析失败按 0 排序置底 */ }
-        return { skuCode: s.skuCode, cpu, memGb, label: `${cpu} 核 ${memGb} GiB` };
-      })
-      .sort((a, b) => a.cpu - b.cpu || a.memGb - b.memGb);
+    catalogSkus.value = res.data ?? [];
   } catch (e) {
     ElMessage.error(`加载规格目录失败:${errMsg(e)}`);
   } finally {
@@ -199,9 +228,12 @@ async function confirmUpgrade() {
 
 // --- 续费:无"立即续费"端点,跳费用中心(web-billing)办理 ---
 // registry fallback 里 web-billing 的 activeRules 仅 ["/billing"](无 renew
-// 子路径),按子应用跨 app 跳转的既有模式(hash)跳主路由。
+// 子路径)。本子应用是 history 路由,改 location.hash 只会改自己的片段、
+// 主应用无感知(死链);费用中心是主应用一级路由,需导航主应用窗口。
 function goRenew() {
-  location.hash = "#/billing";
+  if (!navigateShell("/billing")) {
+    ElMessage.info("请在控制台「费用中心」办理续费");
+  }
 }
 </script>
 
@@ -219,9 +251,14 @@ function goRenew() {
         <ElButton v-if="state === 'RUNNING'" size="small" :loading="acting === 'stop'" :disabled="acting !== null" @click="runAction('stop')">停止</ElButton>
         <ElButton v-if="state === 'STOPPED'" size="small" type="primary" :loading="acting === 'start'" :disabled="acting !== null" @click="runAction('start')">启动</ElButton>
         <ElButton v-if="state === 'RUNNING'" size="small" :loading="acting === 'restart'" :disabled="acting !== null" @click="runAction('restart')">重启</ElButton>
-        <ElButton size="small" :disabled="!operable || acting !== null" @click="openUpgrade">变配</ElButton>
+        <ElButton
+          size="small"
+          :disabled="!operable || acting !== null || upgradeBlocked"
+          :title="upgradeBlocked ? '包年包月实例暂不支持直接变配' : undefined"
+          @click="openUpgrade"
+        >变配</ElButton>
         <ElButton size="small" type="primary" :disabled="!operable || acting !== null" @click="goRenew">续费</ElButton>
-        <ElButton size="small" type="danger" :loading="acting === 'release'" :disabled="!operable || acting !== null" @click="releaseInstance">释放</ElButton>
+        <ElButton size="small" type="danger" :loading="acting === 'release'" :disabled="!releasable || acting !== null" @click="releaseInstance">释放</ElButton>
       </div>
     </header>
 
@@ -238,6 +275,7 @@ function goRenew() {
           <ElDescriptionsItem label="产品">{{ inst.productCode }}</ElDescriptionsItem>
           <ElDescriptionsItem label="地域">{{ inst.region }}</ElDescriptionsItem>
           <ElDescriptionsItem label="计费起始">{{ fmt(inst.billingStart) }}</ElDescriptionsItem>
+          <ElDescriptionsItem v-if="inst.chargeType === 'PREPAID'" label="到期时间">{{ fmt(inst.expiredAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="创建时间">{{ fmt(inst.createdAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="资源版本">{{ inst.version }}</ElDescriptionsItem>
         </ElDescriptions>

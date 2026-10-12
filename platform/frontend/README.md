@@ -161,12 +161,15 @@ Go vet/test × 7 services, `pnpm typecheck`/`build` × 4 apps, vitest 34/34 gree
 
 ```sh
 # All on stdlib HTTP, in-memory stores seeded with account 100123.
+# Demo credentials (admin@euler.emoera.com / euler123, the marketplace demo
+# operator) are only created with EULER_DEV_SEED=1, never in production.
+export EULER_DEV_SEED=1
 cd services/console-bff     && go run ./cmd/server -http :9200   # BFF aggregation
 cd services/svc-iam         && go run ./cmd/web-auth -http :9101  # SSO + register + realname + RAM/AK/profile
 cd services/svc-api-meta    && go run ./cmd/server -http :9201   # sub-app registry
 cd services/svc-orchestrator&& go run ./cmd/server -http :9203   # fulfilment saga (开通)
 cd services/svc-order       && go run ./cmd/server -http :9204   # orders (下单)
-cd services/svc-payment     && go run ./cmd/server -http :9205   # balance/recharge (充值)
+cd services/svc-payment     && go run ./cmd/server -http :9205   # balance/recharge (充值; recharge needs EULER_PAYMENT_CHANNEL_SECRET + a channel signature)
 cd services/svc-metering    && go run ./cmd/server -http :9206   # usage aggregation (计量)
 cd services/svc-catalog     && go run ./cmd/server -http :9207   # pricing (询价)
 cd services/svc-quota       && go run ./cmd/server -http :9208   # two-phase quota

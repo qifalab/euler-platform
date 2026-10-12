@@ -4,6 +4,11 @@
 //  3. sub-app loads via Wujie cross-origin
 import { defineConfig } from "@playwright/test";
 
+// Playwright's own downloaded Chromium is used by default. To run against a
+// specific browser binary, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH (never a
+// machine-specific path in the repo).
+const chromiumExecutable = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
@@ -18,9 +23,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         browserName: "chromium",
-        launchOptions: {
-          executablePath: "C:/Users/wjy13/AppData/Local/ms-playwright/chromium-1223/chrome-win64/chrome.exe",
-        },
+        launchOptions: chromiumExecutable ? { executablePath: chromiumExecutable } : {},
       },
     },
   ],

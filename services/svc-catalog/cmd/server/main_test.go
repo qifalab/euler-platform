@@ -229,6 +229,10 @@ func TestQuoteZonalAcceptsValidZone(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("zonal quote with valid zone: code %d body %v", code, out)
 	}
+	// svc-order enforces placement from the scope the quote reports.
+	if data, _ := out["Data"].(map[string]any); data["regionScope"] != "ZONAL" {
+		t.Errorf("quote regionScope = %v, want ZONAL (data %v)", data["regionScope"], data)
+	}
 }
 
 func TestQuoteZonalRejectsBadZoneShape(t *testing.T) {
@@ -274,6 +278,9 @@ func TestQuoteRegionalIgnoresZone(t *testing.T) {
 	})
 	if code != 200 {
 		t.Fatalf("regional quote without zone: code %d body %v", code, out)
+	}
+	if data, _ := out["Data"].(map[string]any); data["regionScope"] != "REGIONAL" {
+		t.Errorf("quote regionScope = %v, want REGIONAL (data %v)", data["regionScope"], data)
 	}
 }
 

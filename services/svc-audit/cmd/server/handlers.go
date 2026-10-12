@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/qifalab/euler-platform/audit"
+	"github.com/qifalab/euler-platform/httpmw"
 )
 
 // accountHeader is injected by the APISIX gateway for authenticated calls
@@ -35,20 +36,29 @@ type auditStore struct {
 	events map[int64][]audit.Event
 	// checkpoints persists the chain head (nil = in-memory only).
 	checkpoints checkpointRepo
+	// bases records, per resumed chain, the checkpoint it resumed from: the
+	// hot trail this process holds starts AFTER that point, so /verify checks
+	// it from the checkpointed head, not from genesis. Absent = genesis.
+	bases map[int64]checkpoint
 }
 
 func newAuditStore() *auditStore {
 	return &auditStore{
 		chains: make(map[int64]*audit.Chain),
 		events: make(map[int64][]audit.Event),
+		bases:  make(map[int64]checkpoint),
 	}
 }
 
 // newAuditStoreWith wires a checkpoint repo and resumes every persisted chain.
 // The event trail starts empty after a restart — the full history is
 // ClickHouse's to answer; the chain's continuity is what the checkpoint guards.
+// A nil repo is the in-memory mode (no EULER_DB_DSN): chains start at genesis.
 func newAuditStoreWith(ctx context.Context, repo checkpointRepo) (*auditStore, error) {
 	s := newAuditStore()
+	if repo == nil {
+		return s, nil
+	}
 	s.checkpoints = repo
 	cps, err := repo.LoadAll(ctx)
 	if err != nil {
@@ -56,8 +66,24 @@ func newAuditStoreWith(ctx context.Context, repo checkpointRepo) (*auditStore, e
 	}
 	for _, cp := range cps {
 		s.chains[cp.AccountID] = audit.ResumeChain(cp.AccountID, cp.Head, cp.Sequence)
+		s.bases[cp.AccountID] = cp
 	}
 	return s, nil
+}
+
+// openAuditStore is main()'s constructor: the checkpoint backend picked from
+// the environment, then the store resumed from it. It reports whether the
+// store is persistent.
+func openAuditStore(ctx context.Context) (*auditStore, bool, error) {
+	repo, err := newCheckpointRepo(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	s, err := newAuditStoreWith(ctx, repo)
+	if err != nil {
+		return nil, false, err
+	}
+	return s, repo != nil, nil
 }
 
 func (s *auditStore) chainFor(accountID int64) *audit.Chain {
@@ -98,12 +124,12 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 	chain := s.chainFor(accountID)
 	seq := chain.Sequence() + 1
 	ev := audit.Event{
-		EventID:        audit.EventID(now, seq),
-		EventTime:      now,
-		EventSource:    body.EventSource,
-		EventName:      body.EventName,
-		SourceIP:       body.SourceIP,
-		UserAgent:      r.UserAgent(),
+		EventID:     audit.EventID(now, seq),
+		EventTime:   now,
+		EventSource: body.EventSource,
+		EventName:   body.EventName,
+		SourceIP:    body.SourceIP,
+		UserAgent:   r.UserAgent(),
 		Identity: audit.Identity{
 			Type:       body.IdentityType,
 			AccountID:  accountID,
@@ -116,7 +142,9 @@ func (s *auditStore) handleAppend(w http.ResponseWriter, r *http.Request) {
 		DecisionNumber: body.DecisionNumber,
 		RequestParams:  body.RequestParams,
 		ResponseCode:   body.ResponseCode,
-		TraceID:        r.Header.Get("X-Euler-TraceId"),
+		// The request id the middleware chain assigned (≡ trace_id). Nothing
+		// sends X-Euler-TraceId inbound — it is a RESPONSE header.
+		TraceID: httpmw.RequestIDFromContext(r.Context()),
 	}
 
 	recorded, err := chain.Append(ev)
@@ -166,9 +194,12 @@ func (s *auditStore) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	events := append([]audit.Event(nil), s.events[accountID]...)
+	base := s.bases[accountID]
 	s.mu.Unlock()
 
-	res := audit.Verify(events)
+	// A resumed chain's hot trail starts after its checkpoint: verify it from
+	// the checkpointed head (zero base = genesis, sequence 1).
+	res := audit.VerifyFrom(events, base.Head, base.Sequence+1)
 	if res.AccountID == 0 {
 		res.AccountID = accountID
 	}

@@ -8,6 +8,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElButton, ElMessage, ElSelect, ElOption } from "element-plus";
 import { useAccountAuth } from "../stores/auth";
+import { formatTime } from "../format";
 
 const auth = useAccountAuth();
 
@@ -31,23 +32,10 @@ const error = ref<string | null>(null);
 const nowMs = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | null = null;
 
-async function readEnvelope<T>(res: Response): Promise<T> {
-  const body = await res.json();
-  if (!res.ok || body.Code !== "OK") {
-    throw new Error(body.Message ?? `request failed (HTTP ${res.status})`);
-  }
-  return body.Data as T;
-}
-function authHeaders(): HeadersInit {
-  return auth.accessToken ? { Authorization: `Bearer ${auth.accessToken}` } : {};
-}
-
 async function fetchRoles() {
   if (!auth.isAuthenticated) { loadingRoles.value = false; return; }
   try {
-    const data = await readEnvelope<{ roles: RoleDto[] }>(
-      await fetch("/api/ram/roles", { headers: authHeaders() }),
-    );
+    const data = await auth.request<{ roles: RoleDto[] }>("/api/ram/roles");
     roles.value = data?.roles ?? [];
     if (roles.value.length && !role.value) role.value = roles.value[0].name;
   } catch (e) {
@@ -62,13 +50,10 @@ async function assumeRole() {
   assuming.value = true;
   cred.value = null;
   try {
-    const data = await readEnvelope<StsCredential>(
-      await fetch("/api/sts/assume-role", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ role: role.value }),
-      }),
-    );
+    const data = await auth.request<StsCredential>("/api/sts/assume-role", {
+      method: "POST",
+      body: JSON.stringify({ role: role.value }),
+    });
     cred.value = data;
     ElMessage.success("临时凭证已签发,SecretKey 仅本次显示");
   } catch (e) {
@@ -114,7 +99,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
           以当前账号身份扮演 RAM 角色,签发限时访问凭证(AK/SK/SecurityToken)。临时凭证默认 1 小时有效,
           适合临时授权与跨账号协作场景;SecretKey 仅在签发时显示一次。
         </p>
-        <p v-if="auth.user" class="sts-owner">当前账号:{{ auth.user.realName ?? auth.user.name }} (ID: {{ auth.user.id }})</p>
+        <p v-if="auth.user" class="sts-owner">当前账号:{{ auth.user.name }} (ID: {{ auth.user.id }})</p>
       </div>
     </div>
 
@@ -166,7 +151,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
       </div>
       <div class="sts-field">
         <div class="sts-field-label">过期时间</div>
-        <div class="sts-field-value"><code class="sts-code">{{ cred.expiresAt.replace("T", " ").slice(0, 19) }} UTC</code></div>
+        <div class="sts-field-value"><code class="sts-code">{{ formatTime(cred.expiresAt) }}</code></div>
       </div>
     </section>
   </div>

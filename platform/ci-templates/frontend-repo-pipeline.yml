@@ -83,8 +83,12 @@ build:apps:
     - corepack enable
     - pnpm --filter './apps/*' build
   artifacts:
+    # Vite apps build to dist/; docs-site (VitePress) to .vitepress/dist/;
+    # site (Nuxt) to .output/ — all of them feed publish:entries.
     paths:
       - apps/*/dist/
+      - apps/*/.vitepress/dist/
+      - apps/*/.output/
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
@@ -94,16 +98,37 @@ build:apps:
 # ---------------------------------------------------------------------------
 publish:entries:
   stage: publish
-  image: minio/mc:latest
+  # TODO(supply chain): pin this. minio/mc on Docker Hub now requires
+  # credentials, so no tag could be verified here — mirror a vetted release
+  # (RELEASE.YYYY-MM-DDThh-mm-ssZ) into harbor.internal and reference it by tag.
+  # The image's entrypoint is `mc`; reset it so the job script runs in sh.
+  image:
+    name: minio/mc:latest
+    entrypoint: [""]
   needs: ["build:apps"]
   script:
     - mc alias set euler "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
     # Shell → shell/<sha>/index.html (02§2.3)
     - mc cp --recursive apps/console-base/dist/ euler/static/shell/$CI_COMMIT_SHORT_SHA/
-    # Each sub-app → apps/<app>/<sha>/index.html
+    # Every other app under apps/ → apps/<app>/<sha>/index.html. The list is
+    # derived from the directory, not hand-kept (a hard-coded list silently
+    # skipped every app added after it was written), and any missing build or
+    # failed upload fails the job — a half-published release must not be
+    # promoted by the registry bump.
     - |
-      for app in console-ecs console-storage console-network console-database console-monitor web-account web-billing web-ticket site docs-site; do
-        mc cp --recursive apps/$app/dist/ euler/static/apps/$app/$CI_COMMIT_SHORT_SHA/ || true
+      set -e
+      for dir in apps/*/; do
+        app=$(basename "$dir")
+        [ "$app" = console-base ] && continue
+        out=""
+        for cand in dist .vitepress/dist .output/public; do
+          if [ -d "apps/$app/$cand" ]; then out="apps/$app/$cand"; break; fi
+        done
+        if [ -z "$out" ] || [ -z "$(ls -A "$out")" ]; then
+          echo "no build output for apps/$app (dist/, .vitepress/dist/ or .output/public/)" >&2
+          exit 1
+        fi
+        mc cp --recursive "$out/" "euler/static/apps/$app/$CI_COMMIT_SHORT_SHA/"
       done
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

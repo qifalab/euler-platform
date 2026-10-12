@@ -1,0 +1,10 @@
+# Helm chart for svc-openapi — the OpenAPI facade of the phase-1 products
+# ({product}.api.euler.emoera.com, 04§3.2; 08-devops §4.3).
+# Syncs with ArgoCD sync-wave 10 (business services apply after middleware/gateway).
+
+apiVersion: v2
+name: svc-openapi
+description: svc-openapi OpenAPI facade deployment chart
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

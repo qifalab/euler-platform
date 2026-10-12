@@ -28,12 +28,151 @@ package kms
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 )
+
+// MasterKeyEnv / MasterKeyVersionEnv configure the master key from the
+// environment (a mounted Secret in Kubernetes). The env value is a base64
+// 32-byte root secret; each Purpose gets its own key derived with HKDF-SHA256,
+// so one leaked purpose key does not expose the others.
+//
+// MasterKeyPreviousEnv carries the retired root secrets during a rotation:
+// comma-separated "version:base64root" entries (e.g. "1:AAAA...,2:BBBB...").
+// They are registered for DECRYPTION only — every version must be lower than
+// the current one, so new ciphertexts are always sealed under the current
+// key while data sealed under an older version still opens until the
+// re-encryption job has rewritten it.
+const (
+	MasterKeyEnv         = "EULER_KMS_MASTER_KEY"
+	MasterKeyVersionEnv  = "EULER_KMS_MASTER_KEY_VERSION"
+	MasterKeyPreviousEnv = "EULER_KMS_MASTER_KEY_PREVIOUS"
+)
+
+// LoadMasterKeyFromEnv installs the purpose key derived from
+// EULER_KMS_MASTER_KEY (version EULER_KMS_MASTER_KEY_VERSION, default 1).
+// configured is false when the variable is unset, so the caller can decide
+// whether an ephemeral key is acceptable — it is NOT when ciphertexts outlive
+// the process (anything persisted), because a per-process random key makes
+// every stored secret undecryptable after a restart and differs per replica.
+//
+// The retired versions listed in EULER_KMS_MASTER_KEY_PREVIOUS are installed
+// alongside (decrypt-only, see MasterKeyPreviousEnv). The whole configuration
+// is validated before anything is registered: a malformed entry, a duplicate
+// version, a previous version that is not lower than the current one, or a
+// previous list without a current key is an error, never a partial load.
+func (k *KMS) LoadMasterKeyFromEnv(p Purpose) (configured bool, err error) {
+	raw := strings.TrimSpace(os.Getenv(MasterKeyEnv))
+	previousRaw := strings.TrimSpace(os.Getenv(MasterKeyPreviousEnv))
+	if raw == "" {
+		if previousRaw != "" {
+			return true, fmt.Errorf("kms: %s is set without %s: retired keys only decrypt, a current key is required", MasterKeyPreviousEnv, MasterKeyEnv)
+		}
+		return false, nil
+	}
+	root, err := decodeRootKey(MasterKeyEnv, raw)
+	if err != nil {
+		return true, err
+	}
+	version := 1
+	if v := strings.TrimSpace(os.Getenv(MasterKeyVersionEnv)); v != "" {
+		version, err = strconv.Atoi(v)
+		if err != nil || version < 1 {
+			return true, fmt.Errorf("kms: %s must be a positive integer", MasterKeyVersionEnv)
+		}
+	}
+	previous, err := parsePreviousKeys(previousRaw, version)
+	if err != nil {
+		return true, err
+	}
+	key, err := derivePurposeKey(root, p)
+	if err != nil {
+		return true, err
+	}
+	derived := make(map[int][]byte, len(previous))
+	for v, r := range previous {
+		if derived[v], err = derivePurposeKey(r, p); err != nil {
+			return true, err
+		}
+	}
+	// Validate against what is already registered before adding anything.
+	k.mu.RLock()
+	for _, mk := range k.masters[p] {
+		if _, dup := derived[mk.version]; dup || mk.version == version {
+			k.mu.RUnlock()
+			return true, fmt.Errorf("kms: %s master key version %d is already registered", p, mk.version)
+		}
+	}
+	k.mu.RUnlock()
+	if err := k.AddMasterKey(p, version, key); err != nil {
+		return true, err
+	}
+	for v, dk := range derived {
+		if err := k.AddMasterKey(p, v, dk); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+// decodeRootKey decodes one base64 root secret (at least 32 bytes).
+func decodeRootKey(name, raw string) ([]byte, error) {
+	root, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("kms: %s is not base64: %w", name, err)
+	}
+	if len(root) < 32 {
+		return nil, fmt.Errorf("kms: %s must decode to at least 32 bytes, got %d", name, len(root))
+	}
+	return root, nil
+}
+
+// parsePreviousKeys parses EULER_KMS_MASTER_KEY_PREVIOUS ("v:base64,v:base64")
+// into version → root secret. Every version must be a positive integer below
+// current and appear once; an empty list yields an empty map.
+func parsePreviousKeys(raw string, current int) (map[int][]byte, error) {
+	out := map[int][]byte{}
+	if raw == "" {
+		return out, nil
+	}
+	for i, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		vs, b64, ok := strings.Cut(entry, ":")
+		if !ok || strings.TrimSpace(b64) == "" {
+			return nil, fmt.Errorf("kms: %s entry %d is not \"version:base64key\"", MasterKeyPreviousEnv, i+1)
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(vs))
+		if err != nil || v < 1 {
+			return nil, fmt.Errorf("kms: %s entry %d: version must be a positive integer", MasterKeyPreviousEnv, i+1)
+		}
+		if v >= current {
+			return nil, fmt.Errorf("kms: %s entry %d: version %d must be lower than the current version %d", MasterKeyPreviousEnv, i+1, v, current)
+		}
+		if _, dup := out[v]; dup {
+			return nil, fmt.Errorf("kms: %s: version %d is listed twice", MasterKeyPreviousEnv, v)
+		}
+		root, err := decodeRootKey(fmt.Sprintf("%s entry %d", MasterKeyPreviousEnv, i+1), strings.TrimSpace(b64))
+		if err != nil {
+			return nil, err
+		}
+		out[v] = root
+	}
+	return out, nil
+}
+
+// derivePurposeKey derives the 32-byte purpose key from a root secret.
+func derivePurposeKey(root []byte, p Purpose) ([]byte, error) {
+	return hkdf.Key(sha256.New, root, nil, "euler-kms:"+string(p), 32)
+}
 
 // Purpose identifies a MasterKey by its use. Separating purposes limits the
 // blast radius of any single key compromise (07§5.3).
@@ -51,10 +190,10 @@ const (
 
 // Errors.
 var (
-	ErrUnknownPurpose   = errors.New("kms: unknown master key purpose")
-	ErrUnknownVersion   = errors.New("kms: unknown master key version")
-	ErrCiphertextShort  = errors.New("kms: ciphertext too short")
-	ErrDecryptFailed    = errors.New("kms: decrypt failed (wrong key or tampered ciphertext)")
+	ErrUnknownPurpose  = errors.New("kms: unknown master key purpose")
+	ErrUnknownVersion  = errors.New("kms: unknown master key version")
+	ErrCiphertextShort = errors.New("kms: ciphertext too short")
+	ErrDecryptFailed   = errors.New("kms: decrypt failed (wrong key or tampered ciphertext)")
 )
 
 // DataKey is the result of GenerateDataKey. Plaintext must be zeroed by the
@@ -93,13 +232,20 @@ func New() *KMS {
 
 // AddMasterKey registers a master key version for a purpose. The highest
 // version is the "current" key used for new encryptions; older versions remain
-// available for decryption of existing ciphertext.
+// available for decryption of existing ciphertext. A version can be registered
+// once per purpose: two keys under one version number would make every
+// ciphertext of that version ambiguous.
 func (k *KMS) AddMasterKey(p Purpose, version int, key []byte) error {
 	if len(key) != 32 {
 		return fmt.Errorf("kms: master key must be 32 bytes, got %d", len(key))
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	for _, mk := range k.masters[p] {
+		if mk.version == version {
+			return fmt.Errorf("kms: %s master key version %d is already registered", p, version)
+		}
+	}
 	k.masters[p] = append(k.masters[p], masterKey{version: version, key: append([]byte(nil), key...)})
 	return nil
 }

@@ -7,9 +7,7 @@
 import { ref } from "vue";
 import { ElButton, ElMessage } from "element-plus";
 import { PageHeader, StatusBadge } from "@eu/ui";
-import { createSDK } from "@eu/sdk";
-
-const sdk = createSDK({ baseURL: "" });
+import { sdk } from "../sdk";
 
 interface AnomalyResult {
   resourceId: string;

@@ -1,13 +1,25 @@
 <script setup lang="ts">
 /**
  * Register page (02§5.1). account.euler.emoera.com public signup route.
- * Collects email/phone + password, validates confirmation match and the
- * service-agreement consent, then on success shows a success toast and
- * redirects to /realname to complete identity verification.
+ * Collects email + mailed verification code + password, validates
+ * confirmation match and the service-agreement consent, then on success shows
+ * a success toast and redirects to /realname to complete identity verification.
+ * The code comes from POST /api/auth/register/send-code (60s resend cooldown)
+ * and is checked server-side only (see ../register.ts for the error mapping).
  */
 import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAccountAuth } from "../stores/auth";
+import { isValidLoginEmail, PASSWORD_MAX, PASSWORD_MIN, validatePassword } from "../validation";
+import {
+  isRateLimited,
+  isRegisterCodeInvalid,
+  REGISTER_CODE_PATTERN,
+  REGISTER_CODE_SENT_MESSAGE,
+  registerErrorMessage,
+  sendRegisterCode,
+  useCodeCooldown,
+} from "../register";
 import {
   ElForm,
   ElFormItem,
@@ -26,6 +38,7 @@ const formRef = ref<FormInstance>();
 
 interface RegisterForm {
   account: string;
+  code: string;
   password: string;
   confirm: string;
   agreed: boolean;
@@ -33,20 +46,19 @@ interface RegisterForm {
 
 const form = reactive<RegisterForm>({
   account: "",
+  code: "",
   password: "",
   confirm: "",
   agreed: false,
 });
 
-/** Email or China mobile phone pattern (02§5.1 multi-identifier login). */
-const accountRe =
-  /^(?:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|1[3-9]\d{9})$/;
-
+// svc-iam registers by email only (validLoginEmail); phone sign-up does not
+// exist yet, so a phone number here only failed later with a 400.
 const validateAccount = (_r: unknown, value: string, cb: (e?: Error) => void) => {
-  if (!value) {
-    cb(new Error("请输入邮箱或手机号"));
-  } else if (!accountRe.test(value)) {
-    cb(new Error("邮箱格式不正确，或输入 11 位手机号"));
+  if (!value || !value.trim()) {
+    cb(new Error("请输入邮箱"));
+  } else if (!isValidLoginEmail(value)) {
+    cb(new Error("邮箱格式不正确"));
   } else {
     cb();
   }
@@ -70,17 +82,52 @@ const validateAgreed = (_r: unknown, value: boolean, cb: (e?: Error) => void) =>
   }
 };
 
+const validateCode = (_r: unknown, value: string, cb: (e?: Error) => void) => {
+  if (!value || !value.trim()) {
+    cb(new Error("请输入邮箱验证码"));
+  } else if (!REGISTER_CODE_PATTERN.test(value.trim())) {
+    cb(new Error("验证码为 6 位数字"));
+  } else {
+    cb();
+  }
+};
+
 const rules = reactive<FormRules>({
   account: [{ validator: validateAccount, trigger: "blur" }],
-  password: [
-    { required: true, message: "请输入密码", trigger: "blur" },
-    { min: 8, max: 32, message: "密码长度为 8-32 位", trigger: "blur" },
-  ],
+  code: [{ validator: validateCode, trigger: "blur" }],
+  // Same bounds as the backend (8-128, measured in UTF-8 bytes).
+  password: [{ required: true, validator: validatePassword, trigger: "blur" }],
   confirm: [{ validator: validateConfirm, trigger: "blur" }],
   agreed: [{ validator: validateAgreed, trigger: "change" }],
 });
 
 const loading = ref(false);
+
+// 获取验证码: validate the email alone, then mail a code (60s cooldown; a 429
+// cools the button down too, so it cannot hammer the limiter).
+const sending = ref(false);
+const cooldown = useCodeCooldown();
+const { canSend, label: sendLabel } = cooldown;
+
+async function onSendCode() {
+  if (!canSend.value || sending.value || !formRef.value) return;
+  try {
+    await formRef.value.validateField("account");
+  } catch {
+    return;
+  }
+  sending.value = true;
+  try {
+    await sendRegisterCode(form.account);
+    cooldown.start();
+    ElMessage.success(REGISTER_CODE_SENT_MESSAGE);
+  } catch (e) {
+    if (isRateLimited(e)) cooldown.start();
+    ElMessage.error(registerErrorMessage(e, "send"));
+  } finally {
+    sending.value = false;
+  }
+}
 
 async function onSubmit() {
   if (!formRef.value) return;
@@ -93,8 +140,16 @@ async function onSubmit() {
   try {
     // Real backend: POST /api/auth/register (svc-iam web-auth). Then auto-login
     // so the user can proceed to real-name verification in an authenticated state.
-    await auth.register(form.account, form.password);
-    await auth.login(form.account, form.password);
+    const email = form.account.trim();
+    try {
+      await auth.register(email, form.password, form.code);
+    } catch (e) {
+      // Wrong / expired code: clear it so a fresh one is entered.
+      if (isRegisterCodeInvalid(e)) form.code = "";
+      ElMessage.error(registerErrorMessage(e));
+      return;
+    }
+    await auth.login(email, form.password);
     ElMessage.success("注册成功,请完成实名认证");
     router.push("/realname");
   } catch (e) {
@@ -119,20 +174,36 @@ async function onSubmit() {
         class="register-form"
         @submit.prevent="onSubmit"
       >
-        <el-form-item label="邮箱/手机号" prop="account">
+        <el-form-item label="邮箱" prop="account">
           <el-input
             v-model="form.account"
-            placeholder="请输入邮箱或手机号"
+            type="email"
+            placeholder="请输入邮箱"
             size="large"
             clearable
           />
+        </el-form-item>
+
+        <el-form-item label="邮箱验证码" prop="code">
+          <div class="code-row">
+            <el-input
+              v-model="form.code"
+              placeholder="请输入 6 位验证码"
+              maxlength="6"
+              inputmode="numeric"
+              size="large"
+            />
+            <el-button size="large" :loading="sending" :disabled="!canSend" @click="onSendCode">
+              {{ sendLabel }}
+            </el-button>
+          </div>
         </el-form-item>
 
         <el-form-item label="密码" prop="password">
           <el-input
             v-model="form.password"
             type="password"
-            placeholder="8-32 位密码"
+            :placeholder="`${PASSWORD_MIN}-${PASSWORD_MAX} 位密码`"
             size="large"
             show-password
           />
@@ -214,6 +285,14 @@ async function onSubmit() {
 }
 .register-form :deep(.el-input__wrapper) {
   border-radius: var(--eu-radius-sm);
+}
+.code-row {
+  display: flex;
+  gap: var(--eu-spacing-3);
+  width: 100%;
+}
+.code-row :deep(.el-input) {
+  flex: 1;
 }
 .register-agree :deep(.el-form-item__content) {
   line-height: 1.6;

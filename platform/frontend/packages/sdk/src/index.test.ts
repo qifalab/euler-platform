@@ -220,9 +220,34 @@ describe("createSDK — structured error model (non-OK)", () => {
     const sdk = createSDK();
     await expect(sdk.get("/boom")).rejects.toMatchObject({
       code: "HTTP_500",
-      message: "request failed",
+      message: "请求失败(HTTP 500)",
       requestId: "rid-from-header",
       status: 500,
+    });
+  });
+
+  it("names the HTTP status in Chinese for a non-JSON error body (gateway HTML page)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("<html><body>502 Bad Gateway</body></html>", {
+        status: 502,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const err = await createSDK().get("/x").catch((e: unknown) => e as EuError);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toMatchObject({ code: "HTTP_502", message: "请求失败(HTTP 502)", status: 502 });
+  });
+
+  it("falls back to the business code when a Code != OK envelope has no Message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Code: "Order.NotPayable" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createSDK().get("/y")).rejects.toMatchObject({
+      code: "Order.NotPayable",
+      message: "请求失败(Order.NotPayable)",
+      status: 200,
     });
   });
 
@@ -333,6 +358,29 @@ describe("createSDK — token injection into Authorization", () => {
 
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toBe("https://api.euler.emoera.com/v1/clusters");
+  });
+});
+
+// PATCH carries a JSON body and is not replayed on 429 (not idempotent).
+describe("createSDK patch", () => {
+  it("sends PATCH with a JSON body and unwraps the envelope", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ Code: "OK", Data: { resourceId: "r1" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const sdk = createSDK();
+    const res = await sdk.patch<{ resourceId: string }>("/api/v1/orchestrator/resources/r1/attributes", { attributes: { name: "a" } });
+    expect(res.data).toEqual({ resourceId: "r1" });
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+    expect(init.method).toBe("PATCH");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(await capturedBody(init)).toEqual({ attributes: { name: "a" } });
+  });
+
+  it("does not auto-retry a 429 PATCH", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ Code: "Common.TooManyRequests", Message: "slow down" }, { status: 429 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const sdk = createSDK();
+    await expect(sdk.patch("/x", {})).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

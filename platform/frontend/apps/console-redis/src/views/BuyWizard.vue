@@ -20,12 +20,13 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ElSteps, ElStep, ElForm, ElFormItem, ElSelect, ElOption, ElInput, ElInputNumber, ElRadioGroup, ElRadio, ElSwitch, ElButton, ElMessage } from "element-plus";
-import { createSDK, yuanToMinor } from "@eu/sdk";
-import { useCatalogMeta } from "@eu/console-kit";
+import { yuanToMinor } from "@eu/sdk";
+import {
+  useCatalogMeta, useOrderCheckout, fulfilledMessage, CouponPicker, OrderAmountSummary, attributesOf, resourceDisplayName,
+} from "@eu/console-kit";
+import { sdk } from "../sdk";
 
 const router = useRouter();
-const sdk = createSDK({ baseURL: "" });
-const submitting = ref(false);
 const active = ref(0);
 
 const form = ref({
@@ -40,8 +41,15 @@ const form = ref({
 const { regions, placement, load, zonesOf } = useCatalogMeta("euredis");
 
 // --- VPC options: the account's real euvpc resources (console-bff) ---
-interface ConsoleResource { ResourceId: string; ProductCode: string; Region: string; State: string }
+interface ConsoleResource {
+  ResourceId: string; ProductCode: string; Region: string; State: string;
+  /** Customer attributes (e.g. the VPC's `name`). */
+  Attributes?: Record<string, unknown> | null;
+}
 const vpcs = ref<ConsoleResource[]>([]);
+const vpcsLoaded = ref(false);
+/** Usable VPCs in the selected region — a VPC never spans regions. */
+const regionVpcs = computed(() => vpcs.value.filter((v) => v.Region === form.value.region));
 
 // --- spec catalogue (real, from svc-catalog) ---
 
@@ -85,17 +93,40 @@ function parseSpec(json: string): SkuSpec {
   }
 }
 
-/** Resolve the SKU code for the currently-selected charge type + spec. */
+/** The spec group the <select> currently points at. */
+const currentSpec = computed(() =>
+  specs.value.find((s) => s.code === form.value.spec || s.prepaid === form.value.spec || s.postpaid === form.value.spec),
+);
+
+/**
+ * The SKU code for the selected spec in the selected charge type — never the
+ * other charge type's SKU (quoting a POSTPAID SKU as PREPAID is a 400
+ * Catalog.ChargeTypeMismatch). "" when the spec has no SKU of that type.
+ */
 function skuForCurrent(): string {
-  const entry = specs.value.find((s) => s.code === form.value.spec || s.prepaid === form.value.spec || s.postpaid === form.value.spec);
+  const entry = currentSpec.value;
   if (!entry) return "";
-  return form.value.chargeType === "prepaid" ? (entry.prepaid || entry.code) : (entry.postpaid || entry.code);
+  return form.value.chargeType === "prepaid" ? entry.prepaid : entry.postpaid;
 }
+
+/** The charge type the catalogue declares for a SKU — quote/order/fulfil send this. */
+function chargeTypeOf(skuCode: string): string {
+  return skus.value.find((s) => s.skuCode === skuCode)?.chargeType ?? "";
+}
+
+// A spec offered in only one charge type: follow it instead of leaving the
+// wizard on a charge type the spec has no SKU for.
+watch([currentSpec, () => form.value.chargeType], ([entry]) => {
+  if (!entry) return;
+  if (form.value.chargeType === "prepaid" && !entry.prepaid && entry.postpaid) form.value.chargeType = "postpaid";
+  else if (form.value.chargeType === "postpaid" && !entry.postpaid && entry.prepaid) form.value.chargeType = "prepaid";
+});
 
 onMounted(async () => {
   try {
     const res = await sdk.get<Sku[]>("/api/v1/catalog/skus?productCode=euredis");
-    skus.value = res.data ?? [];
+    // Only on-sale SKUs (status "1"): anything else quotes 409 Catalog.NotOnSale.
+    skus.value = (res.data ?? []).filter((s) => s.status === "1");
     if (specs.value.length && !form.value.spec) {
       form.value.spec = specs.value[0].code;
       form.value.memGb = specs.value[0].mem_gb;
@@ -116,18 +147,23 @@ onMounted(async () => {
   // VPC options: live euvpc resources of this account (never a fake id).
   try {
     const res = await sdk.get<ConsoleResource[]>("/console/resources");
-    vpcs.value = (res.data ?? []).filter((r) => r.ProductCode === "euvpc" && r.State !== "RELEASED");
+    vpcs.value = (res.data ?? []).filter(
+      (r) => r.ProductCode === "euvpc" && !["RELEASED", "RELEASING", "CREATE_FAILED"].includes(String(r.State).toUpperCase()),
+    );
   } catch {
     vpcs.value = [];
+  } finally {
+    vpcsLoaded.value = true;
   }
   alignVpcToRegion();
 });
 
+// Only a VPC in the instance's own region is valid. The old fallback to
+// "any VPC" when the region had none picked a VPC from another region; an
+// empty pool now leaves vpcId empty and the form prompts to create one.
 function alignVpcToRegion() {
-  const inRegion = vpcs.value.filter((v) => v.Region === form.value.region);
-  const pool = inRegion.length ? inRegion : vpcs.value;
-  if (!pool.some((v) => v.ResourceId === form.value.vpcId)) {
-    form.value.vpcId = pool[0]?.ResourceId ?? "";
+  if (!regionVpcs.value.some((v) => v.ResourceId === form.value.vpcId)) {
+    form.value.vpcId = regionVpcs.value[0]?.ResourceId ?? "";
   }
 }
 
@@ -173,12 +209,15 @@ onUnmounted(() => {
 async function refreshQuote() {
   const specCode = skuForCurrent();
   if (!specCode) { quote.value = null; return; }
+  // ZONAL: the quote needs the AZ — wait for the zone default instead of
+  // firing a request that can only 400 (Catalog.ZoneRequired).
+  if (!form.value.zone && (placement.value?.zoneRequired ?? true)) { quote.value = null; return; }
   quoting.value = true;
   try {
     const res = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
       productCode: "euredis",
       specCode,
-      chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
+      chargeType: chargeTypeOf(specCode),
       duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
       quantity: 1,
       regionId: form.value.region,
@@ -205,60 +244,65 @@ watch(
 function next() { if (active.value < 2) active.value++; }
 function prev() { if (active.value > 0) active.value--; }
 
+// Create → pay → fulfil, resumable: once svc-order has issued an order, a pay
+// or fulfil failure is retried on THAT order (pending) — re-submitting never
+// creates and pays a second one (a double charge for a prepaid term).
+// Coupons (优惠券) apply to prepaid orders only — a postpaid order has no
+// upfront amount. The picker's selection is read when the order is created;
+// svc-order's verdict (Order.CouponInvalid / CouponExpired) comes back through
+// the composable.
+const couponIds = ref<string[]>([]);
+const {
+  submitting, pending, checkout, resume,
+  lastOrder, couponError, couponBlocked, couponRevision, cancelBlockedOrder,
+} = useOrderCheckout({
+  sdk,
+  couponIds: () => (form.value.chargeType === "prepaid" ? couponIds.value : []),
+  onFulfilled: (res, order) => {
+    ElMessage.success(fulfilledMessage("Redis 实例", res, order));
+    router.push("/instances");
+  },
+});
+
+async function cancelExpiredOrder() {
+  if (await cancelBlockedOrder()) ElMessage.success("订单已取消,优惠券已释放,请重新选择优惠券后下单");
+}
+
 async function submit() {
   const specCode = skuForCurrent();
   if (!specCode) { ElMessage.error("请选择实例规格"); active.value = 0; return; }
-  if (!form.value.vpcId) { ElMessage.warning("请选择专有网络"); active.value = 1; return; }
-  submitting.value = true;
-  try {
-    // 1) Quote — the authoritative payable comes from the pricing engine.
-    const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
-      productCode: "euredis", specCode,
-      chargeType: form.value.chargeType === "prepaid" ? "PREPAID" : "POSTPAID",
-      duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
-      quantity: 1, regionId: form.value.region, zoneId: form.value.zone,
-    });
-    // The quote already includes the prepaid term — never multiply by period
-    // again (that inflated the order by the term). amountMinor is 分.
-    const amountMinor = yuanToMinor(q.data.payableAmount);
-
-    // 2) Create the order — svc-order issues the real orderId/orderNo.
-    const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>(
-      "/api/v1/orders",
-      {
+  if (!form.value.vpcId) { ElMessage.warning("请选择所选地域内的专有网络"); active.value = 1; return; }
+  const chargeType = chargeTypeOf(specCode);
+  const duration = chargeType === "PREPAID" ? form.value.period : 1;
+  await checkout(
+    async (extras) => {
+      // 1) Quote — the authoritative payable comes from the pricing engine and
+      // already includes the prepaid term (never multiply by period). 分.
+      const q = await sdk.post<QuoteResult>("/api/v1/catalog/quote", {
+        productCode: "euredis", specCode, chargeType, duration,
+        quantity: 1, regionId: form.value.region, zoneId: form.value.zone,
+      });
+      const amountMinor = yuanToMinor(q.data.payableAmount);
+      // 2) Create the order — svc-order issues the real orderId/orderNo.
+      const created = await sdk.post<{ orderId: number; orderNo: string; state: string }>("/api/v1/orders", {
         type: "NEW", productCode: "euredis", skuCode: specCode,
-        regionId: form.value.region, quantity: 1,
-        duration: form.value.chargeType === "prepaid" ? form.value.period : 1,
-        amountMinor,
-      },
-    );
-
-    // 3) Pay — transitions the order to PAID (the only provisioning trigger, D8).
-    await sdk.post(`/api/v1/orders/${created.data.orderId}/pay`, {
-      paymentId: `pay-${created.data.orderId}`,
-      paidAmountMinor: amountMinor,
-    });
-
-    // 4) Fulfill — the orchestrator runs the saga (order PAID→FULFILLING→COMPLETED,
-    // resource CREATING→RUNNING) and returns the new resource id. The
-    // productCode=euredis routes it to the DriverK8s binding.
-    const res = await sdk.post<{ resourceId: string; state: string; orderState: string }>(
-      "/api/v1/orchestrator/fulfill",
-      {
-        orderId: created.data.orderId, orderNo: created.data.orderNo,
-        productCode: "euredis", region: form.value.region,
-        specCode, chargeType: form.value.chargeType.toUpperCase(),
-        zone: form.value.zone, vpcId: form.value.vpcId, subnetId: form.value.subnetId,
-        ha: form.value.ha,
-      },
-    );
-    ElMessage.success(`Redis 实例已创建:${res.data.resourceId.slice(0, 24)}…(状态 ${res.data.state})`);
-    router.push("/instances");
-  } catch (e) {
-    ElMessage.error((e as Error).message || "创建失败");
-  } finally {
-    submitting.value = false;
-  }
+        chargeType, zoneId: form.value.zone,
+        regionId: form.value.region, quantity: 1, duration, amountMinor,
+        ...extras, // couponIds (prepaid only)
+      });
+      return created.data;
+    },
+    // 3) Pay + 4) fulfil run in the composable (saga: order PAID→FULFILLING→
+    // COMPLETED, resource CREATING→RUNNING; productCode=euredis routes it to the
+    // DriverK8s binding). The body is captured now so a retry repeats exactly
+    // what was ordered.
+    {
+      productCode: "euredis", region: form.value.region,
+      specCode, chargeType,
+      zone: form.value.zone, vpcId: form.value.vpcId, subnetId: form.value.subnetId,
+      ha: form.value.ha,
+    },
+  );
 }
 </script>
 
@@ -288,9 +332,10 @@ async function submit() {
 
         <ElForm v-show="active === 1" label-position="top" class="buy-form">
           <ElFormItem label="专有网络">
-            <ElSelect v-model="form.vpcId" :loading="vpcs.length === 0" placeholder="该账号暂无 VPC，请先创建">
-              <ElOption v-for="v in vpcs" :key="v.ResourceId" :value="v.ResourceId" :label="v.ResourceId" />
+            <ElSelect v-model="form.vpcId" :loading="!vpcsLoaded" :placeholder="regionVpcs.length ? '请选择专有网络' : '该地域暂无 VPC,请先创建'">
+              <ElOption v-for="v in regionVpcs" :key="v.ResourceId" :value="v.ResourceId" :label="resourceDisplayName(v.ResourceId, attributesOf(v).name)" />
             </ElSelect>
+            <p v-if="vpcsLoaded && regionVpcs.length === 0" class="form-hint">所选地域暂无可用专有网络,请先在「专有网络 VPC」控制台创建同地域的 VPC。</p>
           </ElFormItem>
           <ElFormItem label="交换机子网"><ElInput v-model="form.subnetId" placeholder="请输入子网 ID，如 subnet-xxx" /></ElFormItem>
           <ElFormItem label="跨可用区高可用">
@@ -308,16 +353,24 @@ async function submit() {
             <li>跨可用区高可用:{{ form.ha ? "开启" : "关闭" }}</li>
           </ul>
           <ElRadioGroup v-model="form.chargeType" class="confirm-charge">
-            <ElRadio value="prepaid">包年包月</ElRadio>
-            <ElRadio value="postpaid">按量付费</ElRadio>
+            <ElRadio value="prepaid" :disabled="!!currentSpec && !currentSpec.prepaid">包年包月</ElRadio>
+            <ElRadio value="postpaid" :disabled="!!currentSpec && !currentSpec.postpaid">按量付费</ElRadio>
           </ElRadioGroup>
           <ElFormItem v-if="form.chargeType === 'prepaid'" label="购买时长(月)"><ElInputNumber v-model="form.period" :min="1" :max="36" /></ElFormItem>
+          <ElFormItem v-if="form.chargeType === 'prepaid'" label="优惠券">
+            <CouponPicker
+              v-model="couponIds" :sdk="sdk" product-code="euredis" :sku-code="skuForCurrent()" charge-type="PREPAID"
+              :amount="quote?.payableAmount" :disabled="!!pending" :error="couponError" :refresh-key="couponRevision"
+            />
+          </ElFormItem>
         </div>
 
         <div class="buy-nav">
           <ElButton v-if="active > 0" @click="prev">上一步</ElButton>
           <ElButton v-if="active < 2" type="primary" @click="next">下一步</ElButton>
-          <ElButton v-if="active === 2" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="active === 2 && !pending && !couponBlocked" type="primary" :loading="submitting" @click="submit">确认下单</ElButton>
+          <ElButton v-if="pending" type="warning" :loading="submitting" @click="resume">{{ pending.stage === "pay" ? "继续支付" : "重试开通" }}(订单 {{ pending.orderNo }})</ElButton>
+          <ElButton v-if="couponBlocked && !pending" type="danger" plain :loading="submitting" @click="cancelExpiredOrder">取消订单 {{ couponBlocked.orderNo }} 并重新下单</ElButton>
         </div>
       </div>
 
@@ -335,6 +388,8 @@ async function submit() {
           <strong v-else>—</strong>
         </div>
         <p class="sum-hint">价格由服务端试算,下单时以收银台为准</p>
+        <p v-if="form.chargeType === 'prepaid' && couponIds.length && !lastOrder" class="sum-hint">已选 {{ couponIds.length }} 张优惠券,抵扣金额以订单为准</p>
+        <OrderAmountSummary :order="pending ?? couponBlocked ?? lastOrder" />
       </aside>
     </div>
   </section>

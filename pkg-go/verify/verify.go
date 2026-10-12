@@ -58,10 +58,20 @@ type AccountStatusChecker interface {
 	IsAccountUsable(accountID int64) (bool, error)
 }
 
-// STSValidator validates a temporary security token (x-cps-security-token).
-// STS credentials are never persisted, so validation is signature/expiry based.
+// STSValidator validates a temporary security token (x-cps-security-token)
+// and returns the temporary credential it seals. STS credentials are never
+// persisted: the token itself carries the temporary SK, sealed by the STS key
+// (pkg-go/sts), so validation is stateless.
 type STSValidator interface {
-	ValidateToken(token string, now time.Time) (accountID int64, principal string, err error)
+	ValidateToken(token string, now time.Time) (STSCredential, error)
+}
+
+// STSCredential is a temporary credential recovered from a security token.
+type STSCredential struct {
+	AccessKey string
+	SecretKey string
+	AccountID int64
+	Principal string // e.g. "role/Deployer"
 }
 
 // NonceTTL is one minute beyond the clock-skew window so a nonce is retained
@@ -128,39 +138,41 @@ func (v *Verifier) Verify(req Request, now time.Time) (Identity, error) {
 		return Identity{}, err
 	}
 
-	// ② AK existence & status. ResolveSK enforces enabled/not-deleted and the
-	// rotation grace deadline.
-	sk, rec, err := v.AK.ResolveSK(ak, now)
-	if err != nil {
-		return Identity{}, ErrInvalidAccessKeyID
-	}
-	// Owner account must be usable (not frozen / cancelled).
-	if v.Accounts != nil {
-		usable, err := v.Accounts.IsAccountUsable(rec.AccountID)
-		if err != nil || !usable {
-			return Identity{}, ErrAccountUnusable
-		}
-	}
-
-	// ③ STS token validity, when the request uses temporary credentials.
-	identity := Identity{
-		AccountID: rec.AccountID,
-		AKID:      ak,
-		OwnerType: rec.OwnerType,
-	}
+	// ②/③ Resolve the signing secret. With a security token the request is
+	// signed by the TEMPORARY AK/SK that the token seals (the AWS STS model):
+	// the token must authenticate (only the STS key can mint one) and name
+	// exactly the AK in the Authorization header. Without a token the AK is a
+	// long-lived key: existence, enabled status and rotation grace are checked
+	// by ResolveSK.
+	var (
+		sk       string
+		identity Identity
+	)
 	if token := header(req.Headers, cps1.SecurityTokenHeader); token != "" {
 		if v.STS == nil {
 			return Identity{}, ErrSecurityTokenExpired
 		}
-		stsAccount, principal, err := v.STS.ValidateToken(token, now)
+		cred, err := v.STS.ValidateToken(token, now)
+		if err != nil || cred.AccessKey != ak || cred.SecretKey == "" {
+			return Identity{}, ErrSecurityTokenExpired
+		}
+		sk = cred.SecretKey
+		identity = Identity{AccountID: cred.AccountID, AKID: ak, Principal: cred.Principal}
+	} else {
+		resolved, rec, err := v.AK.ResolveSK(ak, now)
 		if err != nil {
-			return Identity{}, ErrSecurityTokenExpired
+			return Identity{}, ErrInvalidAccessKeyID
 		}
-		// The token must belong to the same account as the AK.
-		if stsAccount != rec.AccountID {
-			return Identity{}, ErrSecurityTokenExpired
+		sk = resolved
+		identity = Identity{AccountID: rec.AccountID, AKID: ak, OwnerType: rec.OwnerType}
+	}
+	// Owner account must be usable (not frozen / cancelled) — for temporary
+	// credentials too: freezing an account revokes its STS sessions.
+	if v.Accounts != nil {
+		usable, err := v.Accounts.IsAccountUsable(identity.AccountID)
+		if err != nil || !usable {
+			return Identity{}, ErrAccountUnusable
 		}
-		identity.Principal = principal
 	}
 
 	// ④ Recompute the signature and compare in constant time. cps1.Verify

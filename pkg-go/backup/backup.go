@@ -29,6 +29,8 @@ package backup
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -135,14 +137,37 @@ func ExpiredSnapshots(snapshots []Snapshot, retentionDays int, now time.Time) []
 	if retentionDays <= 0 {
 		return nil
 	}
-	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	var expired []Snapshot
 	for _, s := range snapshots {
-		if s.TakenAt.Before(cutoff) {
+		if PastRetention(RetainUntil(s.TakenAt, retentionDays), now) {
 			expired = append(expired, s)
 		}
 	}
 	return expired
+}
+
+// RetainUntil returns the keep-by instant of a snapshot taken at takenAt under
+// a retention of retentionDays. The snapshot is expired once now is AFTER this
+// instant — the same rule ExpiredSnapshots applies. Zero means "retain
+// forever" (retentionDays <= 0).
+//
+// An executor that stores one keep-by per snapshot (svc-orchestrator's
+// resource_backup.expires_at) derives it here, so a stored deadline and the
+// policy-level ExpiredSnapshots sweep cannot disagree about when a snapshot is
+// due. The deadline is fixed when the snapshot is taken: shortening the
+// policy's retention later does not retroactively expire snapshots the
+// customer was promised under the old one.
+func RetainUntil(takenAt time.Time, retentionDays int) time.Time {
+	if retentionDays <= 0 {
+		return time.Time{}
+	}
+	return takenAt.Add(time.Duration(retentionDays) * 24 * time.Hour)
+}
+
+// PastRetention reports whether a snapshot whose keep-by instant is until has
+// expired at now. A zero until (retain forever) never expires.
+func PastRetention(until, now time.Time) bool {
+	return !until.IsZero() && now.After(until)
 }
 
 // ExpiredSnapshots returns the snapshots past the POLICY's retention window.
@@ -151,6 +176,97 @@ func ExpiredSnapshots(snapshots []Snapshot, retentionDays int, now time.Time) []
 // number than the customer configured.
 func (p BackupPolicy) ExpiredSnapshots(snapshots []Snapshot, now time.Time) []Snapshot {
 	return ExpiredSnapshots(snapshots, p.RetentionDays, now)
+}
+
+// MaxScheduleHours bounds the interval form of a Schedule: 30 days, the
+// console's 备份间隔 upper limit. A longer interval is a policy that almost
+// never runs — a retention window could lapse between two backups.
+const MaxScheduleHours = 720
+
+// ErrInvalidSchedule rejects a schedule string ParseSchedule cannot read.
+var ErrInvalidSchedule = errors.New("backup: invalid schedule")
+
+// Schedule is a validated backup schedule — the eubackup `schedule`
+// attribute. Two textual forms cover what customers ask for without a cron
+// parser (the same trade-off BackupPolicy.ScheduleHours makes):
+//
+//	daily HH:MM   once a day at HH:MM, 24-hour clock ("daily 02:30");
+//	              a bare "HH:MM" is accepted as shorthand
+//	every Nh      every N hours, 1 <= N <= MaxScheduleHours ("every 6h")
+//
+// Parsing is case-insensitive and tolerates surrounding blanks; String
+// renders the canonical form ("daily 02:30", "every 6h"), which is what
+// callers persist. The daily time is wall-clock time in the location the
+// executor passes to Next — the platform's business clock is China Standard
+// Time (UTC+08:00).
+type Schedule struct {
+	// EveryHours selects the interval form when positive; otherwise the
+	// schedule is daily at Hour:Minute.
+	EveryHours int
+	Hour       int
+	Minute     int
+}
+
+// ParseSchedule validates a schedule string (see Schedule for the grammar).
+func ParseSchedule(s string) (Schedule, error) {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if rest, ok := strings.CutPrefix(v, "every "); ok {
+		digits, ok := strings.CutSuffix(strings.TrimSpace(rest), "h")
+		n, err := strconv.Atoi(digits)
+		if !ok || err != nil || digits == "" || digits[0] < '1' || digits[0] > '9' || n > MaxScheduleHours {
+			return Schedule{}, fmt.Errorf("%w: %q (want \"every Nh\" with N in 1..%d)", ErrInvalidSchedule, s, MaxScheduleHours)
+		}
+		return Schedule{EveryHours: n}, nil
+	}
+	clock := v
+	if rest, ok := strings.CutPrefix(v, "daily "); ok {
+		clock = strings.TrimSpace(rest)
+	}
+	if len(clock) != 5 || clock[2] != ':' || !isDigits(clock[:2]) || !isDigits(clock[3:]) {
+		return Schedule{}, fmt.Errorf("%w: %q (want \"daily HH:MM\" or \"every Nh\")", ErrInvalidSchedule, s)
+	}
+	h, _ := strconv.Atoi(clock[:2])
+	m, _ := strconv.Atoi(clock[3:])
+	if h > 23 || m > 59 {
+		return Schedule{}, fmt.Errorf("%w: %q is not a time of day", ErrInvalidSchedule, s)
+	}
+	return Schedule{Hour: h, Minute: m}, nil
+}
+
+func isDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// String renders the canonical form.
+func (s Schedule) String() string {
+	if s.EveryHours > 0 {
+		return fmt.Sprintf("every %dh", s.EveryHours)
+	}
+	return fmt.Sprintf("daily %02d:%02d", s.Hour, s.Minute)
+}
+
+// Next returns when the next backup runs after last, the previous run (or the
+// policy's installation instant). The interval form is last plus N hours; the
+// daily form is the first HH:MM in loc strictly after last. A nil loc means
+// UTC.
+func (s Schedule) Next(last time.Time, loc *time.Location) time.Time {
+	if s.EveryHours > 0 {
+		return last.Add(time.Duration(s.EveryHours) * time.Hour)
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	l := last.In(loc)
+	next := time.Date(l.Year(), l.Month(), l.Day(), s.Hour, s.Minute, 0, 0, loc)
+	if !next.After(l) {
+		next = time.Date(l.Year(), l.Month(), l.Day()+1, s.Hour, s.Minute, 0, 0, loc)
+	}
+	return next
 }
 
 // String renders a policy for diagnostics/logging (never parsed by consumers).
