@@ -395,6 +395,12 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 		}
 		select {
 		case <-r.Context().Done():
+			// Under Euler this is the installation operation context, which is
+			// cancelled when the application is disabled. Answer like the gate at
+			// the top of the loop; returning without a response would send an
+			// empty 200 that the Agent cannot decode. A disconnected client never
+			// reads this.
+			writeError(w, http.StatusServiceUnavailable, "application_disabled", "application is disabled")
 			return
 		// SQLite has one writer. A 400 ms poll across the former 128 long
 		// polls generated hundreds of empty transactions per second. Two

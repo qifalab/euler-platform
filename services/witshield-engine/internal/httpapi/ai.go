@@ -39,8 +39,23 @@ func (s *Server) getAISettings(w http.ResponseWriter, r *http.Request) {
 	}
 	x := stored.Settings
 	x.APIKey = ""
+	x.APIKeyHint = s.aiKeyHint(stored.EncryptedAPIKey)
 	x.CustomHeaders = maskedHeaders(stored.EncryptedHeaders, s.vault)
 	writeJSON(w, 200, x)
+}
+
+// aiKeyHint labels the stored API key for display. It is derived from the
+// current key on every read because hints saved by older releases expose most
+// of a short key (first six and last four characters) to every project reader.
+func (s *Server) aiKeyHint(encryptedKey string) string {
+	if encryptedKey == "" {
+		return ""
+	}
+	key, err := s.vault.Decrypt(encryptedKey)
+	if err != nil {
+		return "----"
+	}
+	return ids.Hint(key)
 }
 func maskedHeaders(ciphertext string, v interface{ Decrypt(string) (string, error) }) domain.Headers {
 	headers, err := decryptAIHeaders(ciphertext, v)
@@ -120,7 +135,9 @@ func (s *Server) putAISettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	encryptedKey := existing.EncryptedAPIKey
-	hint := existing.Settings.APIKeyHint
+	// Re-derive instead of copying the stored hint, so saving the settings also
+	// replaces a hint written by an older release (and the response matches GET).
+	hint := s.aiKeyHint(existing.EncryptedAPIKey)
 	if in.ClearAPIKey {
 		encryptedKey = ""
 		hint = ""
@@ -253,11 +270,20 @@ func (s *Server) testAI(w http.ResponseWriter, r *http.Request) {
 	var verifiedAt *time.Time
 	if usingStoredSettings {
 		now := s.now().UTC()
-		if markErr := s.store.MarkAISettingsVerified(r.Context(), verifiedSettings.Protocol, verifiedSettings.BaseURL, verifiedSettings.Model, verifiedSettings.UpdatedAt, now); markErr != nil {
+		markErr := s.store.MarkAISettingsVerified(r.Context(), verifiedSettings.Protocol, verifiedSettings.BaseURL, verifiedSettings.Model, verifiedSettings.UpdatedAt, now)
+		switch {
+		case markErr == nil:
+			verifiedAt = &now
+		case errors.Is(markErr, store.ErrConflict):
+			// The provider answered, but the tested generation can no longer be
+			// marked: the settings were saved again during the test, or the Store
+			// does not mark a configuration without a stored key (local providers
+			// need none). Report the real connectivity result; verifiedAt stays
+			// empty so the console never shows the current settings as verified.
+		default:
 			s.fail(w, markErr)
 			return
 		}
-		verifiedAt = &now
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "reply": reply, "model": model, "latencyMs": latency, "verifiedAt": verifiedAt})
 }

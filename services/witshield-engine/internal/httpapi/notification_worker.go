@@ -75,6 +75,11 @@ func (s *Server) runNotificationChannel(ctx context.Context, channel domain.Noti
 			continue
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				// Shutdown or disable cancelled the claim; that is not an outbox
+				// failure and must not mark the worker degraded or log an error.
+				return
+			}
 			s.MarkWorkerHealth("notification_"+string(channel), err)
 			s.log.Error("claim notification outbox delivery", "channel", channel, "error", "notification outbox unavailable")
 			if !waitForNotificationWork(ctx, wake) {

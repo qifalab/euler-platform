@@ -216,6 +216,16 @@ func (s *Server) putPolicyGrant(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, legacyErr)
 			return
 		}
+		// PutDefensePolicyAndCancelQueued derives this grant's mode from the
+		// legacy flags (enabled => assist). That silently turned an enabled
+		// "observe" grant into "assist", which starts automatic AI investigation,
+		// and dropped the chosen mode of a disabled grant. Store the grant the
+		// administrator actually submitted; the legacy policy keeps detection,
+		// auto-ban, rate and emergency-stop semantics.
+		if err = s.store.PutPolicyGrant(r.Context(), item); err != nil {
+			s.fail(w, err)
+			return
+		}
 	} else if err = s.store.PutPolicyGrant(r.Context(), item); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_policy_grant", err.Error())
 		return
