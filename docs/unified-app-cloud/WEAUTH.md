@@ -35,7 +35,7 @@ WeAuth 的业务在 Euler 内独立运行并持有数据，不连接原 WeAuth �
 
 ## IP、运行与数据
 
-默认仅使用 TCP `RemoteAddr`，忽略任意客户端伪造的 `X-Forwarded-For`。如部署在反向代理后，明确设置 `EULER_WEAUTH_TRUSTED_PROXIES`，例如本机代理 `127.0.0.1/32,::1/128`。只在直连代理属于配置 CIDR 时，从 XFF 右侧逐跳走到第一个不可信地址。不要配置 `0.0.0.0/0` 或 `::/0`，服务启动时会拒绝这类配置。代理须覆盖/规范化转发头；未正确配置时会以代理 IP 计入风控。统计采集与抽奖公开报名使用同一份可信代理列表识别访客 IP。
+默认仅使用 TCP `RemoteAddr`，忽略任意客户端伪造的 `X-Forwarded-For`。如部署在反向代理后，明确设置 `EULER_WEAUTH_TRUSTED_PROXIES`，例如本机代理 `127.0.0.1/32,::1/128`。只在直连代理属于配置 CIDR 时，从 XFF 右侧逐跳走到第一个不可信地址。不要配置 `0.0.0.0/0` 或 `::/0`，服务启动时会拒绝这类配置。代理须覆盖/规范化转发头；未正确配置时会以代理 IP 计入风控。统计采集、抽奖公开报名与 WitShield Agent 设备入口使用同一份可信代理列表识别访客或设备 IP。
 
 模块新增 `weauth_sites`、`weauth_ip`、`weauth_challenges`、`weauth_events`。站点 Secret 使用 Runtime 的 AES-GCM 加密边界，摘要索引用于查找；验证令牌只保存哈希。备份使用 Euler 数据库与加密主密钥的既有备份流程。不得只恢复数据库而丢失加密密钥。
 

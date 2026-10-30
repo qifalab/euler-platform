@@ -10,9 +10,10 @@ import (
 )
 
 // TrustedProxiesEnv names the reverse proxies (comma-separated CIDRs) whose
-// X-Forwarded-For entries may identify the browser for public risk and rate
-// rules. WeAuth introduced the setting; Statistics and Lottery read the same
-// list so every public endpoint sees the same client address behind a proxy.
+// X-Forwarded-For entries may identify the client (a browser or a WitShield
+// Agent) for public risk and rate rules. WeAuth introduced the setting;
+// Statistics, Lottery and the WitShield Agent entry read the same list so
+// every public endpoint sees the same client address behind a proxy.
 const TrustedProxiesEnv = "EULER_WEAUTH_TRUSTED_PROXIES"
 
 // ParseTrustedProxies parses a comma-separated CIDR list. A default route

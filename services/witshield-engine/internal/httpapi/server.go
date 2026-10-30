@@ -71,6 +71,7 @@ type Server struct {
 	inlineScripts          []string
 	healthMu               sync.RWMutex
 	workers                map[string]workerHealth
+	euler                  eulerEntrypoints
 }
 
 type localHTTPTransportKey struct{}
@@ -575,12 +576,21 @@ func (s *Server) isTrustedProxy(ip net.IP) bool {
 	return false
 }
 
+// maxForwardedHops bounds the X-Forwarded-For list (all field lines together)
+// that remoteIP walks; a longer chain is ignored in full.
+const maxForwardedHops = 32
+
 func (s *Server) remoteIP(r *http.Request) net.IP {
 	peer := peerIP(r)
 	if !s.isTrustedProxy(peer) {
 		return peer
 	}
-	chain := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	// Repeated field lines form one list (RFC 9110 5.3); a proxy may add its
+	// own line after the client's instead of appending to it.
+	chain := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	if len(chain) > maxForwardedHops {
+		return peer
+	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		ip := net.ParseIP(strings.TrimSpace(chain[i]))
 		if ip == nil {

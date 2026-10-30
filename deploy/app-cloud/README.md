@@ -34,7 +34,7 @@ chmod 600 .env
 | `EULER_STORAGE_S3_PUBLIC_ENDPOINT` | 浏览器实际可访问的签名上传/下载端点；通常与容器内地址不同。 |
 | `EULER_STORAGE_S3_CORS_MODE` | 默认 `bucket` 使用标准 S3 每桶 CORS。开源 MinIO 配置为 `external`，并在 MinIO 设置 `MINIO_API_CORS_ALLOW_ORIGIN` 为 Euler 来源；此模式 UI 明示 CORS 由部署者统一管理，不伪称支持每桶修改。 |
 | `EULER_STORAGE_CORS_ORIGINS` | 逗号分隔浏览器来源，默认采用 Euler Public URL 的来源。在 `external` 模式须与部署的数据面来源配置保持一致。 |
-| `EULER_WEAUTH_TRUSTED_PROXIES` | 允许转发真实客户端 IP 的反向代理 CIDR，WeAuth、统计采集和抽奖报名共用。只填实际受控代理地址（如 Compose 内部网络）；默认忽略客户端伪造的 XFF，`0.0.0.0/0`、`::/0` 会让服务拒绝启动。未配置时，经内置 Nginx 的所有访客共用代理 IP 的同一个每 IP 限额。 |
+| `EULER_WEAUTH_TRUSTED_PROXIES` | 允许转发真实客户端 IP 的反向代理 CIDR，WeAuth、统计采集、抽奖报名和 WitShield Agent 设备入口共用。只填实际受控代理地址（如 Compose 内部网络）；默认忽略客户端伪造的 XFF，`0.0.0.0/0`、`::/0` 会让服务拒绝启动。未配置时，经内置 Nginx 的所有访客共用代理 IP 的同一个每 IP 限额；同一 WitShield 安装的所有设备也共用一个来源额度，约 100 台以上设备或 10 分钟内接入超过 120 台时会收到 429。 |
 | `EULER_OPERATIONS_TOKEN` | 可选的独立只读监控令牌，用于受保护的 `/ops/diagnostics` 和 `/ops/metrics`；未配置时仅允许平台管理员会话访问。 |
 
 身份配置缺失时控制台会说明无法登录，不会建立演示管理员。业务模块配置和完整功能对应关系见 [独立应用架构](../../docs/unified-app-cloud/NATIVE-APPS.md) 及各产品文档。MySQL、PostgreSQL、S3、邮件和 AI 服务可分别配置；未配置的基础服务会明确报告不可用，不返回虚构资源。

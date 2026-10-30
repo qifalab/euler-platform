@@ -120,10 +120,10 @@ func (e *Engine) maintain(ctx context.Context) error {
 	}
 }
 func (e *Engine) ServeManagement(w http.ResponseWriter, r *http.Request, actorID string) {
-	e.api.EulerManagementHandler(actorID).ServeHTTP(w, r)
+	e.api.ServeEulerManagement(w, r, actorID)
 }
 func (e *Engine) ServeAgent(w http.ResponseWriter, r *http.Request, originalURI string) {
-	e.api.EulerAgentHandler(originalURI).ServeHTTP(w, r)
+	e.api.ServeEulerAgent(w, r, originalURI)
 }
 func (e *Engine) Close() error {
 	e.once.Do(func() { e.cancel(); e.wg.Wait(); e.closeErr = e.db.Close() })

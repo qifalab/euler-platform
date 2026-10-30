@@ -6,6 +6,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/domain"
@@ -65,7 +66,38 @@ func ManagementRoutes() []ManagementRoute {
 	}
 }
 
+// eulerEntrypoints holds the in-process Euler handlers. They are built once
+// per Server, on first use; the per-request Euler actor and the signed
+// external URI travel in the request context, never in shared state.
+type eulerEntrypoints struct {
+	once       sync.Once
+	management http.Handler
+	agent      http.Handler
+}
+
+func (s *Server) eulerHandlers() *eulerEntrypoints {
+	s.euler.once.Do(func() {
+		s.euler.management = s.eulerManagementRoutes()
+		s.euler.agent = s.eulerAgentRoutes()
+	})
+	return &s.euler
+}
+
+type eulerActorKey struct{}
+
+// ServeEulerManagement serves one business request for an Euler actor that
+// the platform has already authenticated and authorized.
+func (s *Server) ServeEulerManagement(w http.ResponseWriter, r *http.Request, actorID string) {
+	ctx := context.WithValue(r.Context(), eulerActorKey{}, actorID)
+	s.eulerHandlers().management.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// EulerManagementHandler is ServeEulerManagement bound to one actor.
 func (s *Server) EulerManagementHandler(actorID string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.ServeEulerManagement(w, r, actorID) })
+}
+
+func (s *Server) eulerManagementRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/system/health", s.systemHealth)
 	mux.HandleFunc("GET /api/v1/enrollment-tokens", s.listEnrollmentTokens)
@@ -113,6 +145,7 @@ func (s *Server) EulerManagementHandler(actorID string) http.Handler {
 	mux.HandleFunc("POST /api/v1/devices/{id}/emergency-stop", s.emergencyStop)
 	return securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		actorID, _ := r.Context().Value(eulerActorKey{}).(string)
 		if actorID == "" {
 			writeError(w, 401, "unauthenticated", "Euler actor required")
 			return
@@ -132,9 +165,19 @@ func (s *Server) EulerManagementHandler(actorID string) http.Handler {
 
 type originalRequestURIKey struct{}
 
-// EulerAgentHandler keeps the external URI covered by the device signature,
+// ServeEulerAgent keeps the external URI covered by the device signature,
 // while dispatching the already-validated relative route inside the engine.
+func (s *Server) ServeEulerAgent(w http.ResponseWriter, r *http.Request, originalURI string) {
+	ctx := context.WithValue(r.Context(), originalRequestURIKey{}, originalURI)
+	s.eulerHandlers().agent.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// EulerAgentHandler is ServeEulerAgent bound to one external request URI.
 func (s *Server) EulerAgentHandler(originalURI string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.ServeEulerAgent(w, r, originalURI) })
+}
+
+func (s *Server) eulerAgentRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /agent/v1/enroll/challenge", s.agentEnrollChallenge)
 	mux.HandleFunc("POST /agent/v1/enroll", s.agentEnroll)
@@ -153,8 +196,7 @@ func (s *Server) EulerAgentHandler(originalURI string) http.Handler {
 		}
 		operation, cancel := s.operationContext(r.Context())
 		defer cancel()
-		ctx := context.WithValue(operation, originalRequestURIKey{}, originalURI)
-		mux.ServeHTTP(w, r.WithContext(ctx))
+		mux.ServeHTTP(w, r.WithContext(operation))
 	})
 }
 func signedRequestURI(r *http.Request) string {

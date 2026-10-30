@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -35,14 +37,22 @@ type Module struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	closed  bool
+	// Reverse proxies allowed to report the Agent address (shared with WeAuth).
+	trusted   []netip.Prefix
+	configErr error
 }
 
 func New(rt *appkit.Runtime) *Module {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Module{rt: rt, engines: map[string]*engine.Engine{}, ctx: ctx, cancel: cancel}
+	m := &Module{rt: rt, engines: map[string]*engine.Engine{}, ctx: ctx, cancel: cancel}
+	m.trusted, m.configErr = appkit.TrustedProxiesFromEnv()
+	return m
 }
 func (*Module) ID() string { return "witshield" }
 func (m *Module) Migrate(ctx context.Context) error {
+	if m.configErr != nil {
+		return m.configErr
+	}
 	if m.rt == nil || m.rt.DB == nil || m.rt.DeriveKey == nil || m.rt.ApplicationEnabled == nil || !filepath.IsAbs(m.rt.DataDir) {
 		return errors.New("WitShield requires platform persistence, key derivation and enabled gate")
 	}
@@ -198,8 +208,27 @@ func (m *Module) PublicHandler() http.Handler {
 		u.Path = "/" + parts[3]
 		u.RawPath = ""
 		clone.URL = &u
+		m.agentPeer(clone, r)
 		e.ServeAgent(w, clone, r.RequestURI)
 	})
+}
+
+// agentPeer gives the engine the Agent host as its peer. The engine trusts no
+// proxy in Euler mode, so its per-source Agent limits key on RemoteAddr alone;
+// behind the platform's reverse proxy that would be the proxy for every device.
+// The address comes from the platform's trusted proxy list (appkit.ClientIP);
+// the forwarding header is not passed on.
+func (m *Module) agentPeer(clone, r *http.Request) {
+	clone.Header.Del("X-Forwarded-For")
+	client := appkit.ClientIP(r, m.trusted)
+	if client == "unknown" {
+		return
+	}
+	_, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		port = "0"
+	}
+	clone.RemoteAddr = net.JoinHostPort(client, port)
 }
 func (m *Module) Close() error {
 	m.mu.Lock()
