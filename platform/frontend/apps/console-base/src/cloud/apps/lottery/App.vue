@@ -192,6 +192,15 @@ async function loadParticipants() {
       `/rooms/${id}/participants?page=${participantPage.value}&pageSize=${participantSize.value}&search=${encodeURIComponent(participantSearch.value)}`,
     );
     if (selectedID.value === id) {
+      // Removing the only person on the last page leaves that page empty.
+      const last = Math.max(
+        1,
+        Math.ceil(result.total / participantSize.value),
+      );
+      if (!result.participants.length && participantPage.value > last) {
+        participantPage.value = last;
+        return loadParticipants();
+      }
       participants.value = result.participants;
       participantTotal.value = result.total;
       available.value = result.available;
@@ -243,6 +252,10 @@ async function enter(room: Room) {
   selectedID.value = room.id;
   selected.value = room;
   error.value = "";
+  // A confirmation or an unsaved new-activity form belongs to the screen it
+  // was opened on; never carry it into another room.
+  confirmDraw.value = false;
+  creating.value = false;
   participantPage.value = 1;
   participantSearch.value = "";
   invite.value = null;

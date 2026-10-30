@@ -36,7 +36,9 @@ func (m *Module) getSignupPolicy(w http.ResponseWriter, r *http.Request, s appki
 		return err
 	}
 	if p.WeAuthSiteID != "" {
-		if err = m.rt.DB.QueryRowContext(r.Context(), "SELECT sitekey FROM weauth_sites WHERE id=? AND tenant_id=? AND project_id=?", p.WeAuthSiteID, s.TenantID, s.ProjectID).Scan(&p.Sitekey); err != nil {
+		// A deleted site leaves Sitekey empty; the policy stays readable so a
+		// manager can see the stale reference and replace it.
+		if err = m.rt.DB.QueryRowContext(r.Context(), "SELECT sitekey FROM weauth_sites WHERE id=? AND tenant_id=? AND project_id=?", p.WeAuthSiteID, s.TenantID, s.ProjectID).Scan(&p.Sitekey); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 	}

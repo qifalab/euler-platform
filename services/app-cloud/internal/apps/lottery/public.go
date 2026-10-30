@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -134,7 +135,7 @@ var signupTemplate = template.Must(template.New("signup").Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>{{.Name}} · 欧拉活动报名</title>
 <style nonce="{{.Nonce}}">*{box-sizing:border-box}body{margin:0;font:16px/1.6 system-ui,sans-serif;background:radial-gradient(ellipse at 10% 0%,#ffe4ef,transparent 60%),radial-gradient(ellipse at 100% 40%,#dceaff,transparent 70%),#f8f9fc;color:#202944;min-height:100vh;padding:32px 20px}main{max-width:480px;margin:6vh auto;background:#fff;border:1px solid #e8eaf4;border-radius:24px;padding:32px;box-shadow:0 20px 60px #33466c12}.brand{color:#6554cf;font-size:13px;letter-spacing:2px;font-weight:700}h1{font-size:28px;line-height:1.3;margin:20px 0 12px}.muted{color:#75809a}label{display:block;font-weight:600;margin-top:20px}input{font:inherit;width:100%;padding:12px;border:1px solid #ced5e4;border-radius:10px;margin-top:6px}input:focus{outline:3px solid #7466ee33;border-color:#7662ea}button{font:inherit;font-weight:600;cursor:pointer;width:100%;border:0;border-radius:12px;background:linear-gradient(100deg,#6758d9,#9a58d9);color:white;padding:14px;margin-top:24px}button:disabled{opacity:.55;cursor:wait}#notice{margin-top:18px;white-space:pre-wrap}#notice[data-error=true]{color:#be2044}.stats{padding:14px;background:#f3f5fc;border-radius:12px;font-size:14px;margin:20px 0}footer{text-align:center;font-size:12px;margin-top:24px;color:#75809a}@media(prefers-reduced-motion:reduce){*{animation:none!important}}</style></head><body><main>
 <div class="brand">EULER · 活动报名</div><h1>{{.Name}}</h1><p class="muted">{{.Description}}</p><div class="stats">已有 {{.TotalUsers}} 人报名 · {{.CurrentWinners}} 次中奖</div>
-{{if .Open}}{{if .RequireLogin}}<p>本活动需要登录欧拉，并满足主办方设置的资格条件。</p><p><a href="{{.LoginURL}}">登录并报名</a></p><p class="muted">需已有当前团队与项目访问权限；此链接不会授予管理权限。</p>{{else}}<form id="signup"><label for="name">姓名</label><input id="name" name="name" required minlength="2" maxlength="20" autocomplete="name" placeholder="请输入真实姓名"><label for="department">部门 <span class="muted">（可选）</span></label><input id="department" name="department" maxlength="50" autocomplete="organization" placeholder="便于现场识别">{{if .Sitekey}}<iframe id="weauth" title="WeAuth 人机验证" src="{{.WidgetURL}}" width="340" height="114" style="border:0;max-width:100%"></iframe>{{end}}<button id="submit" type="submit">确认报名</button></form><div id="notice" role="status" aria-live="polite"></div><button id="again" hidden type="button">继续为其他人报名</button>
+{{if .Open}}{{if .RequireLogin}}<p>本活动需要登录欧拉，并满足主办方设置的资格条件。</p><p><a href="{{.LoginURL}}">登录并报名</a></p><p class="muted">需已有当前团队与项目访问权限；此链接不会授予管理权限。</p>{{else if .WeAuthMissing}}<p role="status">本活动的人机验证暂不可用，暂时无法报名，请联系主办方。</p>{{else}}<form id="signup"><label for="name">姓名</label><input id="name" name="name" required minlength="2" maxlength="20" autocomplete="name" placeholder="请输入真实姓名"><label for="department">部门 <span class="muted">（可选）</span></label><input id="department" name="department" maxlength="50" autocomplete="organization" placeholder="便于现场识别">{{if .Sitekey}}<iframe id="weauth" title="WeAuth 人机验证" src="{{.WidgetURL}}" width="340" height="114" style="border:0;max-width:100%"></iframe>{{end}}<button id="submit" type="submit">确认报名</button></form><div id="notice" role="status" aria-live="polite"></div><button id="again" hidden type="button">继续为其他人报名</button>
 {{end}}{{else}}<p role="status">活动已暂停报名，请联系现场工作人员。</p>{{end}}<footer>报名链接仅用于本场活动，不提供活动管理权限。</footer></main>
 <script nonce="{{.Nonce}}">(()=>{const form=document.getElementById('signup');if(!form)return;let weauthToken='';const widget=document.getElementById('weauth');window.addEventListener('message',event=>{if(widget&&event.source===widget.contentWindow&&event.origin===location.origin&&event.data?.type==='euler-weauth'){weauthToken=event.data.event==='success'?event.data.token:''}});const button=document.getElementById('submit'),notice=document.getElementById('notice'),again=document.getElementById('again');form.addEventListener('submit',async event=>{event.preventDefault();button.disabled=true;notice.textContent='正在提交…';notice.dataset.error='false';try{const response=await fetch(location.pathname.replace(/\/$/,'')+'/register',{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:form.elements.name.value.trim(),department:form.elements.department.value.trim(),weauthToken})});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'报名失败，请稍后重试');form.hidden=true;notice.textContent='🎉 报名成功，祝您好运！';again.hidden=false;form.reset()}catch(error){notice.textContent=error.message;notice.dataset.error='true'}finally{button.disabled=false}});again.addEventListener('click',()=>{weauthToken='';widget?.contentWindow?.postMessage({type:'euler-weauth-control',action:'reset'},location.origin);form.hidden=false;again.hidden=true;notice.textContent='';document.getElementById('name').focus()})})();</script></body></html>`))
 
@@ -157,16 +158,18 @@ func (m *Module) signupPage(w http.ResponseWriter, r *http.Request, v room) erro
 		return err
 	}
 	if p.WeAuthSiteID != "" {
-		if err = m.rt.DB.QueryRowContext(r.Context(), "SELECT sitekey FROM weauth_sites WHERE id=? AND tenant_id=? AND project_id=?", p.WeAuthSiteID, tenant, project).Scan(&sitekey); err != nil {
+		// A deleted site cannot issue proofs: keep the page and close the form
+		// instead of answering 404 as if the invitation were invalid.
+		if err = m.rt.DB.QueryRowContext(r.Context(), "SELECT sitekey FROM weauth_sites WHERE id=? AND tenant_id=? AND project_id=?", p.WeAuthSiteID, tenant, project).Scan(&sitekey); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 	}
 	query := url.Values{"tenantId": {tenant}, "projectId": {project}, "signup": {v.ID}}
 	widget := url.Values{"sitekey": {sitekey}, "origin": {strings.TrimRight(m.rt.PublicURL, "/")}, "action": {"lottery:" + v.ID}}
 	return signupTemplate.Execute(w, struct {
-		Name, Description, Nonce     string
-		TotalUsers, CurrentWinners   int
-		Open, RequireLogin           bool
-		LoginURL, Sitekey, WidgetURL string
-	}{v.Name, v.Description, nonce, v.TotalUsers, v.CurrentWinners, v.Status == "open", p.RequireLogin, "/apps/lottery?" + query.Encode(), sitekey, "/public/weauth/widget.html?" + widget.Encode()})
+		Name, Description, Nonce          string
+		TotalUsers, CurrentWinners        int
+		Open, RequireLogin, WeAuthMissing bool
+		LoginURL, Sitekey, WidgetURL      string
+	}{v.Name, v.Description, nonce, v.TotalUsers, v.CurrentWinners, v.Status == "open", p.RequireLogin, p.WeAuthSiteID != "" && sitekey == "", "/apps/lottery?" + query.Encode(), sitekey, "/public/weauth/widget.html?" + widget.Encode()})
 }
