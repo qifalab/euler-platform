@@ -149,16 +149,18 @@ func (h *Handler) routes() {
 			writeJSON(w, 200, map[string]any{"authenticated": false, "loginAvailable": false, "loginError": "Identity provider is not configured or unavailable"})
 			return
 		}
+		// An existing session and starting a new login are independent states
+		// (OPERATIONS.md): a valid session survives an identity provider outage.
+		available := true
+		if status, ok := h.auth.(interface{ LoginAvailable() bool }); ok {
+			available = status.LoginAvailable()
+		}
 		p, s, e := h.auth.Authenticate(r)
 		if e != nil {
-			available := true
-			if status, ok := h.auth.(interface{ LoginAvailable() bool }); ok {
-				available = status.LoginAvailable()
-			}
 			writeJSON(w, 200, map[string]any{"authenticated": false, "loginAvailable": available})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"authenticated": true, "loginAvailable": true, "platformAdmin": h.isPlatformAdmin(p), "csrfToken": s.CSRFToken, "user": map[string]string{"id": p.ID, "displayName": p.Name, "provider": p.Provider, "subject": p.Subject}})
+		writeJSON(w, 200, map[string]any{"authenticated": true, "loginAvailable": available, "platformAdmin": h.isPlatformAdmin(p), "csrfToken": s.CSRFToken, "user": map[string]string{"id": p.ID, "displayName": p.Name, "provider": p.Provider, "subject": p.Subject}})
 	})
 	h.mux.HandleFunc("GET /api/v1/catalog", func(w http.ResponseWriter, r *http.Request) { items(w, h.catalog()) })
 	h.route("GET /api/v1/tenants", func(w http.ResponseWriter, r *http.Request, p identity.Principal) error {

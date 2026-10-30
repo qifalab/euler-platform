@@ -57,7 +57,9 @@ func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 	if !trustedProxy(ip, trusted) {
 		return ip.String()
 	}
-	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	// Repeated field lines form one list (RFC 9110 5.3); a proxy may add its
+	// own line after the client's instead of appending to it.
+	parts := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
 	if len(parts) > 32 {
 		return ip.String()
 	}

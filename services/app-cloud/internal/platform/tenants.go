@@ -112,6 +112,12 @@ func (s *Store) ChangeMember(ctx context.Context, user, tenant, target, role str
 			_, e = tx.ExecContext(ctx, "DELETE FROM members WHERE tenant_id=? AND user_id=?", tenant, target)
 		} else {
 			_, e = tx.ExecContext(ctx, "UPDATE members SET role=? WHERE tenant_id=? AND user_id=?", role, tenant, target)
+			// Team owner/admin reach every project implicitly. Without that role the
+			// user keeps only explicit project memberships, and product grants on the
+			// other projects end as they do for a member removed from a project.
+			if e == nil && admin(old) && !admin(role) {
+				_, e = tx.ExecContext(ctx, "DELETE FROM app_grants WHERE tenant_id=? AND user_id=? AND project_id NOT IN (SELECT project_id FROM project_members WHERE tenant_id=? AND user_id=?)", tenant, target, tenant, target)
+			}
 		}
 		if e != nil {
 			return e
@@ -205,18 +211,29 @@ func (s *Store) AcceptInvitation(ctx context.Context, user, token string) (Tenan
 			return ErrNotFound
 		}
 		// An invitation grants initial membership only; it never elevates an existing member.
-		_, e = tx.ExecContext(ctx, "INSERT INTO members(tenant_id,user_id,role,joined_at) VALUES(?,?,?,?) ON CONFLICT(tenant_id,user_id) DO NOTHING", tenant, user, role, stamp())
+		res, e := tx.ExecContext(ctx, "INSERT INTO members(tenant_id,user_id,role,joined_at) VALUES(?,?,?,?) ON CONFLICT(tenant_id,user_id) DO NOTHING", tenant, user, role, stamp())
 		if e != nil {
 			return e
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE invitations SET used_at=? WHERE id=?", stamp(), id); e != nil {
+		// An existing member changes nothing, so the single-use invitation stays
+		// available to the person it was meant for.
+		joined, e := res.RowsAffected()
+		if e != nil {
 			return e
+		}
+		if joined == 1 {
+			if _, e = tx.ExecContext(ctx, "UPDATE invitations SET used_at=? WHERE id=?", stamp(), id); e != nil {
+				return e
+			}
 		}
 		var n int64
 		if e = tx.QueryRowContext(ctx, "SELECT t.id,t.name,m.role,t.created_at FROM tenants t JOIN members m ON m.tenant_id=t.id WHERE t.id=? AND m.user_id=?", tenant, user).Scan(&t.ID, &t.Name, &t.Role, &n); e != nil {
 			return e
 		}
 		t.CreatedAt = fromStamp(n)
+		if joined == 0 {
+			return nil
+		}
 		return audit(ctx, tx, user, tenant, "", "invitation.accepted", id, "Joined team by invitation")
 	})
 	return t, e
@@ -321,7 +338,8 @@ func (s *Store) Audit(ctx context.Context, user, tenant, project string, limit i
 		if project == "" {
 			return nil, ErrForbidden
 		}
-		if e = requireProject(ctx, s.db, user, tenant, project, "admin"); e != nil {
+		// Reading history is not new application work: archived projects keep it.
+		if e = projectAdministrator(ctx, s.db, user, tenant, project); e != nil {
 			return nil, e
 		}
 	} else if project != "" {
