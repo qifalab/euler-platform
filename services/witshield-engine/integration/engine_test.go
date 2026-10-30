@@ -129,6 +129,13 @@ func TestNativeEngineDeviceSignaturesIsolationAndApproval(t *testing.T) {
 	if code := signed(prefixB+"/agent/v1/heartbeat", sig); code != 401 {
 		t.Fatalf("cross-project signature status=%d", code)
 	}
+	// The request above fails in project B on the unknown device token alone.
+	// Prove the proof itself is bound to the installation prefix: a valid device
+	// token with a proof signed for another installation's URI must not pass.
+	foreign, _ := identity.SignAgentRequest(priv, identity.AgentRequestProof{DeviceID: device.ID, Method: "POST", RequestURI: prefixB + "/agent/v1/heartbeat", Timestamp: timestamp, Nonce: nonce, Body: raw})
+	if code := signed(uri, foreign); code != 401 {
+		t.Fatalf("proof signed for another installation prefix status=%d", code)
+	}
 	stripped, _ := identity.SignAgentRequest(priv, identity.AgentRequestProof{DeviceID: device.ID, Method: "POST", RequestURI: "/agent/v1/heartbeat", Timestamp: timestamp, Nonce: nonce, Body: raw})
 	if code := signed(uri, stripped); code != 401 {
 		t.Fatalf("stripped signature status=%d", code)

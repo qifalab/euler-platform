@@ -554,23 +554,26 @@ func (s *server) handle(serverContext context.Context, connection *net.UnixConn)
 			request.Operation = action.OperationExecute
 		}
 	}
+	if request.Operation != action.OperationExecute && request.Operation != action.OperationRollback && request.Operation != action.OperationConfirm {
+		// The Agent sends only these three. They alone get the durable start
+		// marker, replay and action mutex below; a bare apply would change the
+		// host outside them, and the other phases are not part of the protocol.
+		s.writeResponse(connection, helperResponse{Error: "unsupported helper operation"})
+		return
+	}
 	state := request.State
 	if len(request.RollbackPayload) > 0 {
 		state = request.RollbackPayload
 	}
-	if (request.Operation == action.OperationPrecheck || request.Operation == action.OperationPreview ||
-		request.Operation == action.OperationApply || request.Operation == action.OperationExecute) && len(state) > 0 {
+	if request.Operation == action.OperationExecute && len(state) > 0 {
 		s.writeResponse(connection, helperResponse{Error: "rollback state is not accepted for this operation"})
 		return
 	}
 	requestContext, cancel := context.WithTimeout(serverContext, action.PrivilegedExecutionTimeout)
 	defer cancel()
-	cacheable := request.Operation == action.OperationExecute || request.Operation == action.OperationRollback || request.Operation == action.OperationConfirm
-	if cacheable {
-		s.actionMu.Lock()
-		defer s.actionMu.Unlock()
-	}
-	if s.receipts != nil && cacheable {
+	s.actionMu.Lock()
+	defer s.actionMu.Unlock()
+	if s.receipts != nil {
 		if cached, found, cacheErr := s.receipts.load(request.AttemptID, request.ActionID, request.Type, request.Operation, request.Parameters, state); cacheErr != nil {
 			s.writeResponse(connection, helperResponse{Error: "receipt cache validation failed"})
 			return
@@ -596,7 +599,7 @@ func (s *server) handle(serverContext context.Context, connection *net.UnixConn)
 			break
 		}
 	}
-	if s.receipts != nil && cacheable {
+	if s.receipts != nil {
 		if err := s.receipts.save(request.AttemptID, request.ActionID, request.Type, request.Operation, request.Parameters, state, response); err != nil {
 			response.OK = false
 			if receipt.Success {

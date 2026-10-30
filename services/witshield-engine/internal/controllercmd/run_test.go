@@ -67,6 +67,11 @@ func TestIsolatedLocalListenAddress(t *testing.T) {
 		"[::]:8081":           false,
 		":8081":               false,
 		"admin-listener":      false,
+
+		// The same wildcard spelled differently binds every interface too.
+		"[::0]:8081":             false,
+		"[0:0:0:0:0:0:0:0]:8081": false,
+		"[::ffff:0.0.0.0]:8081":  false,
 	}
 	for address, want := range tests {
 		if got := isolatedLocalListenAddress(address); got != want {
