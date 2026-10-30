@@ -76,6 +76,10 @@ var baselineTargets = []baselineTarget{
 }
 
 func (w *baselineWatcher) Poll(ctx context.Context) ([]domain.SecurityEvent, error) {
+	// A snapshot left by an earlier poll whose events were never queued must
+	// not be committed by this one: Commit would then record a host state
+	// that no longer exists and the next poll would report a phantom change.
+	w.pending = nil
 	if w.now == nil {
 		w.now = time.Now
 	}

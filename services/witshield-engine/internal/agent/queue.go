@@ -127,6 +127,33 @@ func (q *Queue) files() ([]string, int64, error) {
 	sort.Strings(files)
 	return files, total, nil
 }
+
+// HasCommandResult reports whether a result for commandID is still waiting in
+// the queue. Entries are read in full; commands are rare compared with the
+// events and reports that make up most of a backlog.
+func (q *Queue) HasCommandResult(commandID string) (bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	files, _, err := q.files()
+	if err != nil {
+		return false, err
+	}
+	for _, name := range files {
+		b, err := os.ReadFile(filepath.Join(q.dir, name))
+		if err != nil {
+			return false, err
+		}
+		var item struct {
+			Kind      string `json:"kind"`
+			CommandID string `json:"commandId"`
+		}
+		if json.Unmarshal(b, &item) == nil && item.Kind == "command_result" && item.CommandID == commandID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (q *Queue) Flush(ctx context.Context, c *Client) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()

@@ -90,10 +90,10 @@ func safeSensorError(value string) string {
 		}
 		return r
 	}, strings.TrimSpace(value))
-	if len(value) > 500 {
-		value = value[:500]
-	}
-	return value
+	// truncateUTF8 keeps a split rune from being re-encoded as several U+FFFD,
+	// which would push the error past the Controller's 500-byte limit and make
+	// it reject the whole heartbeat.
+	return truncateUTF8(value, 500)
 }
 
 func (r *Runner) sensorSnapshot() []domain.SensorHealth {
