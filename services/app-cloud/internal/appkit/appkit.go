@@ -68,6 +68,9 @@ type Runtime struct {
 	ApplicationEnabled func(ctx context.Context, tenantID, projectID, applicationID string) (bool, error)
 }
 
+// Module is one installed application. The platform calls Handler once, when
+// its own handler is built, and serves every request concurrently with the
+// result, so a module handler must not keep per-request state.
 type Module interface {
 	ID() string
 	Migrate(context.Context) error

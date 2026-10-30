@@ -1019,10 +1019,20 @@ func TestEnrollmentCreatesControllerOwnedScheduleFromLegacyHint(t *testing.T) {
 	if err := s.CreateEnrollmentToken(ctx, token, "enrollment-hash"); err != nil {
 		t.Fatal(err)
 	}
-	device, err := s.EnrollDevice(ctx, "enrollment-hash", "agent-hash", EnrollInput{Name: "scheduled", Hostname: "host", OS: "linux", Arch: "amd64", AgentVersion: "test", ScanInterval: 7 * 24 * time.Hour}, now)
-	if err != nil {
+	// Production enrollment path: a one-time challenge, then FinalizeEnrollment.
+	if err := s.CreateEnrollmentChallenge(ctx, EnrollmentChallengeInput{ID: "chl_schedule", EnrollmentHash: "enrollment-hash", IdentityKey: "identity-schedule", ChallengeHash: "challenge-hash", ExpiresAt: now.Add(5 * time.Minute), Now: now}); err != nil {
 		t.Fatal(err)
 	}
+	enrolled, err := s.FinalizeEnrollment(ctx, FinalizeEnrollmentInput{
+		ChallengeID: "chl_schedule", ChallengeHash: "challenge-hash", EnrollmentHash: "enrollment-hash",
+		AgentTokenHash: "agent-hash", EncryptedAgentToken: "encrypted-agent-token",
+		Device: EnrollInput{Name: "scheduled", Hostname: "host", OS: "linux", Arch: "amd64", AgentVersion: "test", IdentityKey: "identity-schedule", ScanInterval: 7 * 24 * time.Hour},
+		Now:    now,
+	})
+	if err != nil || !enrolled.Created {
+		t.Fatalf("enrollment failed: created=%v err=%v", enrolled.Created, err)
+	}
+	device := enrolled.Device
 	schedules, err := s.ListSchedules(ctx)
 	if err != nil {
 		t.Fatal(err)

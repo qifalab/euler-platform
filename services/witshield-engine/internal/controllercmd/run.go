@@ -27,10 +27,6 @@ import (
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/store"
 )
 
-func Main(ctx context.Context, args []string) error {
-	return MainVersion(ctx, args, "dev")
-}
-
 func MainVersion(ctx context.Context, args []string, version string) error {
 	fs := flag.NewFlagSet("witshieldd", flag.ContinueOnError)
 	listen := fs.String("listen", env("WITSHIELD_LISTEN", "127.0.0.1:8080"), "HTTP listen address")

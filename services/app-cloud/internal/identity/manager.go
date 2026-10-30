@@ -124,12 +124,6 @@ func New(ctx context.Context, config Config, store SessionStore) (*Manager, erro
 	return m, nil
 }
 
-func (m *Manager) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /auth/login", m.Login)
-	mux.HandleFunc("GET /auth/callback", m.Callback)
-	mux.HandleFunc("POST /auth/logout", m.Logout)
-}
-
 func privateResponse(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")

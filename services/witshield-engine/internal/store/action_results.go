@@ -16,65 +16,6 @@ import (
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/ids"
 )
 
-var (
-	ErrPolicyStopped  = errors.New("automatic defense is stopped")
-	ErrBanAlreadyLive = errors.New("a ban is already pending or active for this source")
-	ErrBanRateLimited = errors.New("automatic ban rate limit reached")
-)
-
-func (s *Store) CreatePolicyActionAndEnqueue(ctx context.Context, x domain.Action, cmd domain.DeviceCommand, ban domain.TemporaryBan, policyActor string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err = insertPolicyActionAndEnqueue(ctx, tx, x, cmd, ban, policyActor); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// CreatePolicyActionAndEnqueueLimited makes the policy decision durable in one
-// transaction. This prevents concurrent/batched events from bypassing either
-// the per-source de-duplication or the hourly action budget.
-func (s *Store) CreatePolicyActionAndEnqueueLimited(ctx context.Context, x domain.Action, cmd domain.DeviceCommand, ban domain.TemporaryBan, policyActor string, maxPerHour int, since time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var enabled, emergencyStop, autoBan bool
-	var storedMax int
-	err = tx.QueryRowContext(ctx, `SELECT enabled,emergency_stop,auto_ban,max_bans_per_hour FROM defense_policies WHERE device_id=?`, x.DeviceID).Scan(&enabled, &emergencyStop, &autoBan, &storedMax)
-	if errors.Is(err, sql.ErrNoRows) || !enabled || emergencyStop || !autoBan {
-		return ErrPolicyStopped
-	}
-	if err != nil {
-		return err
-	}
-	if storedMax < maxPerHour || maxPerHour <= 0 {
-		maxPerHour = storedMax
-	}
-	var alreadyLive int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM temporary_bans WHERE device_id=? AND source_ip=? AND (status='pending' OR (status IN ('active','indeterminate') AND expires_at>?))`, x.DeviceID, ban.SourceIP, timeText(x.CreatedAt)).Scan(&alreadyLive); err != nil {
-		return err
-	}
-	if alreadyLive > 0 {
-		return ErrBanAlreadyLive
-	}
-	var recent int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM temporary_bans WHERE device_id=? AND created_at>=? AND simulated=0`, x.DeviceID, timeText(since)).Scan(&recent); err != nil {
-		return err
-	}
-	if recent >= maxPerHour {
-		return ErrBanRateLimited
-	}
-	if err = insertPolicyActionAndEnqueue(ctx, tx, x, cmd, ban, policyActor); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func insertPolicyActionAndEnqueue(ctx context.Context, tx *sql.Tx, x domain.Action, cmd domain.DeviceCommand, ban domain.TemporaryBan, policyActor string) error {
 	if err := insertPolicyActionAndCommand(ctx, tx, x, cmd, policyActor); err != nil {
 		return err

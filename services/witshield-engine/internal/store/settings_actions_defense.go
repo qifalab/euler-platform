@@ -211,29 +211,6 @@ func (s *Store) ExpireDraftActions(ctx context.Context, now time.Time) error {
 	return tx.Commit()
 }
 
-func (s *Store) ApproveAction(ctx context.Context, id, nonceHash, adminID string, now time.Time) (domain.Action, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.Action{}, err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,approved_by=?,approved_at=?,updated_at=? WHERE id=? AND status=? AND approval_nonce_hash=? AND created_at>=?`, string(domain.ActionApproved), adminID, timeText(now), timeText(now), id, string(domain.ActionDraft), nonceHash, timeText(now.Add(-actionApprovalTTL)))
-	if err != nil {
-		return domain.Action{}, err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return domain.Action{}, ErrConflict
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,created_at) VALUES(?,?,?,?)`, id, adminID, "approved", timeText(now)); err != nil {
-		return domain.Action{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return domain.Action{}, err
-	}
-	x, _, err := s.Action(ctx, id)
-	return x, err
-}
-
 func (s *Store) ApproveActionAndEnqueue(ctx context.Context, id, nonceHash, adminID string, cmd domain.DeviceCommand, now time.Time) (domain.Action, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -262,43 +239,11 @@ func (s *Store) ApproveActionAndEnqueue(ctx context.Context, id, nonceHash, admi
 	x, _, err := s.Action(ctx, id)
 	return x, err
 }
-func (s *Store) MarkActionExecuting(ctx context.Context, id string, now time.Time) error {
-	return s.transitionAction(ctx, id, domain.ActionApproved, domain.ActionExecuting, "agent", "execution_started", nil, "", now)
-}
-func (s *Store) CompleteAction(ctx context.Context, id string, ok bool, result, rollback json.RawMessage, errorText string, now time.Time) error {
-	status := domain.ActionFailed
-	if ok {
-		status = domain.ActionSucceeded
-	}
-	details := result
-	if len(details) == 0 {
-		details = json.RawMessage(`{}`)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,completed_at=?,rollback_payload=?,error=?,updated_at=? WHERE id=? AND status IN (?,?)`, string(status), timeText(now), nullableJSON(rollback), errorText, timeText(now), id, string(domain.ActionExecuting), string(domain.ActionApproved))
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrConflict
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, id, "agent", string(status), string(details), timeText(now)); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
 func nullableJSON(v json.RawMessage) any {
 	if len(v) == 0 {
 		return nil
 	}
 	return string(v)
-}
-func (s *Store) RequestRollback(ctx context.Context, id, adminID string, now time.Time) error {
-	return s.transitionAction(ctx, id, domain.ActionSucceeded, domain.ActionRollingBack, adminID, "rollback_requested", nil, "", now)
 }
 func (s *Store) RequestRollbackAndEnqueue(ctx context.Context, id, adminID string, cmd domain.DeviceCommand, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -390,34 +335,6 @@ func (s *Store) ExpireActionConfirmations(ctx context.Context, now time.Time) er
 	}
 	return tx.Commit()
 }
-func (s *Store) CompleteRollback(ctx context.Context, id string, ok bool, details json.RawMessage, errorText string, now time.Time) error {
-	status := domain.ActionFailed
-	if ok {
-		status = domain.ActionRolledBack
-	}
-	return s.transitionAction(ctx, id, domain.ActionRollingBack, status, "agent", string(status), details, errorText, now)
-}
-func (s *Store) transitionAction(ctx context.Context, id string, from, to domain.ActionStatus, actor, event string, details json.RawMessage, errorText string, now time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,error=?,updated_at=? WHERE id=? AND status=?`, string(to), errorText, timeText(now), id, string(from))
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrConflict
-	}
-	if len(details) == 0 {
-		details = json.RawMessage(`{}`)
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, id, actor, event, string(details), timeText(now)); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
 func (s *Store) ActionAudit(ctx context.Context, actionID string, limit int) ([]domain.ActionAudit, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -478,11 +395,6 @@ func (s *Store) DefensePolicy(ctx context.Context, deviceID string, now time.Tim
 	}
 	x.UpdatedAt, err = parseTime(updated)
 	return x, err
-}
-func (s *Store) PutDefensePolicy(ctx context.Context, x domain.DefensePolicy) error {
-	allow, _ := json.Marshal(x.Allowlist)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO defense_policies(device_id,enabled,emergency_stop,auto_ban,failure_threshold,window_seconds,ban_duration_seconds,max_bans_per_hour,allowlist,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET enabled=excluded.enabled,emergency_stop=excluded.emergency_stop,auto_ban=excluded.auto_ban,failure_threshold=excluded.failure_threshold,window_seconds=excluded.window_seconds,ban_duration_seconds=excluded.ban_duration_seconds,max_bans_per_hour=excluded.max_bans_per_hour,allowlist=excluded.allowlist,updated_at=excluded.updated_at`, x.DeviceID, x.Enabled, x.EmergencyStop, x.AutoBan, x.FailureThreshold, int64(x.Window/time.Second), int64(x.BanDuration/time.Second), x.MaxBansPerHour, string(allow), timeText(x.UpdatedAt))
-	return err
 }
 
 // PutDefensePolicyAndCancelQueued persists the switch and, when emergency stop
@@ -590,25 +502,6 @@ func (s *Store) AddSecurityEvent(ctx context.Context, e domain.SecurityEvent) (b
 func (s *Store) CountSecurityEvents(ctx context.Context, deviceID, eventType, sourceIP string, since time.Time) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM security_events WHERE device_id=? AND type=? AND source_ip=? AND occurred_at>=?`, deviceID, eventType, sourceIP, timeText(since)).Scan(&n)
-	return n, err
-}
-func (s *Store) AddTemporaryBan(ctx context.Context, x domain.TemporaryBan) error {
-	if x.ID == "" {
-		x.ID = ids.New("ban")
-	}
-	if x.Status == "" {
-		if x.Simulated {
-			x.Status = "simulated"
-		} else {
-			x.Status = "active"
-		}
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO temporary_bans(id,device_id,action_id,source_ip,reason,expires_at,created_at,simulated,status) VALUES(?,?,?,?,?,?,?,?,?)`, x.ID, x.DeviceID, x.ActionID, x.SourceIP, x.Reason, timeText(x.ExpiresAt), timeText(x.CreatedAt), x.Simulated, x.Status)
-	return err
-}
-func (s *Store) CountRecentBans(ctx context.Context, deviceID string, since time.Time) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM temporary_bans WHERE device_id=? AND created_at>=? AND simulated=0`, deviceID, timeText(since)).Scan(&n)
 	return n, err
 }
 func (s *Store) ActiveBan(ctx context.Context, deviceID, sourceIP string, now time.Time) (domain.TemporaryBan, error) {

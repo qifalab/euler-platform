@@ -30,6 +30,7 @@ type Handler struct {
 	mux            *http.ServeMux
 	operations     [64]sync.Mutex
 	modules        map[string]appkit.Module
+	moduleHandlers map[string]http.Handler
 	administrators []Administrator
 }
 

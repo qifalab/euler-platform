@@ -27,6 +27,31 @@ type Store struct {
 	key  []byte
 }
 
+// connectionPragmas is the modernc.org/sqlite DSN query that configures each
+// new connection. The driver runs busy_timeout first, then the others.
+const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"
+
+// verifyConnectionPragmas fails Open when the DSN settings did not take
+// effect, rather than serving without foreign-key cascades or a busy timeout.
+// journal_mode is reported but not required: as before, a filesystem that
+// cannot provide WAL keeps SQLite's rollback journal instead of failing startup.
+func verifyConnectionPragmas(db *sql.DB) error {
+	var foreignKeys, busyTimeout, synchronous int
+	var journalMode string
+	for _, check := range []struct {
+		pragma string
+		value  any
+	}{{"foreign_keys", &foreignKeys}, {"busy_timeout", &busyTimeout}, {"journal_mode", &journalMode}, {"synchronous", &synchronous}} {
+		if err := db.QueryRow("PRAGMA " + check.pragma).Scan(check.value); err != nil {
+			return fmt.Errorf("read sqlite %s: %w", check.pragma, err)
+		}
+	}
+	if foreignKeys != 1 || busyTimeout != 5000 || synchronous != 2 {
+		return fmt.Errorf("sqlite connection settings not applied: foreign_keys=%d busy_timeout=%d journal_mode=%s synchronous=%d", foreignKeys, busyTimeout, journalMode, synchronous)
+	}
+	return nil
+}
+
 // Open uses one serialized SQLite connection, foreign keys and durable WAL.
 // The supplied key must persist independently of the database and its backups.
 func Open(path string, key []byte) (*Store, error) {
@@ -59,13 +84,18 @@ func Open(path string, key []byte) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	dsn := path
+	// The pragmas travel in the DSN, so the driver applies them to every
+	// connection database/sql opens, including one that replaces a connection
+	// discarded after driver.ErrBadConn. A one-off Exec would configure only the
+	// first connection. The driver strips the query from ":memory:?..." and
+	// leaves a file: URI's query to SQLite, which ignores the _pragma keys.
+	dsn := ":memory:?" + connectionPragmas
 	if path != ":memory:" {
 		abs, err := filepath.Abs(path)
 		if err != nil {
 			return nil, err
 		}
-		dsn = (&url.URL{Scheme: "file", Path: abs}).String()
+		dsn = (&url.URL{Scheme: "file", Path: abs, RawQuery: connectionPragmas}).String()
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -74,11 +104,9 @@ func Open(path string, key []byte) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	s := &Store{db: db, aead: aead, key: append([]byte(nil), key...)}
-	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL"} {
-		if _, err = db.Exec(q); err != nil {
-			db.Close()
-			return nil, err
-		}
+	if err = verifyConnectionPragmas(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	if err = s.migrate(); err != nil {
 		db.Close()

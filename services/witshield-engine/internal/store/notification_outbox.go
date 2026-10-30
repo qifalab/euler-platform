@@ -247,19 +247,6 @@ func (s *Store) ReleaseNotificationDelivery(ctx context.Context, delivery Notifi
 	return nil
 }
 
-// CancelPendingNotificationChannel ensures disabling a channel does not later
-// replay its queued notifications if the channel is re-enabled.
-func (s *Store) CancelPendingNotificationChannel(ctx context.Context, channel domain.NotificationChannel, reason string, now time.Time) error {
-	if channel != domain.NotificationWebhook && channel != domain.NotificationSMTP {
-		return errors.New("invalid notification channel")
-	}
-	if len(reason) > 512 {
-		reason = reason[:512]
-	}
-	_, err := s.db.ExecContext(ctx, `UPDATE notification_outbox SET status=?,last_error=?,updated_at=? WHERE channel=? AND status=?`, notificationCanceled, reason, timeText(now), string(channel), notificationPending)
-	return err
-}
-
 func (s *Store) PruneNotificationOutbox(ctx context.Context, terminalBefore time.Time) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM notification_outbox WHERE status IN (?,?,?) AND updated_at<?`, notificationDelivered, notificationFailed, notificationCanceled, timeText(terminalBefore))
 	if err != nil {

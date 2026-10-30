@@ -838,29 +838,6 @@ func (s *Store) ExpireStaleActionCommands(ctx context.Context, now time.Time) er
 	}
 	return tx.Commit()
 }
-func (s *Store) CompleteCommand(ctx context.Context, deviceID, id string, result json.RawMessage, errorText string, now time.Time) error {
-	if len(result) == 0 {
-		result = json.RawMessage(`{}`)
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE device_commands SET completed_at=?,result=?,error=? WHERE id=? AND device_id=? AND completed_at IS NULL`, timeText(now), string(result), errorText, id, deviceID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		var storedResult sql.NullString
-		var storedError string
-		if err := s.db.QueryRowContext(ctx, `SELECT result,error FROM device_commands WHERE id=? AND device_id=? AND completed_at IS NOT NULL`, id, deviceID).Scan(&storedResult, &storedError); errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		} else if err != nil {
-			return err
-		}
-		if storedResult.Valid && storedResult.String == string(result) && storedError == errorText {
-			return nil
-		}
-		return ErrConflict
-	}
-	return nil
-}
 
 func (s *Store) Command(ctx context.Context, deviceID, id string) (domain.DeviceCommand, error) {
 	return scanCommand(s.db.QueryRowContext(ctx, `SELECT `+commandColumns+` FROM device_commands WHERE id=? AND device_id=?`, id, deviceID))
