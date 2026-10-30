@@ -40,6 +40,8 @@ const confirmation = ref<{
   path: string;
   method: string;
   body?: unknown;
+  /** The change targets the signed-in user's own membership. */
+  self?: boolean;
 } | null>(null);
 const confirmOpen = computed({
   get: () => Boolean(confirmation.value),
@@ -100,18 +102,31 @@ async function copyInvitation() {
     actionError.value = "无法自动复制，请选中下方链接手动复制。";
   }
 }
+let active = true;
+function isSelf(userId: string) {
+  return Boolean(userId) && userId === state.session?.user?.id;
+}
+// Your own team or project membership decides what this session may see and
+// do (team role, accessible projects, project role). Reload that context as
+// well as the lists, or the shell keeps showing controls the server refuses.
+async function afterChange(self = false) {
+  if (self)
+    await refreshTenants().catch((err) => notify(errorMessage(err), "error"));
+  if (active && state.tenantId) await load();
+}
 async function grant() {
   if (!grantUser.value) return;
   busy.value = true;
   actionError.value = "";
   try {
+    const self = isSelf(grantUser.value);
     await api(projectPath("/members"), {
       method: "POST",
       body: { userId: grantUser.value, role: grantRole.value },
     });
     grantOpen.value = false;
     notify("项目授权已更新。");
-    await load();
+    await afterChange(self);
   } catch (err) {
     actionError.value = errorMessage(err);
   } finally {
@@ -130,6 +145,7 @@ function requestRole(member: Member, event: Event) {
     path: tenantPath(`/members/${encodeURIComponent(member.userId)}`),
     method: "PATCH",
     body: { role },
+    self: isSelf(member.userId),
   };
 }
 function remove(member: Member, scope: string) {
@@ -142,6 +158,7 @@ function remove(member: Member, scope: string) {
         ? tenantPath(`/members/${encodeURIComponent(member.userId)}`)
         : projectPath(`/members/${encodeURIComponent(member.userId)}`),
     method: "DELETE",
+    self: isSelf(member.userId),
   };
 }
 async function confirm() {
@@ -153,7 +170,7 @@ async function confirm() {
     await api(item.path, { method: item.method, body: item.body });
     confirmation.value = null;
     notify("变更已保存。");
-    await load();
+    await afterChange(item.self);
   } catch (err) {
     actionError.value = errorMessage(err);
   } finally {
@@ -186,6 +203,7 @@ function canEdit(member: Member) {
 }
 onMounted(load);
 onBeforeUnmount(() => {
+  active = false;
   controller?.abort();
   invitationLink.value = "";
 });

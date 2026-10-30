@@ -62,6 +62,12 @@ async function load() {
     if (!signal.aborted) loading.value = false;
   }
 }
+// A failed installation list is a project-level error: load() has no
+// installation to open until that list itself is reloaded.
+function retry() {
+  if (state.installationError) refreshInstallations().catch(() => {});
+  else void load();
+}
 async function enable() {
   if (!application.value || busy.value) return;
   busy.value = true;
@@ -144,7 +150,7 @@ onBeforeUnmount(() => controller.abort());
       kind="error"
       title="应用暂时无法打开"
       :description="state.installationError || error"
-      @retry="load"
+      @retry="retry"
     />
     <section
       v-else-if="installation?.status !== 'enabled'"

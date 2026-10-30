@@ -5,12 +5,18 @@ import { useCloud } from "./context";
 import type { AuditEvent, List } from "./types";
 import CloudIcon from "./CloudIcon.vue";
 import CloudState from "./CloudState.vue";
-const { state, tenantPath, canManageTeam } = useCloud();
+const { state, tenantPath, canManageTeam, canManageProject } = useCloud();
 const events = ref<AuditEvent[]>([]);
 const loading = ref(true);
 const error = ref("");
 const query = ref("");
-const scope = ref(state.projectId ? "project" : "team");
+// The server shows team audit to team owners/admins and project audit to
+// project administrators; other members can read neither.
+const projectReadable = computed(
+  () => Boolean(state.projectId) && canManageProject.value,
+);
+const allowed = computed(() => canManageTeam.value || projectReadable.value);
+const scope = ref(projectReadable.value ? "project" : "team");
 let controller: AbortController | undefined;
 const filtered = computed(() =>
   events.value.filter((event) =>
@@ -23,8 +29,12 @@ async function load() {
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
-  loading.value = true;
   error.value = "";
+  if (!allowed.value) {
+    loading.value = false;
+    return;
+  }
+  loading.value = true;
   try {
     events.value = (
       await api<List<AuditEvent>>(
@@ -59,7 +69,7 @@ onBeforeUnmount(() => controller?.abort());
       <div class="filter-tabs">
         <button
           :class="{ active: scope === 'project' }"
-          :disabled="!state.projectId"
+          :disabled="!projectReadable"
           @click="
             scope = 'project';
             load();
@@ -85,7 +95,12 @@ onBeforeUnmount(() => controller?.abort());
       /></label>
     </div>
     <CloudState
-      v-if="loading"
+      v-if="!allowed"
+      kind="empty"
+      title="操作审计仅管理员可查看"
+      description="团队管理员可以查看团队记录，项目管理员可以查看所管理项目的记录。"
+    /><CloudState
+      v-else-if="loading"
       kind="loading"
       title="正在读取审计记录"
     /><CloudState
