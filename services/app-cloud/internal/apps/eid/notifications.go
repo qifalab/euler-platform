@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
@@ -326,6 +327,12 @@ func (m *Module) sendSMTP(ctx context.Context, cfg Settings, to, subject, body s
 		return &uncertainDelivery{e}
 	}
 	if e = writer.Close(); e != nil {
+		// A 4xx/5xx reply to the end of DATA is the server refusing the
+		// message. Only a lost or unreadable reply leaves delivery unknown.
+		var refused *textproto.Error
+		if errors.As(e, &refused) {
+			return e
+		}
 		return &uncertainDelivery{e}
 	}
 	_ = client.Quit()

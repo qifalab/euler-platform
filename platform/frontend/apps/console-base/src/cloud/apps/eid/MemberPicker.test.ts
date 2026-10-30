@@ -58,4 +58,49 @@ describe("EID query authorization member picker", () => {
     expect(wrapper.text()).toContain("已选 2 / 100");
     wrapper.unmount();
   });
+
+  it("runs a search entered while a page is still loading and ignores the late page", async () => {
+    let release!: (value: unknown) => void;
+    const slowFirstPage = new Promise((resolve) => (release = resolve));
+    const request = vi.fn(async (path: string) => {
+      const query = new URL(path, "http://test.local").searchParams;
+      if (!query.get("search")) return slowFirstPage;
+      return {
+        items: [{ actorId: "u7", name: "Member 7" }],
+        total: 1,
+        page: 1,
+      };
+    });
+    const wrapper = mount(MemberPicker, {
+      props: { modelValue: [] },
+      global: {
+        provide: {
+          [appContextKey as symbol]: { request } as unknown as AppContext,
+        },
+      },
+    });
+    await flushPromises();
+    const input = wrapper.find('[aria-label="搜索授权会员"]');
+    await input.setValue("Member 7");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(request).toHaveBeenCalledWith(
+      "/admin/members?page=1&pageSize=25&search=Member%207",
+    );
+    release({
+      items: Array.from({ length: 25 }, (_, i) => ({
+        actorId: `u${i + 1}`,
+        name: `Member ${i + 1}`,
+      })),
+      total: 125,
+      page: 1,
+    });
+    await flushPromises();
+    const shown = wrapper
+      .findAll('input[type="checkbox"]')
+      .map((box) => box.attributes("value"));
+    expect(shown).toEqual(["u7"]);
+    expect(wrapper.text()).toContain("共 1 位");
+    wrapper.unmount();
+  });
 });

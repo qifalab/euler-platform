@@ -151,60 +151,75 @@ async function perform(fn: () => Promise<void>) {
     busy.value = false;
   }
 }
+// Tab switches, filters and reloads can overlap. Only the latest load may
+// write the shared list, total, loading and error state.
+let loadSeq = 0;
 async function load() {
+  const seq = ++loadSeq;
+  const stale = () => seq !== loadSeq;
+  const view = tab.value;
   loading.value = true;
   error.value = "";
   try {
-    if (tab.value === "profile") {
-      profile.value = await app.request<Member>("/profile");
+    if (view === "profile") {
+      const out = await app.request<Member>("/profile");
+      if (stale()) return;
+      profile.value = out;
       Object.assign(profileForm, {
-        bio: profile.value.bio,
-        phone: profile.value.phone,
-        avatar: profile.value.avatar,
+        bio: out.bio,
+        phone: out.phone,
+        avatar: out.avatar,
       });
-    } else if (tab.value === "identity" || tab.value === "review-identity") {
+    } else if (view === "identity" || view === "review-identity") {
       const path =
-        tab.value === "identity" ? "/verifications" : "/review/verifications";
+        view === "identity" ? "/verifications" : "/review/verifications";
       const out = await app.request<Page<Verification>>(
         `${path}?page=${page.value}&status=${filter.value}`,
       );
+      const owned =
+        view === "identity"
+          ? await app.request<Page<Verification>>("/cards")
+          : undefined;
+      if (stale()) return;
       verifications.value = out.items;
       total.value = out.total;
-      if (tab.value === "identity") {
-        const out = await app.request<Page<Verification>>("/cards");
-        cards.value = out.items;
-      }
-    } else if (tab.value === "club" || tab.value === "review-club") {
-      const path = tab.value === "club" ? "/club" : "/review/club";
+      if (owned) cards.value = owned.items;
+    } else if (view === "club" || view === "review-club") {
+      const path = view === "club" ? "/club" : "/review/club";
       const out = await app.request<ClubOverview>(
         `${path}?page=${page.value}&status=${filter.value}`,
       );
+      if (stale()) return;
       clubs.value = out.items;
       total.value = out.total;
-      if (tab.value === "club") overview.value = out;
+      if (view === "club") overview.value = out;
       counts.value = out.counts ?? {};
-    } else if (tab.value === "members") {
+    } else if (view === "members") {
       const out = await app.request<Page<Member>>(
         `/admin/members?page=${page.value}&search=${encodeURIComponent(search.value)}`,
       );
+      if (stale()) return;
       members.value = out.items;
       total.value = out.total;
-    } else if (tab.value === "notifications") {
+    } else if (view === "notifications") {
       const out = await app.request<Page<Notification>>(
         `/notifications?page=${page.value}`,
       );
+      if (stale()) return;
       notifications.value = out.items;
       total.value = out.total;
-    } else if (tab.value === "keys") {
+    } else if (view === "keys") {
       const keys = await app.request<{ items: typeof queryKeys.value }>(
         "/keys",
       );
+      if (stale()) return;
       queryKeys.value = keys.items;
-    } else if (tab.value === "settings") {
+    } else if (view === "settings") {
       const out = await app.request<{
         settings: Record<string, unknown>;
         schemes: { id: string; name: string }[];
       }>("/settings");
+      if (stale()) return;
       for (const key of Object.keys(settings) as (keyof typeof settings)[]) {
         if (key in out.settings)
           (settings as Record<string, unknown>)[key] = out.settings[key];
@@ -221,9 +236,9 @@ async function load() {
       schemes.value = out.schemes;
     }
   } catch (e) {
-    fail(e);
+    if (!stale()) fail(e);
   } finally {
-    loading.value = false;
+    if (!stale()) loading.value = false;
   }
 }
 watch(
@@ -325,6 +340,9 @@ function rejectClub(item: Club) {
 }
 function send(item: Club, kind: string, resend = false) {
   const label = kind === "offer" ? "录取" : "笔试";
+  // One key per confirmation: retrying after a timeout or lost response
+  // replays the recorded delivery instead of mailing the applicant again.
+  const idempotencyKey = crypto.randomUUID();
   confirm(
     `${resend ? "重发" : "发送"}${label}通知`,
     `将向 ${item.email} 实际发送邮件。${resend ? "请先核对上一封的投递结果，避免重复通知。" : "仅确认投递成功后推进报名状态。"}`,
@@ -337,8 +355,10 @@ function send(item: Club, kind: string, resend = false) {
             kind,
             resend,
             version: item.version,
-            idempotencyKey: crypto.randomUUID(),
+            idempotencyKey,
           },
+          // SMTP delivery and the bot flush can outlast the 20 s default.
+          timeoutMs: 90_000,
         },
       );
       app.notify(
@@ -356,7 +376,7 @@ function retryWebhook(item: Notification) {
     async () => {
       const out = await app.request<Notification>(
         `/notifications/${item.id}/retry`,
-        { method: "POST", body: { confirmed: true } },
+        { method: "POST", body: { confirmed: true }, timeoutMs: 90_000 },
       );
       app.notify(
         out.state === "sent" ? "机器人通知已发送" : out.error || "结果尚未确认",
