@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, reactive } from "vue";
+import { safeExternalURL } from "../../api";
 import { useApp } from "../shared";
 import PackagesPanel from "../database/PackagesPanel.vue";
 import AdvancedPanel from "./AdvancedPanel.vue";
@@ -291,11 +292,13 @@ async function signed(o: FileObject, copyLink = false) {
         `/buckets/${bucket.value!.id}/objects/presigned-download`,
         { method: "POST", body: { key: o.key, expires: 3600 } },
       );
+      const url = safeExternalURL(value.url);
+      if (!url) throw new Error("下载链接无效，请检查存储服务地址配置。");
       if (copyLink) {
-        await copy(value.url);
+        await copy(url);
       } else {
         const a = document.createElement("a");
-        a.href = value.url;
+        a.href = url;
         a.rel = "noopener noreferrer";
         a.target = "_blank";
         a.click();

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -210,11 +209,7 @@ func (m *Module) collectEvent(w http.ResponseWriter, r *http.Request, s site) er
 	if !matches(s, u.Host) || !strings.EqualFold(o.Host, u.Host) || o.Scheme != u.Scheme {
 		return appkit.Forbidden("页面地址与来源不一致")
 	}
-	ip, _, e := net.SplitHostPort(r.RemoteAddr)
-	if e != nil {
-		ip = r.RemoteAddr
-	}
-	ipHash := m.digest(s.ID+"/ip", ip)
+	ipHash := m.digest(s.ID+"/ip", appkit.ClientIP(r, m.trusted))
 	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
 		var names string
 		e := tx.QueryRowContext(r.Context(), "SELECT event_names FROM statistics_settings WHERE site_id=?", s.ID).Scan(&names)

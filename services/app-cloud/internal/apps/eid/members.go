@@ -248,8 +248,8 @@ func (m *Module) editMember(w http.ResponseWriter, r *http.Request, s appkit.Sco
 	return nil
 }
 func (m *Module) deleteMember(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	id := r.PathValue("actorID")
 	if _, err := m.member(r.Context(), s, id); err != nil {
 		return err

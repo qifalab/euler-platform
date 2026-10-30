@@ -10,8 +10,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,11 +20,23 @@ import (
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 )
 
-type Module struct{ rt *appkit.Runtime }
+type Module struct {
+	rt *appkit.Runtime
+	// Reverse proxies allowed to report the visitor address (shared with WeAuth).
+	trusted   []netip.Prefix
+	configErr error
+}
 
-func New(rt *appkit.Runtime) *Module { return &Module{rt: rt} }
-func (*Module) ID() string           { return "statistics" }
+func New(rt *appkit.Runtime) *Module {
+	m := &Module{rt: rt}
+	m.trusted, m.configErr = appkit.TrustedProxiesFromEnv()
+	return m
+}
+func (*Module) ID() string { return "statistics" }
 func (m *Module) Migrate(ctx context.Context) error {
+	if m.configErr != nil {
+		return m.configErr
+	}
 	_, err := m.rt.DB.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS statistics_sites (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
@@ -387,11 +399,7 @@ func (m *Module) collect(w http.ResponseWriter, r *http.Request, s site) error {
 	if in.Referrer != "" {
 		ref, _ = cleanURL(in.Referrer)
 	}
-	ip, _, e := net.SplitHostPort(r.RemoteAddr)
-	if e != nil {
-		ip = r.RemoteAddr
-	}
-	ipHash := m.digest(s.ID+"/ip", ip)
+	ipHash := m.digest(s.ID+"/ip", appkit.ClientIP(r, m.trusted))
 	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
 		if e := m.acceptCollection(r.Context(), tx, s.ID, ipHash); e != nil {
 			return e

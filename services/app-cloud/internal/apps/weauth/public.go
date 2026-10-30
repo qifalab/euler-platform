@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -72,42 +71,18 @@ func (m *Module) public(fn func(http.ResponseWriter, *http.Request) error) http.
 		}
 	}
 }
-func (m *Module) trustedIP(ip netip.Addr) bool {
-	for _, prefix := range m.trusted {
-		if prefix.Contains(ip) {
-			return true
-		}
-	}
-	return false
+
+// sameIP reports whether a business server's remoteip names the address that
+// clientIP recorded. Both sides are parsed and unmapped, so equivalent
+// spellings (IPv4-mapped IPv6, zero padding, brackets) match and unparseable
+// input never does.
+func sameIP(remote, recorded string) bool {
+	remote = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(remote), "["), "]")
+	ip, e := netip.ParseAddr(remote)
+	return e == nil && ip.Unmap().String() == recorded
 }
 func (m *Module) clientIP(r *http.Request) string {
-	host, _, e := net.SplitHostPort(r.RemoteAddr)
-	if e != nil {
-		host = r.RemoteAddr
-	}
-	ip, e := netip.ParseAddr(host)
-	if e != nil {
-		return "unknown"
-	}
-	ip = ip.Unmap()
-	if !m.trustedIP(ip) {
-		return ip.String()
-	}
-	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
-	if len(parts) > 32 {
-		return ip.String()
-	}
-	for i := len(parts) - 1; i >= 0; i-- {
-		next, e := netip.ParseAddr(strings.TrimSpace(parts[i]))
-		if e != nil {
-			return ip.String()
-		}
-		ip = next.Unmap()
-		if !m.trustedIP(ip) {
-			break
-		}
-	}
-	return ip.String()
+	return appkit.ClientIP(r, m.trusted)
 }
 func (m *Module) challenge(w http.ResponseWriter, r *http.Request) error {
 	var input struct {
@@ -167,7 +142,14 @@ func (m *Module) challenge(w http.ResponseWriter, r *http.Request) error {
 			requests = 0
 			failures = 0
 		}
-		if requests >= 120 && now.Unix()-start < 60 {
+		// Burst limit: at most 120 challenges per IP in any rolling minute. It is
+		// counted from the challenges themselves so it keeps applying for the
+		// whole risk window, not only during its first minute.
+		var burst int
+		if e := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM weauth_challenges WHERE site_id=? AND created_at>? AND json_extract(body,'$.ip')=?", site.ID, now.Add(-time.Minute).Unix(), ip).Scan(&burst); e != nil {
+			return e
+		}
+		if burst >= 120 {
 			return &appkit.Error{Status: 429, Code: "rate_limited", Message: "请求过于频繁，请稍后重试"}
 		}
 		increments := 0
@@ -330,7 +312,7 @@ func (m *Module) consume(ctx context.Context, site Site, token, remoteIP string,
 		if e = json.Unmarshal([]byte(body), &c); e != nil {
 			return e
 		}
-		if remoteIP != "" && remoteIP != c.IP {
+		if remoteIP != "" && !sameIP(remoteIP, c.IP) {
 			return nil
 		}
 		res, e := tx.ExecContext(ctx, "UPDATE weauth_challenges SET token_used=1 WHERE id=? AND token_used=0", id)

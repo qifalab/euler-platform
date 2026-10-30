@@ -140,7 +140,9 @@ func (m *Module) beginMultipart(w http.ResponseWriter, r *http.Request, s appkit
 	}
 	remote, e := p.BeginMultipart(r.Context(), b.Name, "staging/"+id, input.ContentType)
 	if e != nil {
-		_, _ = m.rt.DB.ExecContext(context.Background(), "UPDATE storage_uploads SET state='cancelled' WHERE id=?", id)
+		// No session or permit exists yet; expire the row so the versioning
+		// guard does not count it as an outstanding normal upload.
+		_, _ = m.rt.DB.ExecContext(context.Background(), "UPDATE storage_uploads SET state='cancelled',expires_at=? WHERE id=?", appkit.Now(), id)
 		return appkit.Unavailable("无法创建 S3 分片上传")
 	}
 	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {

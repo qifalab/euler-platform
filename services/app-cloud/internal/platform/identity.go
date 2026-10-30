@@ -78,10 +78,22 @@ func (s *Store) PutAuthFlow(ctx context.Context, v identity.AuthFlow) error {
 		if _, e := tx.ExecContext(ctx, "DELETE FROM auth_flows WHERE expires_at<=?", stamp()); e != nil {
 			return e
 		}
-		_, e := tx.ExecContext(ctx, "INSERT INTO auth_flows VALUES(?,?,?)", v.StateHash, enc, v.ExpiresAt.UnixMilli())
+		if _, e := tx.ExecContext(ctx, "INSERT INTO auth_flows VALUES(?,?,?)", v.StateHash, enc, v.ExpiresAt.UnixMilli()); e != nil {
+			return e
+		}
+		// Keep only the newest pending logins; the oldest are dropped first.
+		_, e := tx.ExecContext(ctx, "DELETE FROM auth_flows WHERE state_hash IN (SELECT state_hash FROM auth_flows ORDER BY expires_at DESC LIMIT -1 OFFSET ?)", maxPendingAuthFlows)
 		return e
 	})
 }
+
+// maxPendingAuthFlows bounds unauthenticated login state. Every GET /auth/login
+// stores one row until the callback consumes it or it expires, so without a
+// bound a flood of login starts grows the table with the request rate. Normal
+// use stays far below this; under a flood the oldest unfinished logins fail and
+// the user simply starts again. Per-client rate limits belong to the edge proxy.
+var maxPendingAuthFlows = 10000
+
 func (s *Store) ConsumeAuthFlow(ctx context.Context, hash string) (identity.AuthFlow, error) {
 	var flow identity.AuthFlow
 	var data []byte

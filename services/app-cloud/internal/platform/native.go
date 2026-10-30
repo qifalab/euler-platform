@@ -245,6 +245,10 @@ func (h *Handler) grantRoutes() {
 			if _, err := projectRole(r.Context(), tx, b.UserID, b.TenantID, b.ProjectID); err != nil {
 				return err
 			}
+			// Archived projects keep their grants but accept no new ones.
+			if err := requireActiveProject(r.Context(), tx, b.TenantID, b.ProjectID); err != nil {
+				return err
+			}
 			var existing string
 			err := tx.QueryRowContext(r.Context(), `SELECT id FROM app_grants WHERE tenant_id=? AND project_id=? AND application_id=? AND user_id=? AND permission=?`, b.TenantID, b.ProjectID, b.ApplicationID, b.UserID, b.Permission).Scan(&existing)
 			if err == nil {

@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html/template"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -84,14 +83,10 @@ func (m *Module) register(w http.ResponseWriter, r *http.Request, v room) error 
 	if e := validateParticipant(&in, true); e != nil {
 		return e
 	}
-	ip, _, e := net.SplitHostPort(r.RemoteAddr)
-	if e != nil {
-		ip = r.RemoteAddr
-	}
 	h := hmac.New(sha256.New, m.rt.DeriveKey("lottery/signup-rate"))
-	fmt.Fprint(h, v.ID, "/", ip)
+	fmt.Fprint(h, v.ID, "/", appkit.ClientIP(r, m.trusted))
 	client := hex.EncodeToString(h.Sum(nil))
-	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
+	e := m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
 		// Recheck token and enabled installation inside the write transaction;
 		// rotation, closure or app disabling cannot race a successful signup.
 		current, e := m.publicRoom(r.Context(), tx, r.PathValue("token"))

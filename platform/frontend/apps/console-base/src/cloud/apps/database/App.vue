@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from "vue";
+import { safeExternalURL } from "../../api";
 import { useApp } from "../shared";
 import PackagesPanel from "./PackagesPanel.vue";
 const app = useApp();
@@ -441,7 +442,7 @@ onMounted(load);
           <a
             v-for="tool in connection.tools"
             :key="tool.name"
-            :href="tool.url"
+            :href="safeExternalURL(tool.url)"
             target="_blank"
             rel="noopener noreferrer"
             >打开 {{ tool.name }} ↗</a

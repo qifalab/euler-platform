@@ -70,7 +70,7 @@ docker rm euler-device-tools-export
 sha256sum ./euler-device-tools/witshield-agent ./euler-device-tools/witshield-helper
 ```
 
-也可在 `services/witshield-engine` 目录用 Go 1.27.1 构建：
+也可在 `services/witshield-engine` 目录用 Go 1.27.3 构建：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o ./dist/witshield-agent ./cmd/witshield-agent

@@ -13,17 +13,30 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 )
 
-type Module struct{ rt *appkit.Runtime }
+type Module struct {
+	rt *appkit.Runtime
+	// Reverse proxies allowed to report the visitor address (shared with WeAuth).
+	trusted   []netip.Prefix
+	configErr error
+}
 
-func New(rt *appkit.Runtime) *Module { return &Module{rt: rt} }
-func (*Module) ID() string           { return "lottery" }
+func New(rt *appkit.Runtime) *Module {
+	m := &Module{rt: rt}
+	m.trusted, m.configErr = appkit.TrustedProxiesFromEnv()
+	return m
+}
+func (*Module) ID() string { return "lottery" }
 func (m *Module) Migrate(ctx context.Context) error {
+	if m.configErr != nil {
+		return m.configErr
+	}
 	_, e := m.rt.DB.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS lottery_rooms (
  id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,project_id TEXT NOT NULL,installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,

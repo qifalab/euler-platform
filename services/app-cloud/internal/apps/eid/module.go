@@ -20,10 +20,30 @@ import (
 type Module struct {
 	rt            *appkit.Runtime
 	mux           *http.ServeMux
-	sendMu        sync.Mutex
+	locksMu       sync.Mutex
+	locks         map[string]*sync.Mutex
 	mailer        func(context.Context, Settings, string, string, string) error
 	client        *http.Client
 	smtpTLSConfig func(string) *tls.Config
+}
+
+// lock serializes club, member, settings and mail operations of one EID
+// installation. SMTP delivery runs while it is held, so the lock is per
+// installation: a slow mail server in one project never blocks another.
+func (m *Module) lock(s appkit.Scope) func() {
+	key := s.TenantID + "\x00" + s.ProjectID + "\x00" + s.InstallationID
+	m.locksMu.Lock()
+	if m.locks == nil {
+		m.locks = map[string]*sync.Mutex{}
+	}
+	l := m.locks[key]
+	if l == nil {
+		l = &sync.Mutex{}
+		m.locks[key] = l
+	}
+	m.locksMu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 func New(rt *appkit.Runtime) *Module {

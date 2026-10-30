@@ -99,6 +99,14 @@ func (s *Store) ChangeMember(ctx context.Context, user, tenant, target, role str
 			}
 		}
 		act := "member.role_changed"
+		// An invitation carries its creator's authority. Once the creator loses
+		// owner/admin, unused invitations they issued must not admit anyone,
+		// including the creator re-joining through a token kept from before.
+		if admin(old) && (remove || !admin(role)) {
+			if _, e = tx.ExecContext(ctx, "UPDATE invitations SET revoked_at=? WHERE tenant_id=? AND created_by=? AND used_at IS NULL AND revoked_at IS NULL", stamp(), tenant, target); e != nil {
+				return e
+			}
+		}
 		if remove {
 			act = "member.removed"
 			_, e = tx.ExecContext(ctx, "DELETE FROM members WHERE tenant_id=? AND user_id=?", tenant, target)
@@ -185,7 +193,8 @@ func (s *Store) AcceptInvitation(ctx context.Context, user, token string) (Tenan
 	e := s.write(ctx, func(tx *sql.Tx) error {
 		var id, role, tenant string
 		var exp int64
-		e := tx.QueryRowContext(ctx, "SELECT id,tenant_id,role,expires_at FROM invitations WHERE token_hash=? AND used_at IS NULL AND revoked_at IS NULL", tokenHash(token)).Scan(&id, &tenant, &role, &exp)
+		// The creator must still hold owner/admin when the invitation is used.
+		e := tx.QueryRowContext(ctx, "SELECT i.id,i.tenant_id,i.role,i.expires_at FROM invitations i JOIN members m ON m.tenant_id=i.tenant_id AND m.user_id=i.created_by AND m.role IN ('owner','admin') WHERE i.token_hash=? AND i.used_at IS NULL AND i.revoked_at IS NULL", tokenHash(token)).Scan(&id, &tenant, &role, &exp)
 		if errors.Is(e, sql.ErrNoRows) {
 			return ErrNotFound
 		}

@@ -197,7 +197,9 @@ func (m *Module) presignUpload(w http.ResponseWriter, r *http.Request, s appkit.
 	}
 	signature, e := m.plane.UploadSignature(r.Context(), b.Name, "staging/"+id, input.Size, input.ContentType, 15*time.Minute)
 	if e != nil {
-		_, _ = m.rt.DB.ExecContext(context.Background(), "UPDATE storage_uploads SET state='cancelled' WHERE id=?", id)
+		// No permit reached the client, so nothing can be replayed: expire the
+		// row now instead of making the versioning guard wait for it.
+		_, _ = m.rt.DB.ExecContext(context.Background(), "UPDATE storage_uploads SET state='cancelled',expires_at=? WHERE id=?", appkit.Now(), id)
 		return appkit.Unavailable("无法签发上传许可")
 	}
 	appkit.JSON(w, 201, map[string]any{"uploadId": id, "signature": signature, "key": input.Key})

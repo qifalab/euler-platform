@@ -40,6 +40,9 @@ func (s *Store) RenameProject(ctx context.Context, actor, tenant, project, name 
 		if err := projectAdministrator(ctx, tx, actor, tenant, project); err != nil {
 			return err
 		}
+		if err := requireActiveProject(ctx, tx, tenant, project); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name=? WHERE id=? AND tenant_id=?`, name, project, tenant); err != nil {
 			return err
 		}

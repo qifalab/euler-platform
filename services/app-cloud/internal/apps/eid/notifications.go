@@ -104,8 +104,8 @@ func (m *Module) sendClubNotification(w http.ResponseWriter, r *http.Request, s 
 	if e != nil {
 		return e
 	}
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	kind := in.Kind
 	if in.Resend {
 		kind = "resend_" + kind
