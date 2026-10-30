@@ -1,6 +1,8 @@
 [Unit]
 Description=Euler coordinated offline backup
-ConditionPathExists=/opt/euler-platform/deploy/app-cloud/.env
+# Assert, not Condition: a missing deployment must fail the unit so the
+# non-zero-exit alert fires. A failed Condition silently skips the backup.
+AssertPathExists=/opt/euler-platform/deploy/app-cloud/.env
 
 [Service]
 Type=oneshot

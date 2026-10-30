@@ -51,8 +51,12 @@ def relative_name(value: str) -> str:
 
 
 def digest(path: Path) -> str:
+    # hashlib.file_digest needs Python 3.11; host CLIs may run on 3.10 (Ubuntu 22.04).
+    value = hashlib.sha256()
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
 
 
 def encryption_key(key: str | None = None) -> bytes:

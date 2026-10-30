@@ -43,6 +43,21 @@ class ScheduledBackupTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 run_backup(Path(root), freeze_hook=Path("/not-used"))
 
+    def test_maintenance_runs_stage_on_the_backup_volume_not_tmpfs(self):
+        # verify unpacks the whole archive under TMPDIR; the container's /tmp is RAM-backed tmpfs.
+        calls = []
+        def command(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with tempfile.TemporaryDirectory() as root, patch("scheduled_backup.subprocess.run", side_effect=command):
+            run_backup(Path(root))
+        runs = [call for call in calls if "run" in call]
+        self.assertEqual([call[call.index("maintenance", call.index("run")) + 1] for call in runs], ["backup", "verify"])
+        for call in runs:
+            options = call[call.index("run"):call.index("maintenance", call.index("run"))]
+            self.assertIn("TMPDIR=/backups", options)
+            self.assertEqual(options[options.index("TMPDIR=/backups") - 1], "--env")
+
 
 if __name__ == "__main__":
     unittest.main()

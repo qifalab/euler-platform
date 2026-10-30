@@ -8,6 +8,9 @@ services:
       target: server
     restart: unless-stopped
     init: true
+    # SIGTERM starts a 20 s HTTP drain plus worker/SQLite shutdown (OPERATIONS.md);
+    # Docker's default 10 s would SIGKILL in-flight engine/S3 operations.
+    stop_grace_period: 30s
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]

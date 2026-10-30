@@ -57,7 +57,11 @@ def run_backup(compose_dir: Path, *, external_dir: Path | None = None, freeze_ho
                 raise ValueError("app-cloud is still running; backup refused")
             if capture_hook:
                 command([str(capture_hook), str(external_dir)])
-            options = ["run", "--rm", "--no-deps", "-T", "--name", maintenance_name]
+            # verify extracts the whole archive under TMPDIR, and the maintenance
+            # container's /tmp is a RAM-backed tmpfs (compose.yaml). Stage on the
+            # backup volume, which must already hold the archive, instead.
+            run = ["run", "--rm", "--no-deps", "-T", "--name", maintenance_name, "--env", "TMPDIR=/backups"]
+            options = list(run)
             if external_dir:
                 options += ["--volume", f"{external_dir}:/external:ro"]
             arguments = ["backup", "--data-dir", "/data", "--output", archive, "--service-stopped", "--release", release]
@@ -69,7 +73,7 @@ def run_backup(compose_dir: Path, *, external_dir: Path | None = None, freeze_ho
             verify_args = ["verify", archive]
             if allow_incomplete:
                 verify_args += ["--allow-incomplete-external"]
-            command(compose + ["run", "--rm", "--no-deps", "-T", "--name", maintenance_name, "maintenance"] + verify_args)
+            command(compose + run + ["maintenance"] + verify_args)
         finally:
             try:
                 # If the foreground docker client was interrupted, the daemon may
