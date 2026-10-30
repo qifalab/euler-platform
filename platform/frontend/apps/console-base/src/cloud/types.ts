@@ -59,21 +59,6 @@ export interface Installation {
   createdAt: string;
   connection?: { baseUrl: string; configured: boolean; updatedAt: string };
 }
-export interface Summary {
-  state: "ready" | "unconfigured" | "unavailable" | "unsupported";
-  message: string;
-  metrics?: { label: string; value: string | number }[];
-  verification?: { status: string; identityType?: string };
-  consoleUrl?: string;
-  checkedAt?: string;
-}
-export interface Resource {
-  id: string;
-  name: string;
-  type: string;
-  status?: string;
-  url?: string;
-}
 export interface AuditEvent {
   id: string;
   actorId: string;

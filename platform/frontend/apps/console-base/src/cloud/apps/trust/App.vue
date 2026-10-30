@@ -499,23 +499,6 @@ async function showSubmission(id: string, review = false) {
     reviewReason.value = "";
   });
 }
-async function applyReview(status: string) {
-  const sub = detail.value;
-  if (!sub) return;
-  await run(async () => {
-    detail.value = await app.request<Submission>(
-      `/review/submissions/${sub.id}`,
-      {
-        method: "POST",
-        body: { status, version: sub.version, reason: reviewReason.value },
-      },
-    );
-    await refresh();
-    await loadQueue();
-    reviewReason.value = "";
-    app.notify("审核结果已保存", "success");
-  });
-}
 function reviewConfirm(status: string) {
   if (status === "rejected" && !reviewReason.value.trim()) {
     error.value = "请填写拒绝原因";

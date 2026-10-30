@@ -1,4 +1,4 @@
-export type { Application, Installation, Summary, Resource } from "./types";
+export type { Application, Installation } from "./types";
 
 let csrfToken = "";
 export function getCSRFToken() {
