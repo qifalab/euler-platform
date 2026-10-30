@@ -32,7 +32,7 @@ export interface SdkOptions {
   getToken?: () => string | undefined;
   /** Called on 401 to refresh; resolves with a fresh token, or rejects. */
   onUnauthorized?: () => Promise<string | undefined>;
-  /** Called with the structured error after a request fails. */
+  /** Called with the structured error after a request fails (not for one the caller aborted). */
   onError?: (err: EuError) => void;
   /** Default timeout, ms. */
   timeout?: number;
@@ -55,14 +55,16 @@ function toError(payload: unknown, status: number, requestId?: string): EuError 
   const body = (payload ?? {}) as {
     code?: string; Code?: string;
     message?: string; Message?: string;
-    detailUrl?: string; requestId?: string;
+    detailUrl?: string; requestId?: string; RequestId?: string;
   };
   const raw = body.message ?? body.Message;
   const message = typeof raw === "string" && raw !== "" ? raw : fallbackMessage(status);
   const err = new Error(message) as EuError;
   err.code = body.code ?? body.Code ?? `HTTP_${status}`;
   err.message = message;
-  err.requestId = body.requestId ?? requestId;
+  // A service that ran without a trace id writes "RequestId": "": fall back to
+  // the response header then.
+  err.requestId = [body.requestId, body.RequestId, requestId].find((v) => typeof v === "string" && v !== "");
   err.detailUrl = body.detailUrl;
   err.status = status;
   return err;
@@ -94,13 +96,20 @@ export function createSDK(options: SdkOptions = {}) {
     const url = baseURL + path;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeout);
     // Chain a caller-supplied signal into the internal timeout controller so
-    // both cancellation sources work (e.g. useResourceTable stale-abort).
+    // both cancellation sources work (e.g. useResourceTable stale-abort). The
+    // listener is removed once fetch settles: a long-lived caller signal would
+    // otherwise keep one listener (and its controller) per request.
     const external = fetchInit.signal;
+    const abortFromCaller = () => controller.abort();
     if (external) {
       if (external.aborted) controller.abort();
-      else external.addEventListener("abort", () => controller.abort(), { once: true });
+      else external.addEventListener("abort", abortFromCaller, { once: true });
     }
 
     const headers = new Headers(fetchInit.headers);
@@ -114,15 +123,25 @@ export function createSDK(options: SdkOptions = {}) {
     let res: Response;
     try {
       res = await fetch(url, { ...fetchInit, headers, signal: controller.signal });
-    } catch (e) {
-      clearTimeout(timer);
-      const err = toError({ message: (e as Error).message }, 0);
-      options.onError?.(err);
+    } catch {
+      // Transport failure (status 0). The browser's own text ("Failed to
+      // fetch", "signal is aborted without reason") is not a message for the
+      // console user, and a timeout must not read like a dropped connection.
+      const cancelled = !timedOut && Boolean(external?.aborted);
+      const message = timedOut ? "请求超时,请稍后重试" : cancelled ? "请求已取消" : fallbackMessage(0);
+      const err = toError({ message }, 0);
+      // A request the caller cancelled (a superseded list fetch) did not fail,
+      // so it is not reported to onError.
+      if (!cancelled) options.onError?.(err);
       throw err;
+    } finally {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", abortFromCaller);
     }
-    clearTimeout(timer);
 
-    const requestId = res.headers.get("X-Request-Id") ?? undefined;
+    // X-Request-Id comes from the APISIX request-id plugin; a service reached
+    // without the gateway (dev proxy) sends only pkg-go's X-Euler-TraceId.
+    const requestId = res.headers.get("X-Request-Id") ?? res.headers.get("X-Euler-TraceId") ?? undefined;
 
     // Auto-replay is only safe for idempotent requests: GET/HEAD/OPTIONS/PUT/
     // DELETE, or any method carrying an explicit idempotencyKey. A plain POST
@@ -136,7 +155,9 @@ export function createSDK(options: SdkOptions = {}) {
     // fresh token directly in headers and skips getToken() (which still returns
     // the stale one — token storage is the caller's job, not the SDK's).
     if (res.status === 401 && retries > 0) {
-      const fresh = await refreshToken();
+      // onUnauthorized may reject (its contract allows it): that means "no
+      // fresh token", and the caller gets the 401 below, not the refresh error.
+      const fresh = await refreshToken().catch(() => undefined);
       if (fresh) {
         headers.set("Authorization", `Bearer ${fresh}`);
         return request<T>(path, { ...init, headers, retries: 0, _skipToken: true });
@@ -227,5 +248,12 @@ export type SDK = ReturnType<typeof createSDK>;
  * rounding the quote to a whole yuan.
  */
 export function yuanToMinor(yuan: string | number): number {
-  return Math.round(Number(yuan) * 100);
+  // Round half-up on the decimal digits. In binary floating point
+  // 1.005 * 100 is 100.49999999999999, so Math.round(Number(yuan) * 100)
+  // gave 100 分 for 1.005 元 (and 28 for 0.285).
+  const m = /^(-?)(\d*)\.?(\d*)$/.exec(String(yuan).trim());
+  if (!m || (m[2] === "" && m[3] === "")) return Math.round(Number(yuan) * 100);
+  const [, sign, int, frac] = m;
+  const minor = Number((int || "0") + frac.padEnd(2, "0").slice(0, 2)) + (frac.charAt(2) >= "5" ? 1 : 0);
+  return sign && minor !== 0 ? -minor : minor;
 }

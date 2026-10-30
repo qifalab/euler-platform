@@ -160,6 +160,68 @@ describe("bridge — sandbox flag without a $wujie bus", () => {
   });
 });
 
+/**
+ * A stand-in for the Wujie 1.0.29 EventBus (wujie/esm/event.js): $on ignores a
+ * listener it already holds, $off removes one, $emit dispatches, and $clear()
+ * drops every listener — Wujie runs it at the end of each UMD unmount
+ * (wujie/esm/sandbox.js unmount, after __WUJIE_UNMOUNT).
+ */
+function wujieBus() {
+  const events: Record<string, Array<(p: unknown) => void>> = {};
+  return {
+    $on(e: string, fn: (p: unknown) => void) {
+      const cbs = (events[e] ??= []);
+      if (!cbs.includes(fn)) cbs.push(fn);
+    },
+    $off(e: string, fn: (p: unknown) => void) {
+      const cbs = events[e] ?? [];
+      const i = cbs.indexOf(fn);
+      if (i >= 0) cbs.splice(i, 1);
+    },
+    $emit(e: string, p?: unknown) {
+      for (const fn of [...(events[e] ?? [])]) fn(p);
+    },
+    $clear() {
+      for (const e of Object.keys(events)) delete events[e];
+    },
+    count(e: string) {
+      return events[e]?.length ?? 0;
+    },
+  };
+}
+
+describe("bridge — Wujie UMD re-mount", () => {
+  it("keeps import-time and module-level subscriptions after unmount clears the bus", async () => {
+    const bus = wujieBus();
+    enterSandbox({
+      $wujie: { bus, props: { token: "snapshot" } },
+      __WUJIE: { mount: () => (win.__WUJIE_MOUNT as () => void)() },
+    });
+    vi.resetModules();
+    const mod = await import("./index");
+    // Like web-marketplace's module-level listener (marketplace.ts).
+    const onSwitch = vi.fn();
+    mod.bridge.on("auth:switch-account", onSwitch);
+    mod.bootstrapSubApp(vi.fn(), vi.fn());
+
+    // Switch away and back: Wujie awaits __WUJIE_UNMOUNT, runs bus.$clear(),
+    // then calls __WUJIE_MOUNT on the same iframe; no module runs again.
+    await (win.__WUJIE_UNMOUNT as () => Promise<void>)();
+    bus.$clear();
+    (win.__WUJIE_MOUNT as () => void)();
+
+    bus.$emit("auth:token-refreshed", { token: "fresh" });
+    expect(mod.subAppAuthOptions().getToken()).toBe("fresh");
+    bus.$emit("auth:switch-account", {});
+    expect(onSwitch).toHaveBeenCalledTimes(1);
+
+    // Re-subscribing is idempotent: one listener each, not one per mount.
+    (win.__WUJIE_MOUNT as () => void)();
+    expect(bus.count("auth:token-refreshed")).toBe(1);
+    expect(bus.count("auth:switch-account")).toBe(1);
+  });
+});
+
 describe("subAppAuthOptions", () => {
   it("inside Wujie: uses the shell's live token and refreshToken, never the cookie", async () => {
     const fetchMock = vi.fn();

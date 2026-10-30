@@ -16,13 +16,21 @@ const STATUS_KIND: Record<string, "success" | "info" | "warning" | "danger" | "p
   active: "success",
   stopped: "info",
   inactive: "info",
+  released: "info",
   expired: "warning",
   locked: "warning",
   error: "danger",
   failed: "danger",
+  // pkg-go resource lifecycle: provisioning failed (a dead end the user releases).
+  create_failed: "danger",
   creating: "primary",
   pending: "primary",
   starting: "primary",
+  // The other transitional lifecycle states (console-kit TRANSITIONAL_STATES).
+  init: "primary",
+  upgrading: "primary",
+  preempting: "primary",
+  releasing: "primary",
 };
 
 const kind = computed(() => STATUS_KIND[props.status.toLowerCase()] ?? "info");

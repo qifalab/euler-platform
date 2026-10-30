@@ -71,6 +71,16 @@ describe("StatusBadge", () => {
     expect(wrapper.find(".eu-status-dot").exists()).toBe(true);
     expect(wrapper.classes()).toContain("eu-status-badge");
   });
+
+  it("colours every resource lifecycle state the instance lists show", () => {
+    // InstanceListView passes the orchestrator state title-cased ("Create_failed").
+    const kind = (status: string) => mount(StatusBadge, { props: { status } }).attributes("data-kind");
+    // Provisioning failed: an error, not a neutral grey state.
+    expect(kind("Create_failed")).toBe("danger");
+    // Still moving (the list polls while any row is in one): in progress, like Creating.
+    for (const s of ["Init", "Upgrading", "Preempting", "Releasing"]) expect(kind(s)).toBe("primary");
+    expect(kind("Released")).toBe("info");
+  });
 });
 
 describe("PriceText", () => {
