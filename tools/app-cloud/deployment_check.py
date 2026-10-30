@@ -24,6 +24,20 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+# strconv.ParseBool spellings. identity.ConfigFromEnv accepts exactly these and
+# disables login for any other non-empty EULER_ALLOW_INSECURE_LOOPBACK value.
+GO_TRUE = {"1", "t", "T", "TRUE", "true", "True"}
+GO_FALSE = {"0", "f", "F", "FALSE", "false", "False"}
+
+
+def go_prefix(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+    """Parse like Go's netip.ParsePrefix: only address/bits (no bare host or netmask)."""
+    _, slash, bits = value.partition("/")
+    if not slash or not re.fullmatch(r"[0-9]{1,3}", bits):
+        raise ValueError("an address/bits prefix is required")
+    return ipaddress.ip_network(value, strict=False)
+
+
 def read_environment(path: Path) -> dict[str, str]:
     """Accept literal KEY=VALUE only. Never evaluate dotenv as shell commands."""
     result = {}
@@ -71,21 +85,32 @@ def config_checks(env: dict[str, str], production: bool) -> list[dict]:
         key_valid = False
     check("encryption-key", key_valid, "A persistent base64 encoded 32-byte key is required; keep a separate protected copy.")
     operations = env.get("EULER_OPERATIONS_TOKEN", "")
-    check("operations-token", len(operations) >= 32, "Set a distinct high-entropy read-only monitoring token and configure a protected scraper.", missing=not operations)
+    # cmd/server exits at startup unless the token is 32-4096 bytes without surrounding whitespace.
+    check("operations-token", 32 <= len(operations.encode()) <= 4096 and operations == operations.strip(), "Set a distinct high-entropy read-only monitoring token (32-4096 bytes, no surrounding whitespace) and configure a protected scraper.", missing=not operations)
+    loopback = env.get("EULER_ALLOW_INSECURE_LOOPBACK") or "false"
+    insecure_loopback = loopback in GO_TRUE
+    # The server accepts http loopback identity URLs only while that flag is on.
+    https_only = production or not insecure_loopback
     public = env.get("EULER_PUBLIC_URL", "")
-    check("public-origin", valid_url(public, production, True), "Production requires an HTTPS origin without credentials, path, query or fragment.")
-    check("loopback-policy", not production or env.get("EULER_ALLOW_INSECURE_LOOPBACK", "false").lower() != "true", "Insecure loopback must be disabled in production.")
-    mode = env.get("EULER_IDENTITY_MODE", "oidc")
-    check("identity-mode", mode in ("oidc", "oauth2_userinfo"), "Use the platform's configured identity mode.")
+    check("public-origin", valid_url(public, https_only, True), "Production requires an HTTPS origin without credentials, path, query or fragment.")
+    check("loopback-policy", (loopback in GO_FALSE or insecure_loopback) and not (production and insecure_loopback), "Insecure loopback must be disabled in production; use true or false, any other value disables login.")
+    # Empty values mean the default, as in compose (${VAR:-default}) and identity.Config.validate.
+    mode = env.get("EULER_IDENTITY_MODE") or "oidc"
+    claim = env.get("EULER_OAUTH2_SUBJECT_CLAIM") or "sub"
+    envelope = env.get("EULER_OAUTH2_USERINFO_ENVELOPE", "")
+    check("identity-mode", mode in ("oidc", "oauth2_userinfo") and claim in ("sub", "id") and envelope in ("", "data")
+          and (mode == "oauth2_userinfo" or (claim == "sub" and not envelope)),
+          "Use oidc with standard sub claims, or the explicit oauth2_userinfo mode with a sub/id subject claim and an empty or data envelope.")
     issuer = env.get("EULER_OIDC_ISSUER", "")
-    check("identity-provider", valid_url(issuer, production), "Set the exact registered identity issuer.")
-    method = env.get("EULER_OIDC_TOKEN_AUTH_METHOD", "client_secret_basic")
-    check("identity-client", bool(env.get("EULER_OIDC_CLIENT_ID")) and (method == "none" or bool(env.get("EULER_OIDC_CLIENT_SECRET"))) and method in ("none", "client_secret_basic", "client_secret_post"), "Provide a dedicated Euler client and its required client authentication.")
+    check("identity-provider", valid_url(issuer, https_only), "Set the exact registered identity issuer.")
+    method = env.get("EULER_OIDC_TOKEN_AUTH_METHOD") or "client_secret_basic"
+    # The server always requires a client secret and implements only these two methods.
+    check("identity-client", bool(env.get("EULER_OIDC_CLIENT_ID", "").strip()) and bool(env.get("EULER_OIDC_CLIENT_SECRET", "").strip()) and method in ("client_secret_basic", "client_secret_post"), "Provide a dedicated Euler client, its client secret and client_secret_basic or client_secret_post authentication.")
     callback = env.get("EULER_OIDC_REDIRECT_URL") or public.rstrip("/") + "/auth/callback"
-    check("identity-callback", callback == public.rstrip("/") + "/auth/callback" and valid_url(callback, production), "Register the exact same-origin /auth/callback URL upstream.")
+    check("identity-callback", callback == public.rstrip("/") + "/auth/callback" and valid_url(callback, https_only), "Register the exact same-origin /auth/callback URL upstream.")
     if mode == "oauth2_userinfo":
         for name in ("AUTHORIZATION", "TOKEN", "USERINFO"):
-            check("oauth2-" + name.lower(), valid_url(env.get("EULER_OAUTH2_" + name + "_ENDPOINT", ""), production), "Configure the fixed HTTPS OAuth2 endpoint.")
+            check("oauth2-" + name.lower(), valid_url(env.get("EULER_OAUTH2_" + name + "_ENDPOINT", ""), https_only), "Configure the fixed HTTPS OAuth2 endpoint.")
     try:
         admins = json.loads(env.get("EULER_PLATFORM_ADMIN_IDENTITIES", "[]"))
         admins_valid = isinstance(admins, list) and bool(admins) and all(isinstance(a, dict) and a.get("provider") == issuer and isinstance(a.get("subject"), str) and bool(a["subject"].strip()) for a in admins)
@@ -94,10 +119,10 @@ def config_checks(env: dict[str, str], production: bool) -> list[dict]:
     check("platform-operators", admins_valid, "Configure at least one exact provider + subject; review/admin access remains separately granted.")
     proxies = env.get("EULER_WEAUTH_TRUSTED_PROXIES", "")
     try:
-        safe_proxies = all(ipaddress.ip_network(item.strip(), strict=False).prefixlen > 0 for item in proxies.split(",") if item.strip())
+        safe_proxies = all(go_prefix(item.strip()).prefixlen > 0 for item in proxies.split(",") if item.strip())
     except ValueError:
         safe_proxies = False
-    check("trusted-proxies", safe_proxies, "Use actual controlled proxy CIDRs; never a /0 network.")
+    check("trusted-proxies", safe_proxies, "Use actual controlled proxy CIDRs in address/bits form (a bare address stops startup); never a /0 network.")
     for engine in ("MYSQL", "POSTGRES"):
         configured = bool(env.get(f"EULER_DATABASE_{engine}_DSN"))
         check("database-" + engine.lower(), configured and bool(env.get(f"EULER_DATABASE_{engine}_PUBLIC_HOST")), "Database provisioning needs an Euler-owned engine and a reachable client endpoint.", missing=not configured)

@@ -10,8 +10,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,11 +20,23 @@ import (
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 )
 
-type Module struct{ rt *appkit.Runtime }
+type Module struct {
+	rt *appkit.Runtime
+	// Reverse proxies allowed to report the visitor address (shared with WeAuth).
+	trusted   []netip.Prefix
+	configErr error
+}
 
-func New(rt *appkit.Runtime) *Module { return &Module{rt: rt} }
-func (*Module) ID() string           { return "statistics" }
+func New(rt *appkit.Runtime) *Module {
+	m := &Module{rt: rt}
+	m.trusted, m.configErr = appkit.TrustedProxiesFromEnv()
+	return m
+}
+func (*Module) ID() string { return "statistics" }
 func (m *Module) Migrate(ctx context.Context) error {
+	if m.configErr != nil {
+		return m.configErr
+	}
 	_, err := m.rt.DB.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS statistics_sites (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
@@ -387,11 +399,7 @@ func (m *Module) collect(w http.ResponseWriter, r *http.Request, s site) error {
 	if in.Referrer != "" {
 		ref, _ = cleanURL(in.Referrer)
 	}
-	ip, _, e := net.SplitHostPort(r.RemoteAddr)
-	if e != nil {
-		ip = r.RemoteAddr
-	}
-	ipHash := m.digest(s.ID+"/ip", ip)
+	ipHash := m.digest(s.ID+"/ip", appkit.ClientIP(r, m.trusted))
 	e = m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
 		if e := m.acceptCollection(r.Context(), tx, s.ID, ipHash); e != nil {
 			return e
@@ -443,7 +451,7 @@ func javascript(w http.ResponseWriter, code string) {
 	fmt.Fprint(w, code)
 }
 func (m *Module) tracker(w http.ResponseWriter, r *http.Request, s site) error {
-	javascript(w, `(()=>{'use strict';const script=document.currentScript,base=new URL('.',script.src).href,key='euler-statistics-`+s.PublicID+`';let visitor;try{visitor=localStorage.getItem(key);if(!visitor){visitor=crypto.randomUUID();localStorage.setItem(key,visitor)}}catch(_){visitor=crypto.randomUUID()}const clean=v=>{try{const u=new URL(v);u.search='';u.hash='';return u.href}catch(_){return ''}};const collect=async(attempt=0)=>{try{const response=await fetch(base+'collect',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),referrer:clean(document.referrer),page_title:document.title.slice(0,250),screen_resolution:screen.width+'x'+screen.height,browser_language:navigator.language})});if(!response.ok&&response.status>=500)throw Error('temporary')}catch(_){if(attempt<3)setTimeout(()=>collect(attempt+1),1000*(attempt+1))}};if(document.readyState==='complete')collect();else addEventListener('load',()=>collect(),{once:true});window.eulerTrackPage=()=>collect();window.eulerTrackEvent=async name=>{const response=await fetch(base+'events',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),name})});if(!response.ok)throw Error('Event collection rejected: '+response.status);return true}})();`)
+	javascript(w, `(()=>{'use strict';const script=document.currentScript,base=new URL('.',script.src).href,key='euler-statistics-`+s.PublicID+`';const newID=()=>{if(typeof crypto.randomUUID==='function')return crypto.randomUUID();return Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('')};let visitor;try{visitor=localStorage.getItem(key);if(!visitor){visitor=newID();localStorage.setItem(key,visitor)}}catch(_){visitor=newID()}const clean=v=>{try{const u=new URL(v);u.search='';u.hash='';return u.href}catch(_){return ''}};const collect=async(attempt=0)=>{try{const response=await fetch(base+'collect',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),referrer:clean(document.referrer),page_title:document.title.slice(0,250),screen_resolution:screen.width+'x'+screen.height,browser_language:navigator.language})});if(!response.ok&&response.status>=500)throw Error('temporary')}catch(_){if(attempt<3)setTimeout(()=>collect(attempt+1),1000*(attempt+1))}};if(document.readyState==='complete')collect();else addEventListener('load',()=>collect(),{once:true});window.eulerTrackPage=()=>collect();window.eulerTrackEvent=async name=>{const response=await fetch(base+'events',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',keepalive:true,body:JSON.stringify({visitor_id:visitor,url:clean(location.href),name})});if(!response.ok)throw Error('Event collection rejected: '+response.status);return true}})();`)
 	return nil
 }
 func (m *Module) widget(w http.ResponseWriter, r *http.Request, s site) error {

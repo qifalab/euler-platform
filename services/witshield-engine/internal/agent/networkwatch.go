@@ -6,11 +6,13 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,6 +56,8 @@ type networkWatcher struct {
 }
 
 func (w *networkWatcher) Poll(ctx context.Context) ([]domain.SecurityEvent, error) {
+	// See baselineWatcher.Poll: never commit a snapshot from an earlier poll.
+	w.pending = nil
 	if w.now == nil {
 		w.now = time.Now
 	}
@@ -258,12 +262,24 @@ func networkChangeCapacityEvent(state networkState, now time.Time, changed int) 
 	return domain.SecurityEvent{ID: "evt_" + hex.EncodeToString(sum[:12]), Type: "network_sensor_capacity_degraded", OccurredAt: now, Payload: payload}
 }
 
+// listenerLoopback reports whether a /proc/net/tcp{,6} local address is
+// loopback: all of 127.0.0.0/8, ::1 and IPv4-mapped loopback (systemd-resolved
+// listens on 127.0.0.53 and 127.0.0.54 by default). The kernel prints each
+// 32-bit word of the network-order address as a native-endian integer.
 func listenerLoopback(raw, family string) bool {
-	upper := strings.ToUpper(raw)
+	b, err := hex.DecodeString(raw)
+	want := net.IPv6len
 	if family == "ipv4" {
-		return upper == "0100007F"
+		want = net.IPv4len
 	}
-	return upper == "00000000000000000000000001000000"
+	if err != nil || len(b) != want {
+		return false
+	}
+	ip := make(net.IP, len(b))
+	for word := 0; word < len(b); word += 4 {
+		binary.NativeEndian.PutUint32(ip[word:], binary.BigEndian.Uint32(b[word:]))
+	}
+	return ip.IsLoopback()
 }
 
 func normalizedListenerAddress(raw, family string) string {

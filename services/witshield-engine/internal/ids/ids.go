@@ -28,9 +28,14 @@ func Token(prefix string, bytes int) (string, error) {
 	return prefix + "_" + base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// Hint labels a secret for display. Every project reader can see it (masked AI
+// settings, enrollment token lists), so the first six and last four characters
+// are shown only while at least 16 stay hidden; shorter secrets are fully
+// masked. Runes are counted so a multibyte secret never yields invalid UTF-8.
 func Hint(token string) string {
-	if len(token) <= 10 {
+	runes := []rune(token)
+	if len(runes) < 26 {
 		return "••••"
 	}
-	return token[:6] + "…" + token[len(token)-4:]
+	return string(runes[:6]) + "…" + string(runes[len(runes)-4:])
 }

@@ -248,15 +248,41 @@ func (m *Module) editMember(w http.ResponseWriter, r *http.Request, s appkit.Sco
 	return nil
 }
 func (m *Module) deleteMember(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	id := r.PathValue("actorID")
 	if _, err := m.member(r.Context(), s, id); err != nil {
 		return err
 	}
 	err := m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
+		// Automation rules re-check membership only when an eid.status event
+		// arrives, so announce every removed club record as deleteClub does.
+		rows, e := tx.QueryContext(r.Context(), "SELECT id,version FROM eid_club WHERE "+scoped+" AND actor_id=?", append(scopeArgs(s), id)...)
+		if e != nil {
+			return e
+		}
+		var removed []appkit.Event
+		for rows.Next() {
+			var club string
+			var version int64
+			if e = rows.Scan(&club, &version); e != nil {
+				rows.Close()
+				return e
+			}
+			removed = append(removed, appkit.Event{TenantID: s.TenantID, ProjectID: s.ProjectID, Source: "eid.status", SubjectID: id, ResourceID: club, FilterID: "club", Status: "deleted", Version: strconv.FormatInt(version+1, 10)})
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return e
+		}
 		for _, table := range []string{"eid_verifications", "eid_club", "eid_members"} {
 			if _, e := tx.ExecContext(r.Context(), "DELETE FROM "+table+" WHERE "+scoped+" AND actor_id=?", append(scopeArgs(s), id)...); e != nil {
+				return e
+			}
+		}
+		for _, event := range removed {
+			if e := appkit.Emit(r.Context(), tx, event); e != nil {
 				return e
 			}
 		}

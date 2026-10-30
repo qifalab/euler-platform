@@ -49,7 +49,7 @@ pnpm install --frozen-lockfile
 pnpm --filter 'console-base^...' build
 pnpm --filter console-base dev
 
-# Go 1.27.1，另一个终端，先配置部署文档中的环境变量
+# Go 1.27.3，另一个终端，先配置部署文档中的环境变量
 cd services/app-cloud
 go run ./cmd/server
 ```

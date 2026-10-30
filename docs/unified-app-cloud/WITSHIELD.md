@@ -40,6 +40,8 @@
 
 8 条设备路径是 enrollment challenge、enroll、heartbeat、sync、commands/{id}/start、commands/{id}/result、reports、events。enrollment 必须拥有一次性令牌并证明 Ed25519 私钥；已注册设备必须同时持有设备 token 与签名密钥，并通过时间窗口及持久 nonce 防重放检查。
 
+设备入口按来源地址限流：已注册设备的请求每来源每分钟 600 次，enrollment challenge 与 enroll 各每来源每 10 分钟 120 次。来源是 Agent 主机地址：直连对端属于 `EULER_WEAUTH_TRUSTED_PROXIES`（与 WeAuth 共用）时，平台从 XFF 右侧逐跳取第一个不可信地址交给引擎，不再转发 XFF；未配置时，同一安装的所有设备共用代理地址的一个额度。
+
 ## 审批与停用
 
 动作创建与响应计划 prepare 仅生成草稿、可审阅的 preview 和 10 分钟一次性 nonce。审批在引擎 SQLite 事务内同时验证状态/nonce/时效并入队，不允许绕过 prepare 直接执行。AI 模型不能调用任意命令，模型提出的计划仍需人工审批；独立明确授权的低风险确定性响应保留原规则边界。
@@ -70,7 +72,7 @@ docker rm euler-device-tools-export
 sha256sum ./euler-device-tools/witshield-agent ./euler-device-tools/witshield-helper
 ```
 
-也可在 `services/witshield-engine` 目录用 Go 1.27.1 构建：
+也可在 `services/witshield-engine` 目录用 Go 1.27.3 构建：
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o ./dist/witshield-agent ./cmd/witshield-agent

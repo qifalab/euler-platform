@@ -9,12 +9,16 @@ type Version = { key: string; versionId: string; size: number; modifiedAt: strin
 type Rule = { id: string; prefix: string; enabled: boolean; expirationDays: number; noncurrentDays: number };
 const open = ref(false), tab = ref("versions"), error = ref(""), busy = ref(false), versions = ref<Version[]>([]), next = ref(""), filter = ref(""), versioning = ref("Disabled"), rules = ref<Rule[]>([]);
 const transfer = reactive({ source: "", target: "", move: false });
+// Prefix of the listing the current cursor belongs to; a cursor only resumes
+// that listing, so "加载更多" must not pick up an edited but unsent filter.
+let listed = "";
 const base = () => `/buckets/${props.bucketId}`;
 const statusLabel: Record<string, string> = { Enabled: "已启用", Suspended: "已暂停", Disabled: "未启用" };
 async function run(fn: () => Promise<void>) { if (busy.value) return; busy.value = true; error.value = ""; try { await fn(); } catch (e) { error.value = e instanceof Error ? e.message : "操作失败"; } finally { busy.value = false; } }
 async function loadVersions(more = false) {
-  const v = await app.request<{ items: Version[]; next: string }>(`${base()}/versions?prefix=${encodeURIComponent(filter.value)}&cursor=${encodeURIComponent(more ? next.value : "")}`);
-  versions.value = more ? versions.value.concat(v.items) : v.items; next.value = v.next;
+  const prefix = more ? listed : filter.value;
+  const v = await app.request<{ items: Version[]; next: string }>(`${base()}/versions?prefix=${encodeURIComponent(prefix)}&cursor=${encodeURIComponent(more ? next.value : "")}`);
+  listed = prefix; versions.value = more ? versions.value.concat(v.items) : v.items; next.value = v.next;
 }
 async function load() {
   versioning.value = (await app.request<{ status: string }>(`${base()}/versioning`)).status;

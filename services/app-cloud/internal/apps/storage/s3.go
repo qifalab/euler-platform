@@ -123,10 +123,10 @@ func fromS3(v minio.ObjectInfo) Object {
 	return Object{Key: v.Key, Size: v.Size, ContentType: v.ContentType, ETag: v.ETag, ModifiedAt: v.LastModified, Folder: strings.HasSuffix(v.Key, "/")}
 }
 func (p *s3Plane) List(ctx context.Context, b, prefix string, recursive bool, after string, limit int) ([]Object, bool, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	out := []Object{}
-	for obj := range p.client.ListObjects(ctx, b, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive, StartAfter: after, MaxKeys: limit}) {
+	// Range over the iterator, not the ListObjects channel: returning a page
+	// early from the channel strands minio-go's producer goroutine on a send.
+	for obj := range p.client.ListObjectsIter(ctx, b, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive, StartAfter: after, MaxKeys: limit}) {
 		if obj.Err != nil {
 			return nil, false, obj.Err
 		}

@@ -193,7 +193,6 @@ func (m *Monitor) prometheus(w http.ResponseWriter, r *http.Request) {
 	for _, d := range deps {
 		fmt.Fprintf(w, "euler_dependency_state{name=%q,state=%q} 1\n", d.Name, d.State)
 	}
-	fmt.Fprintln(w, "# TYPE euler_http_requests_total counter\n# TYPE euler_http_duration_seconds_sum counter")
 	keys := make([]metricKey, 0, len(stats))
 	for k := range stats {
 		keys = append(keys, k)
@@ -208,9 +207,15 @@ func (m *Monitor) prometheus(w http.ResponseWriter, r *http.Request) {
 		}
 		return a.status < b.status
 	})
+	// The text format requires each family's samples in one group directly
+	// after its TYPE line, so the two request families are written separately.
+	fmt.Fprintln(w, "# TYPE euler_http_requests_total counter")
 	for _, k := range keys {
-		v := stats[k]
-		fmt.Fprintf(w, "euler_http_requests_total{method=%q,route=%q,status=%q} %d\neuler_http_duration_seconds_sum{method=%q,route=%q,status=%q} %.6f\n", k.method, k.route, fmt.Sprint(k.status), v.count, k.method, k.route, fmt.Sprint(k.status), v.seconds)
+		fmt.Fprintf(w, "euler_http_requests_total{method=%q,route=%q,status=%q} %d\n", k.method, k.route, fmt.Sprint(k.status), stats[k].count)
+	}
+	fmt.Fprintln(w, "# TYPE euler_http_duration_seconds_sum counter")
+	for _, k := range keys {
+		fmt.Fprintf(w, "euler_http_duration_seconds_sum{method=%q,route=%q,status=%q} %.6f\n", k.method, k.route, fmt.Sprint(k.status), stats[k].seconds)
 	}
 }
 

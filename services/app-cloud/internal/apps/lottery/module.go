@@ -13,17 +13,30 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 )
 
-type Module struct{ rt *appkit.Runtime }
+type Module struct {
+	rt *appkit.Runtime
+	// Reverse proxies allowed to report the visitor address (shared with WeAuth).
+	trusted   []netip.Prefix
+	configErr error
+}
 
-func New(rt *appkit.Runtime) *Module { return &Module{rt: rt} }
-func (*Module) ID() string           { return "lottery" }
+func New(rt *appkit.Runtime) *Module {
+	m := &Module{rt: rt}
+	m.trusted, m.configErr = appkit.TrustedProxiesFromEnv()
+	return m
+}
+func (*Module) ID() string { return "lottery" }
 func (m *Module) Migrate(ctx context.Context) error {
+	if m.configErr != nil {
+		return m.configErr
+	}
 	_, e := m.rt.DB.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS lottery_rooms (
  id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,project_id TEXT NOT NULL,installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
@@ -207,12 +220,18 @@ func (m *Module) getRoom(w http.ResponseWriter, r *http.Request, s appkit.Scope)
 	appkit.JSON(w, 200, v)
 	return nil
 }
+
+// roomPatch is the PATCH body: a field left out keeps its stored value.
+type roomPatch struct {
+	Name              *string `json:"name"`
+	Description       *string `json:"description"`
+	Status            *string `json:"status"`
+	PreventDuplicates *bool   `json:"preventDuplicates"`
+}
+
 func (m *Module) updateRoom(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
-	var in roomInput
-	if e := appkit.Decode(w, r, &in); e != nil {
-		return e
-	}
-	if e := validateRoom(&in); e != nil {
+	var patch roomPatch
+	if e := appkit.Decode(w, r, &patch); e != nil {
 		return e
 	}
 	var v room
@@ -222,17 +241,34 @@ func (m *Module) updateRoom(w http.ResponseWriter, r *http.Request, s appkit.Sco
 		if e != nil {
 			return e
 		}
-		v.Name = in.Name
-		v.Description = in.Description
-		v.Status = in.Status
-		if in.PreventDuplicates != nil {
-			v.PreventDuplicates = *in.PreventDuplicates
+		// Start from the stored room so that, for example, a rename does not
+		// reopen a paused room (validateRoom treats a missing status as open).
+		in := roomInput{Name: v.Name, Description: v.Description, Status: v.Status, PreventDuplicates: &v.PreventDuplicates}
+		if patch.Name != nil {
+			in.Name = *patch.Name
 		}
+		if patch.Description != nil {
+			in.Description = *patch.Description
+		}
+		if patch.Status != nil {
+			in.Status = *patch.Status
+		}
+		if patch.PreventDuplicates != nil {
+			in.PreventDuplicates = patch.PreventDuplicates
+		}
+		if e = validateRoom(&in); e != nil {
+			return e
+		}
+		v.Name, v.Description, v.Status, v.PreventDuplicates = in.Name, in.Description, in.Status, *in.PreventDuplicates
 		_, e = tx.ExecContext(r.Context(), "UPDATE lottery_rooms SET name=?,description=?,status=?,prevent_duplicates=? WHERE id=?", v.Name, v.Description, v.Status, v.PreventDuplicates, v.ID)
 		if e != nil {
 			return e
 		}
-		return m.rt.Audit(r.Context(), tx, s, "room.updated", v.ID, "更新活动设置")
+		if e = m.rt.Audit(r.Context(), tx, s, "room.updated", v.ID, "更新活动设置"); e != nil {
+			return e
+		}
+		// Answer with the same room view as GET, counts included.
+		return roomCounts(r.Context(), tx, &v)
 	})
 	if e != nil {
 		return e

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -79,11 +80,11 @@ func TestWebhookOutboxAtomicDurableAndAcknowledged(t *testing.T) {
 	alice := actor("alice", "read", "write")
 	reviewer := actor("reviewer", "read", "review")
 	response := "{}"
-	requests := 0
+	var requests atomic.Int32 // the module's worker also calls the transport
 	transport := testTransport(func(r *http.Request) (*http.Response, error) {
-		requests++
+		requests.Add(1)
 		if r.Context().Err() != nil {
-			t.Fatal("delivery inherited canceled browser context")
+			t.Error("delivery inherited canceled browser context")
 		}
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response)), Request: r}, nil
 	})
@@ -100,22 +101,17 @@ func TestWebhookOutboxAtomicDurableAndAcknowledged(t *testing.T) {
 	if _, err := f.rt.DB.Exec("DROP TRIGGER reject_eid_outbox"); err != nil {
 		t.Fatal(err)
 	}
-	// Commit without dispatch, then reopen SQLite as after a process restart.
+	// Commit without dispatch once the worker has stopped, then reopen SQLite as
+	// after a process restart: the new worker sends the row without a request.
+	f.m.Close()
 	if err := f.rt.Transaction(context.Background(), func(tx *sql.Tx) error {
 		return f.m.event(context.Background(), tx, alice, "durable-target", "verification.submit", "", "pending")
 	}); err != nil {
 		t.Fatal(err)
 	}
-	f.rt.DB.Close()
-	f.open(t)
-	f.m.client = &http.Client{Transport: transport}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	f.m.flushWebhooks(canceled, alice)
-	var id, state string
-	if err := f.rt.DB.QueryRow("SELECT id,state FROM eid_notifications WHERE target_id='durable-target'").Scan(&id, &state); err != nil || state != "failed" {
-		t.Fatal("HTTP 200 empty object falsely acknowledged", state, err)
-	}
+	reopenWithClient(t, f, &http.Client{Transport: transport})
+	// An HTTP 200 empty object is not an acknowledgement.
+	id := waitWebhookState(t, f, "durable-target", "failed")
 	status(t, call(t, f.m, alice, "POST", "/notifications/"+id+"/retry", map[string]bool{"confirmed": true}), 403)
 	status(t, call(t, f.m, reviewer, "POST", "/notifications/"+id+"/retry", map[string]bool{}), 400)
 	foreign := reviewer
@@ -135,9 +131,9 @@ func TestWebhookOutboxAtomicDurableAndAcknowledged(t *testing.T) {
 	if result[Notification](t, w).State != "sent" {
 		t.Fatal(w.Body.String())
 	}
-	f.m.flushWebhooks(context.Background(), alice)
-	if requests != 5 {
-		t.Fatal("already completed outbox was resent", requests)
+	f.m.flushWebhooks(context.Background(), context.Background(), alice)
+	if n := requests.Load(); n != 5 {
+		t.Fatal("already completed outbox was resent", n)
 	}
 	status(t, call(t, f.m, reviewer, "POST", "/notifications/"+id+"/retry", map[string]bool{"confirmed": true}), 409)
 }

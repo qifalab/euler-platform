@@ -209,8 +209,8 @@ func (m *Module) decideClub(w http.ResponseWriter, r *http.Request, s appkit.Sco
 	if in.Status != "rejected" {
 		return appkit.Invalid("录取请使用发送录取通知操作")
 	}
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	a, e := m.club(r.Context(), s, r.PathValue("id"))
 	if e != nil {
 		return e
@@ -263,8 +263,8 @@ func (m *Module) confirmOffer(w http.ResponseWriter, r *http.Request, s appkit.S
 	if e := appkit.Decode(w, r, &in); e != nil {
 		return e
 	}
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	a, e := m.club(r.Context(), s, r.PathValue("id"))
 	if e != nil {
 		return e
@@ -290,8 +290,8 @@ func (m *Module) confirmOffer(w http.ResponseWriter, r *http.Request, s appkit.S
 	return nil
 }
 func (m *Module) deleteClub(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	a, e := m.club(r.Context(), s, r.PathValue("id"))
 	if e != nil {
 		return e

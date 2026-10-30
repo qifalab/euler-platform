@@ -2,6 +2,8 @@
 import { onMounted, ref, reactive } from "vue";
 import { useApp } from "../shared";
 const props = defineProps<{ kind: "database" | "storage" }>();
+// Redeeming or granting changes the project's effective quota shown by the parent.
+defineEmits<{ changed: [] }>();
 const app = useApp();
 type Quota = {
   mysqlMB: number;
@@ -185,6 +187,7 @@ onMounted(load);
             body: { code: redeemCode },
           });
           redeemCode = '';
+          $emit('changed');
         }, '兑换成功')
       "
     >
@@ -267,14 +270,13 @@ onMounted(load);
                   v-if="t.active"
                   :disabled="busy"
                   @click="
-                    act(
-                      () =>
-                        app.request('/admin/grants', {
-                          method: 'POST',
-                          body: { templateId: t.id },
-                        }),
-                      '资源包已赠送到当前项目',
-                    )
+                    act(async () => {
+                      await app.request('/admin/grants', {
+                        method: 'POST',
+                        body: { templateId: t.id },
+                      });
+                      $emit('changed');
+                    }, '资源包已赠送到当前项目')
                   "
                 >
                   赠送到本项目

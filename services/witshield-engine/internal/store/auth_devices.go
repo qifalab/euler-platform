@@ -78,11 +78,6 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	return err
 }
 
-func (s *Store) DeleteExpiredSessions(ctx context.Context, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at<=?`, timeText(now))
-	return err
-}
-
 func (s *Store) CreateEnrollmentToken(ctx context.Context, item domain.EnrollmentToken, tokenHash string) error {
 	var expires any
 	if item.ExpiresAt != nil {
@@ -391,71 +386,6 @@ func (s *Store) FinalizeEnrollment(ctx context.Context, in FinalizeEnrollmentInp
 	return out, nil
 }
 
-func (s *Store) EnrollDevice(ctx context.Context, enrollmentHash, agentTokenHash string, in EnrollInput, now time.Time) (domain.Device, error) {
-	if in.ScanInterval == 0 {
-		in.ScanInterval = DefaultScanInterval
-	}
-	if in.ScanInterval < 15*time.Minute || in.ScanInterval > 365*24*time.Hour {
-		return domain.Device{}, errors.New("initial scan interval must be between 15 minutes and 365 days")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.Device{}, err
-	}
-	defer tx.Rollback()
-	var tokenID string
-	var maxUses, uses int
-	var expires, revoked sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT id,max_uses,uses,expires_at,revoked_at FROM enrollment_tokens WHERE token_hash=?`, enrollmentHash).Scan(&tokenID, &maxUses, &uses, &expires, &revoked)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Device{}, ErrUnauthorized
-	}
-	if err != nil {
-		return domain.Device{}, err
-	}
-	if revoked.Valid {
-		return domain.Device{}, ErrUnauthorized
-	}
-	if uses >= maxUses {
-		return domain.Device{}, ErrTokenExhausted
-	}
-	if expires.Valid {
-		t, e := parseTime(expires.String)
-		if e != nil {
-			return domain.Device{}, e
-		}
-		if !now.Before(t) {
-			return domain.Device{}, ErrTokenExpired
-		}
-	}
-	d := domain.Device{ID: ids.New("dev"), Name: in.Name, Hostname: in.Hostname, OS: in.OS, Arch: in.Arch, AgentVersion: in.AgentVersion, ObserverOnly: in.ObserverOnly, IdentityKey: in.IdentityKey, Status: domain.DeviceOnline, EnrolledAt: now.UTC(), CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
-	_, err = tx.ExecContext(ctx, `INSERT INTO devices(id,name,hostname,os,arch,agent_version,observer_only,identity_key,status,last_seen_at,enrolled_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, d.ID, d.Name, d.Hostname, d.OS, d.Arch, d.AgentVersion, d.ObserverOnly, d.IdentityKey, string(d.Status), timeText(now), timeText(now), timeText(now), timeText(now))
-	if err != nil {
-		return domain.Device{}, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_tokens(id,device_id,token_hash,created_at) VALUES(?,?,?,?)`, ids.New("agt"), d.ID, agentTokenHash, timeText(now))
-	if err != nil {
-		return domain.Device{}, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO schedules(id,device_id,kind,interval_seconds,enabled,next_run_at,last_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, ids.New("sch"), d.ID, string(domain.ScheduleScan), int64(in.ScanInterval/time.Second), true, timeText(now.Add(in.ScanInterval)), nil, timeText(now), timeText(now))
-	if err != nil {
-		return domain.Device{}, err
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE enrollment_tokens SET uses=uses+1 WHERE id=? AND uses=?`, tokenID, uses)
-	if err != nil {
-		return domain.Device{}, err
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return domain.Device{}, ErrConflict
-	}
-	if err := tx.Commit(); err != nil {
-		return domain.Device{}, err
-	}
-	t := now.UTC()
-	d.LastSeenAt = &t
-	return d, nil
-}
-
 func scanDevice(row interface{ Scan(...any) error }) (domain.Device, error) {
 	var d domain.Device
 	var last sql.NullString
@@ -677,6 +607,9 @@ func (s *Store) RevokeDevice(ctx context.Context, id string, now time.Time) erro
 			}
 			details, _ := json.Marshal(map[string]any{"commandId": item.id, "manualVerificationRequired": item.started})
 			if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, meta.ActionID, "controller", event, string(details), timeText(now)); err != nil {
+				return err
+			}
+			if err = syncResponsePlanForActionTx(ctx, tx, meta.ActionID, now); err != nil {
 				return err
 			}
 		}

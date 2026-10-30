@@ -3,7 +3,9 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +107,40 @@ func TestRealEngines(t *testing.T) {
 			}
 			if size, e := engine.Size(ctx, resource.Database); e != nil || size <= 0 {
 				t.Fatalf("real size was not measured: size=%d error=%v", size, e)
+			}
+			// Quota checks run every few minutes, so growth must be measured without
+			// waiting for MySQL 8's 24-hour statistics cache. The table exists before
+			// the first reading, which that cache would otherwise keep.
+			if _, e = client.ExecContext(ctx, "CREATE TABLE euler_growth (id INTEGER PRIMARY KEY,payload VARCHAR(1000))"); e != nil {
+				t.Fatalf("project login cannot create the growth table: %v", e)
+			}
+			before, e := engine.Size(ctx, resource.Database)
+			if e != nil {
+				t.Fatal(e)
+			}
+			for batch := 0; batch < 20; batch++ {
+				rows := make([]string, 200)
+				for i := range rows {
+					rows[i] = fmt.Sprintf("(%d,REPEAT('x',1000))", batch*200+i)
+				}
+				if _, e = client.ExecContext(ctx, "INSERT INTO euler_growth(id,payload) VALUES "+strings.Join(rows, ",")); e != nil {
+					t.Fatalf("project login cannot write growth rows: %v", e)
+				}
+			}
+			// InnoDB refreshes its page counts in the background (at most every 10 s
+			// per table), so poll; PostgreSQL file sizes grow at once.
+			grown := false
+			for deadline := time.Now().Add(60 * time.Second); !grown && time.Now().Before(deadline); {
+				size, e := engine.Size(ctx, resource.Database)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if grown = size >= before+1<<20; !grown {
+					time.Sleep(time.Second)
+				}
+			}
+			if !grown {
+				t.Fatal("measured size did not grow after about 4 MB of writes")
 			}
 			// Independent project/database: a valid login must not become a server-wide
 			// user capable of connecting to another project's database.

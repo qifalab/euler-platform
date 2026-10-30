@@ -765,6 +765,9 @@ func expireStaleActionCommands(ctx context.Context, tx *sql.Tx, deviceID string,
 			if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, payload.ActionID, "controller", "expired_before_delivery", string(details), timeText(now)); err != nil {
 				return err
 			}
+			if err = syncResponsePlanForActionTx(ctx, tx, payload.ActionID, now); err != nil {
+				return err
+			}
 		}
 	}
 	startedQuery := `SELECT id,device_id,type,payload FROM device_commands WHERE completed_at IS NULL AND started_at IS NOT NULL AND type IN (?,?,?) AND started_at<?`
@@ -812,6 +815,9 @@ func expireStaleActionCommands(ctx context.Context, tx *sql.Tx, deviceID string,
 			if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, payload.ActionID, "controller", "execution_result_indeterminate", string(details), timeText(now)); err != nil {
 				return err
 			}
+			if err = syncResponsePlanForActionTx(ctx, tx, payload.ActionID, now); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -831,29 +837,6 @@ func (s *Store) ExpireStaleActionCommands(ctx context.Context, now time.Time) er
 		return err
 	}
 	return tx.Commit()
-}
-func (s *Store) CompleteCommand(ctx context.Context, deviceID, id string, result json.RawMessage, errorText string, now time.Time) error {
-	if len(result) == 0 {
-		result = json.RawMessage(`{}`)
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE device_commands SET completed_at=?,result=?,error=? WHERE id=? AND device_id=? AND completed_at IS NULL`, timeText(now), string(result), errorText, id, deviceID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		var storedResult sql.NullString
-		var storedError string
-		if err := s.db.QueryRowContext(ctx, `SELECT result,error FROM device_commands WHERE id=? AND device_id=? AND completed_at IS NOT NULL`, id, deviceID).Scan(&storedResult, &storedError); errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		} else if err != nil {
-			return err
-		}
-		if storedResult.Valid && storedResult.String == string(result) && storedError == errorText {
-			return nil
-		}
-		return ErrConflict
-	}
-	return nil
 }
 
 func (s *Store) Command(ctx context.Context, deviceID, id string) (domain.DeviceCommand, error) {
@@ -919,7 +902,9 @@ func (s *Store) DueSchedules(ctx context.Context, now time.Time, limit int) ([]d
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+scheduleColumns+` FROM schedules WHERE enabled=1 AND next_run_at<=? ORDER BY next_run_at LIMIT ?`, timeText(now), limit)
+	// A revoked device can never claim commands again; scheduling it would only
+	// supersede and re-insert an undeliverable scan every interval.
+	rows, err := s.db.QueryContext(ctx, `SELECT `+stringsReplaceColumns(scheduleColumns, "s.")+` FROM schedules s JOIN devices d ON d.id=s.device_id WHERE s.enabled=1 AND s.next_run_at<=? AND d.status<>? ORDER BY s.next_run_at LIMIT ?`, timeText(now), string(domain.DeviceRevoked), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -192,6 +192,10 @@ func (e *Engine) SetEnabled(ctx context.Context, actor, tenant, project, id stri
 	return e.rt.Transaction(ctx, func(tx *sql.Tx) error {
 		var raw string
 		if err := tx.QueryRowContext(ctx, "SELECT body FROM automation_rules WHERE id=? AND tenant_id=? AND project_id=?", id, tenant, project).Scan(&raw); err != nil {
+			// The platform maps only typed errors; a raw ErrNoRows becomes HTTP 500.
+			if errors.Is(err, sql.ErrNoRows) {
+				return appkit.NotFound()
+			}
 			return err
 		}
 		var r Rule
@@ -207,6 +211,19 @@ func (e *Engine) SetEnabled(ctx context.Context, actor, tenant, project, id stri
 		if err != nil {
 			return err
 		}
+		if !enabled {
+			// Pausing cancels every task that has not completed, including tasks in
+			// retry backoff or claimed by a worker that has not committed; the
+			// worker's execute re-checks state. Re-enabling only subscribes to
+			// later events, so a quick pause/resume cannot revive these tasks.
+			if _, err = tx.ExecContext(ctx, "UPDATE automation_executions SET state='cancelled',error='',lease_until=0,lease_token='',updated_at=? WHERE rule_id=? AND state IN ('pending','running')", time.Now().UnixMilli(), id); err != nil {
+				return err
+			}
+		}
+		// authorize returns the destination scope for package rules; rule audit
+		// belongs to the rule's own project, as in Create.
+		s.TenantID = tenant
+		s.ProjectID = project
 		s.ApplicationID = "automation"
 		return e.rt.Audit(ctx, tx, s, "rule.status", id, "调整应用联动规则状态；既有权益按原有效期保留")
 	})
@@ -355,7 +372,9 @@ func (e *Engine) fail(ctx context.Context, j job, cause error) error {
 	var ae *appkit.Error
 	if errors.As(cause, &ae) {
 		message = ae.Message
-		if ae.Status == 400 || ae.Status == 403 || ae.Status == 404 {
+		// Permission, missing object and invalid configuration (a disabled or
+		// invalid package template is the only 409 here) are deterministic.
+		if ae.Status == 400 || ae.Status == 403 || ae.Status == 404 || ae.Status == 409 {
 			state = "failed"
 		}
 	}
@@ -437,8 +456,15 @@ func (e *Engine) Executions(ctx context.Context, tenant, project string) ([]Exec
 func (e *Engine) Retry(ctx context.Context, actor, tenant, project, id string) error {
 	return e.rt.Transaction(ctx, func(tx *sql.Tx) error {
 		var raw string
-		if err := tx.QueryRowContext(ctx, "SELECT r.body FROM automation_rules r JOIN automation_executions x ON x.rule_id=r.id WHERE x.id=? AND r.tenant_id=? AND r.project_id=? AND r.enabled=1", id, tenant, project).Scan(&raw); err != nil {
+		var enabled bool
+		if err := tx.QueryRowContext(ctx, "SELECT r.body,r.enabled FROM automation_rules r JOIN automation_executions x ON x.rule_id=r.id WHERE x.id=? AND r.tenant_id=? AND r.project_id=?", id, tenant, project).Scan(&raw, &enabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return appkit.NotFound()
+			}
 			return err
+		}
+		if !enabled {
+			return appkit.Conflict("规则已暂停，请重新启用后再重试")
 		}
 		var r Rule
 		if err := json.Unmarshal([]byte(raw), &r); err != nil {
@@ -457,6 +483,8 @@ func (e *Engine) Retry(ctx context.Context, actor, tenant, project, id string) e
 		if n != 1 {
 			return appkit.Conflict("仅失败任务可以重新排队")
 		}
+		s.TenantID = tenant
+		s.ProjectID = project
 		s.ApplicationID = "automation"
 		return e.rt.Audit(ctx, tx, s, "execution.retry", id, "显式重试失败联动；执行时仍重新验证规则创建人")
 	})

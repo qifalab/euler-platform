@@ -72,6 +72,9 @@ export function useResourceTable<T = Record<string, unknown>>(opts: ResourceTabl
     pollTimer = setInterval(async () => {
       // Stop when tab hidden (02§7.2).
       if (document.hidden) return;
+      // A fetch is still in flight: let it land. Starting another here aborts
+      // it, so a backend slower than the interval never answered a poll.
+      if (loading.value) return;
       // Only poll while transitional states exist (02§7.2).
       if (polling.when && !polling.when(rows.value)) return;
       await fetchPage();

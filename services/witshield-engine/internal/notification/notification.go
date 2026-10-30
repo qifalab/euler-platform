@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/mail"
@@ -317,7 +318,9 @@ func (s *Sender) email(ctx context.Context, event domain.NotificationEvent) erro
 	if err != nil {
 		return smtpDeliveryError("message start", err, true)
 	}
-	subject := sanitizeHeader("[WitShield] " + event.Title)
+	// Header fields are US-ASCII (RFC 5322); event titles are often Chinese.
+	// QEncoding leaves a printable-ASCII subject unchanged.
+	subject := mime.QEncoding.Encode("UTF-8", sanitizeHeader("[WitShield] "+event.Title))
 	eventHeader := sanitizeHeader(event.ID)
 	messageIDHash := sha256.Sum256([]byte(event.ID))
 	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@witshield.local>\r\nX-WitShield-Event-ID: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n\r\nDevice: %s\r\nEvent: %s\r\n", s.cfg.Settings.SMTPFrom, strings.Join(s.cfg.Settings.SMTPTo, ", "), subject, time.Now().Format(time.RFC1123Z), hex.EncodeToString(messageIDHash[:16]), eventHeader, event.Message, event.DeviceID, event.Type)
@@ -349,9 +352,17 @@ func smtpDeliveryError(stage string, err error, defaultRetryable bool) error {
 	status := 0
 	retryable := defaultRetryable
 	var protocolError *textproto.Error
-	if errors.As(err, &protocolError) {
+	var networkError net.Error
+	switch {
+	case errors.As(err, &protocolError):
 		status = protocolError.Code
 		retryable = status >= 400 && status < 500
+	case errors.As(err, &networkError), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		// The session broke (reset, timeout, closed by the peer or by
+		// cancellation) before the server answered this command. The durable
+		// outbox treats a non-retryable error as terminal after one attempt, so
+		// only an explicit SMTP reply may make a failure permanent.
+		retryable = true
 	}
 	return &DeliveryError{Channel: domain.NotificationSMTP, Stage: stage, Status: status, Retryable: retryable}
 }

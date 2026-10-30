@@ -60,6 +60,10 @@ func (m *Module) enqueue(ctx context.Context, tx *sql.Tx, s appkit.Scope, submis
 	return nil
 }
 func (m *Module) deliverFor(ctx context.Context, s appkit.Scope, submissionID string) {
+	// The notices are already committed: a cancelled browser request must not
+	// leave them pending without an attempt, so the lookup ignores cancellation
+	// just like each delivery below.
+	ctx = context.WithoutCancel(ctx)
 	rows, e := m.rt.DB.QueryContext(ctx, "SELECT id FROM trust_notifications WHERE tenant_id=? AND project_id=? AND submission_id=? AND status='pending'", s.TenantID, s.ProjectID, submissionID)
 	if e != nil {
 		return

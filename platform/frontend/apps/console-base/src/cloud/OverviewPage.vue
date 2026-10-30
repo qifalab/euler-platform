@@ -6,7 +6,14 @@ import { useCloud } from "./context";
 import type { AuditEvent, List } from "./types";
 import CloudIcon from "./CloudIcon.vue";
 import CloudState from "./CloudState.vue";
-const { state, tenant, project, tenantPath, refreshInstallations } = useCloud();
+const {
+  state,
+  tenant,
+  project,
+  tenantPath,
+  refreshInstallations,
+  canManageProject,
+} = useCloud();
 const events = ref<AuditEvent[]>([]);
 const auditError = ref("");
 const auditLoading = ref(true);
@@ -21,7 +28,9 @@ async function loadAudit() {
   controller = new AbortController();
   const signal = controller.signal;
   events.value = [];
-  if (!state.projectId) {
+  auditError.value = "";
+  // The server shows project audit to project administrators only.
+  if (!state.projectId || !canManageProject.value) {
     auditLoading.value = false;
     return;
   }
@@ -215,10 +224,17 @@ onBeforeUnmount(() => controller.abort());
           <h2>最近动态</h2>
           <p class="muted">当前项目的操作记录</p>
         </div>
-        <RouterLink to="/audit" class="text-link">全部</RouterLink>
+        <RouterLink v-if="canManageProject" to="/audit" class="text-link"
+          >全部</RouterLink
+        >
       </div>
       <CloudState
-        v-if="auditLoading"
+        v-if="!canManageProject"
+        kind="empty"
+        title="操作记录仅项目管理员可查看"
+        description="项目管理员和团队管理员可以查看当前项目的操作审计。"
+      /><CloudState
+        v-else-if="auditLoading"
         kind="loading"
         title="正在读取动态"
       /><CloudState

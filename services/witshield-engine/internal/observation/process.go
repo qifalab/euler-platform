@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -199,6 +200,11 @@ func executableInTransientPath(path string) bool {
 }
 
 func truncateField(value string, limit int) string {
+	// strings.Map also rewrites each invalid UTF-8 byte as U+FFFD, so the
+	// result is valid UTF-8. Cutting must then stay on a rune boundary: a split
+	// rune is re-encoded by encoding/json as one U+FFFD per byte, which pushes
+	// the field past the bound the Agent enforces on the Helper response and
+	// makes it reject the whole process observation.
 	value = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return -1
@@ -206,7 +212,11 @@ func truncateField(value string, limit int) string {
 		return r
 	}, strings.TrimSpace(value))
 	if len(value) > limit {
-		return value[:limit] + "…"
+		cut := limit
+		for cut > 0 && !utf8.RuneStart(value[cut]) {
+			cut--
+		}
+		return value[:cut] + "…"
 	}
 	return value
 }

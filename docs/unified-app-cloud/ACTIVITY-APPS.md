@@ -58,7 +58,7 @@ Public routes have no personnel scope. They are distinct capability-limited data
 | `GET …/info`, `GET …/qr.png` | Same public room summary; locally generated QR image |
 | `POST …/register` | Add one name/department to this open room only |
 
-The collector strips URL query strings and fragments at both client and server. Raw visitor IDs and IPs are not persisted; per-site HMACs prevent cross-site correlation. Collection uses exact domains including optional ports, bounded request/field sizes and a per-site/IP rate limit. Origin checks constrain browser integration, not a claim that public analytics is bot-proof. Proxies are not trusted through client-supplied forwarded headers.
+The collector strips URL query strings and fragments at both client and server. Raw visitor IDs and IPs are not persisted; per-site HMACs prevent cross-site correlation. Collection uses exact domains including optional ports, bounded request/field sizes and a per-site/IP rate limit. Origin checks constrain browser integration, not a claim that public analytics is bot-proof. Forwarded headers are believed only when the direct peer is a proxy listed in `EULER_WEAUTH_TRUSTED_PROXIES` (shared with WeAuth and Lottery signup); otherwise the TCP peer is the client address.
 
 Invitations use random 144-bit tokens, hashed for lookup and encrypted for authorized redisplay. Rotation invalidates the old URL. Public signup never reveals participant lists, history or management capability; signup fields are bounded, duplicate names rejected and rate limited. The form has a nonce-based CSP and no external script, font or QR service. `Runtime.PublicURL` must be the externally reachable Euler URL for copyable scripts and mobile invitations.
 

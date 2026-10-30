@@ -93,12 +93,17 @@ func (h *Handler) automationRoutes() {
 	}))
 	h.route("PATCH "+base+"/rules/{ruleID}", wrap(true, func(w http.ResponseWriter, r *http.Request, p identity.Principal) error {
 		var b struct {
-			Enabled bool `json:"enabled"`
+			// Required: an absent field must not decode as a pause, which also
+			// cancels the rule's queued tasks.
+			Enabled *bool `json:"enabled"`
 		}
 		if err := decode(w, r, &b); err != nil {
 			return err
 		}
-		err := h.automation.SetEnabled(r.Context(), p.ID, r.PathValue("tenantID"), r.PathValue("projectID"), r.PathValue("ruleID"), b.Enabled)
+		if b.Enabled == nil {
+			return ErrInvalid
+		}
+		err := h.automation.SetEnabled(r.Context(), p.ID, r.PathValue("tenantID"), r.PathValue("projectID"), r.PathValue("ruleID"), *b.Enabled)
 		if err == nil {
 			w.WriteHeader(204)
 		}

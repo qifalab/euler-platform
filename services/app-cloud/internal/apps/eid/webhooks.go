@@ -38,14 +38,15 @@ func (m *Module) queueWebhooks(ctx context.Context, tx *sql.Tx, s appkit.Scope, 
 	return nil
 }
 
-// flushWebhooks runs after commit with cancellation detached from the browser.
-// Jobs claimed before a process crash remain sending and are never auto-retried.
-func (m *Module) flushWebhooks(parent context.Context, s appkit.Scope) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 25*time.Second)
-	defer cancel()
-	rows, err := m.rt.DB.QueryContext(ctx, "SELECT id FROM eid_notifications WHERE "+scoped+" AND state='queued' AND kind LIKE 'webhook_%' ORDER BY created_at LIMIT 25", scopeArgs(s)...)
+// flushWebhooks sends one installation's queued bot notifications, oldest
+// first. It runs on the module's worker after commit, never inside a request.
+// No further row is claimed once stop is cancelled or the installation's turn
+// is over; the result reports whether queued rows may remain. Jobs claimed
+// before a process crash remain sending and are never auto-retried.
+func (m *Module) flushWebhooks(stop, deliver context.Context, s appkit.Scope) bool {
+	rows, err := m.rt.DB.QueryContext(stop, "SELECT id FROM eid_notifications WHERE "+scoped+" AND state='queued' AND kind LIKE 'webhook_%' ORDER BY created_at LIMIT ?", append(scopeArgs(s), webhookBatch)...)
 	if err != nil {
-		return
+		return false
 	}
 	var ids []string
 	for rows.Next() {
@@ -57,14 +58,25 @@ func (m *Module) flushWebhooks(parent context.Context, s appkit.Scope) {
 	}
 	rows.Close()
 	if err != nil {
-		return
+		return false
 	}
+	turn := time.Now().Add(webhookTurn)
 	for _, id := range ids {
-		if ctx.Err() != nil {
-			return
+		if stop.Err() != nil {
+			return false
 		}
-		_ = m.deliverWebhook(ctx, s, id)
+		if time.Now().After(turn) {
+			return true
+		}
+		call, cancel := context.WithTimeout(deliver, webhookCallTimeout)
+		err = m.deliverWebhook(call, s, id)
+		cancel()
+		if err != nil {
+			// The database failed: retry on the next write or start, not in a loop.
+			return false
+		}
 	}
+	return len(ids) == webhookBatch
 }
 
 func (m *Module) deliverWebhook(ctx context.Context, s appkit.Scope, id string) error {
@@ -89,6 +101,12 @@ func (m *Module) deliverWebhook(ctx context.Context, s appkit.Scope, id string) 
 	if err != nil || !claimed {
 		return err
 	}
+	return m.sendWebhook(ctx, s, id, kind, target, encrypted)
+}
+
+// sendWebhook posts a row its caller has moved to sending and records the
+// provider's answer.
+func (m *Module) sendWebhook(ctx context.Context, s appkit.Scope, id, kind, target string, encrypted []byte) error {
 	var data notificationData
 	sendErr := m.open(encrypted, s.InstallationID+":notification:"+id, &data)
 	if sendErr == nil {
@@ -153,10 +171,11 @@ func (m *Module) retryWebhook(w http.ResponseWriter, r *http.Request, s appkit.S
 		return appkit.Invalid("请先核对渠道记录，确认重试可能造成重复消息")
 	}
 	id := r.PathValue("id")
+	var kind, target string
+	var encrypted []byte
 	err := m.rt.Transaction(r.Context(), func(tx *sql.Tx) error {
-		var kind, state string
-		var encrypted []byte
-		if err := tx.QueryRowContext(r.Context(), "SELECT kind,state,data FROM eid_notifications WHERE "+scoped+" AND id=?", append(scopeArgs(s), id)...).Scan(&kind, &state, &encrypted); err != nil {
+		var state string
+		if err := tx.QueryRowContext(r.Context(), "SELECT kind,state,target_id,data FROM eid_notifications WHERE "+scoped+" AND id=?", append(scopeArgs(s), id)...).Scan(&kind, &state, &target, &encrypted); err != nil {
 			return err
 		}
 		if !strings.HasPrefix(kind, "webhook_") {
@@ -184,17 +203,25 @@ func (m *Module) retryWebhook(w http.ResponseWriter, r *http.Request, s appkit.S
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(r.Context(), "UPDATE eid_notifications SET state='queued',data=?,error='',completed_at='' WHERE "+scoped+" AND id=?", append([]any{encrypted}, append(scopeArgs(s), id)...)...); err != nil {
+		// Claim the row here, as the worker would: it cannot also send it between
+		// this check and the delivery below.
+		result, err := tx.ExecContext(r.Context(), "UPDATE eid_notifications SET state='sending',data=?,error='',completed_at='' WHERE "+scoped+" AND id=? AND state IN ('failed','queued')", append([]any{encrypted}, append(scopeArgs(s), id)...)...)
+		if err != nil {
 			return err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return appkit.Conflict("该通知已经发送或结果尚未确定，请先核对渠道记录")
 		}
 		return m.rt.Audit(r.Context(), tx, s, "notification.retry", id, "明确确认后重试机器人通知")
 	})
 	if err != nil {
 		return err
 	}
+	// A confirmed retry reports the provider's answer, so this one call (bounded
+	// by the client's 10 s timeout) is still made in the request.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Second)
 	defer cancel()
-	if err = m.deliverWebhook(ctx, s, id); err != nil {
+	if err = m.sendWebhook(ctx, s, id, kind, target, encrypted); err != nil {
 		return err
 	}
 	result, err := m.notificationByKey(ctx, s, id)

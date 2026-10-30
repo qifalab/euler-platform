@@ -56,7 +56,8 @@ function relative(path: string) {
     !path.startsWith("/") ||
     path.startsWith("//") ||
     path.includes("\\") ||
-    path.split(/[/?#]/).includes("..")
+    // fetch's URL parser also resolves ".%2e", "%2e." and "%2e%2e".
+    path.split(/[/?#]/).some((segment) => /^(?:\.|%2e){2}$/i.test(segment))
   )
     throw new Error("Invalid application path");
   return path;

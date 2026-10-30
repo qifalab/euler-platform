@@ -81,6 +81,16 @@ interface WujieBus {
   $off(e: string, fn: Listener): void;
 }
 
+/** One live bridge.on() subscription. */
+interface Subscription {
+  event: BridgeEvent;
+  fn: Listener;
+  /** fn in EventTarget form (CustomEvent → detail), kept so it can be removed. */
+  wrap: (e: Event) => void;
+  /** The bus the listener is attached to now. */
+  bus: Partial<WujieBus> | EventTarget | null;
+}
+
 /**
  * Typed bus facade. In sandbox mode it proxies to the live Wujie bus; in
  * standalone mode it falls back to a local EventTarget so the same sub-app code
@@ -88,6 +98,7 @@ interface WujieBus {
  */
 class Bridge {
   private local: EventTarget | null = null;
+  private subs = new Set<Subscription>();
 
   private bus(): Partial<WujieBus> | EventTarget {
     if (inWujieSandbox()) {
@@ -103,16 +114,44 @@ class Bridge {
   }
 
   on(event: BridgeEvent, fn: Listener): () => void {
+    const sub: Subscription = { event, fn, wrap: (e: Event) => fn((e as CustomEvent).detail), bus: null };
+    this.subs.add(sub);
+    this.attach(sub);
+    return () => {
+      if (this.subs.delete(sub)) this.detach(sub);
+    };
+  }
+
+  /**
+   * Re-attach every live subscription to the current bus. Wujie's UMD unmount
+   * ends with `bus.$clear()`, which drops every listener the sub-app holds,
+   * and its re-mount only calls `__WUJIE_MOUNT` (no module runs again), so a
+   * subscription made at import time was gone after the first switch away and
+   * back. bootstrapSubApp calls this on every mount; Wujie's `$on` and
+   * EventTarget both ignore a listener they already hold, so it is idempotent.
+   */
+  resubscribe(): void {
+    for (const sub of this.subs) this.attach(sub);
+  }
+
+  private attach(sub: Subscription): void {
     const b = this.bus();
-    const wujieBus = b as { $on?: (e: string, fn: Listener) => void; $off?: (e: string, fn: Listener) => void };
-    if (wujieBus.$on) {
-      wujieBus.$on(event, fn);
-      return () => wujieBus.$off?.(event, fn);
-    }
-    const t = b as EventTarget;
-    const wrap = (e: Event) => fn((e as CustomEvent).detail);
-    t.addEventListener(event, wrap);
-    return () => t.removeEventListener(event, wrap);
+    // The bus can change under a subscription (the Wujie bus injected after a
+    // degraded start on the local one): move the listener instead of keeping both.
+    if (sub.bus && sub.bus !== b) this.detach(sub);
+    sub.bus = b;
+    const wujieBus = b as Partial<WujieBus>;
+    if (typeof wujieBus.$on === "function") wujieBus.$on(sub.event, sub.fn);
+    else (b as EventTarget).addEventListener(sub.event, sub.wrap);
+  }
+
+  private detach(sub: Subscription): void {
+    const b = sub.bus;
+    sub.bus = null;
+    if (!b) return;
+    const wujieBus = b as Partial<WujieBus>;
+    if (typeof wujieBus.$on === "function") wujieBus.$off?.(sub.event, sub.fn);
+    else (b as EventTarget).removeEventListener(sub.event, sub.wrap);
   }
 
   emit(event: BridgeEvent, payload?: unknown): void {
@@ -273,6 +312,8 @@ export function bootstrapSubApp(mount: LifecycleFn, unmount: LifecycleFn): void 
   if (inWujieSandbox()) {
     const w = window as unknown as WujieLifecycleWindow;
     w.__WUJIE_MOUNT = () => {
+      // A re-mount follows Wujie's bus.$clear(): restore the subscriptions.
+      bridge.resubscribe();
       void doMount();
     };
     w.__WUJIE_UNMOUNT = () => doUnmount();

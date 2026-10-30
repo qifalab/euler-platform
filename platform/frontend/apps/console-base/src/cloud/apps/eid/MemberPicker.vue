@@ -12,22 +12,27 @@ const app = useApp(),
   loading = ref(false),
   error = ref("");
 const names = ref<Record<string, string>>({});
+// The newest page or search wins; an older response that lands later is
+// ignored instead of dropping the newer request.
+let loadSeq = 0;
 async function load(next = 1) {
-  if (loading.value) return;
+  const seq = ++loadSeq;
   loading.value = true;
   error.value = "";
   try {
     const out = await app.request<Page<Member>>(
       `/admin/members?page=${next}&pageSize=25&search=${encodeURIComponent(search.value)}`,
     );
+    if (seq !== loadSeq) return;
     people.value = out.items;
     page.value = next;
     total.value = out.total;
     for (const person of out.items) names.value[person.actorId] = person.name;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "无法加载会员";
+    if (seq === loadSeq)
+      error.value = e instanceof Error ? e.message : "无法加载会员";
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 function select(id: string, checked: boolean) {

@@ -31,6 +31,12 @@ func WithApplications(modules []appkit.Module, administrators []Administrator) H
 		for _, m := range modules {
 			h.modules[m.ID()] = m
 		}
+		// Each module's route table is built once and shared by the browser and
+		// machine paths; module handlers keep no per-request state.
+		h.moduleHandlers = make(map[string]http.Handler, len(h.modules))
+		for id, m := range h.modules {
+			h.moduleHandlers[id] = m.Handler()
+		}
 		h.administrators = append([]Administrator(nil), administrators...)
 	}
 }
@@ -141,7 +147,7 @@ func (h *Handler) nativeRoutes() {
 	base := "/api/v1/tenants/{tenantID}/projects/{projectID}/apps/{applicationID}"
 	serve := func(w http.ResponseWriter, r *http.Request, p identity.Principal) error {
 		app := r.PathValue("applicationID")
-		m, ok := h.modules[app]
+		handler, ok := h.moduleHandlers[app]
 		if !ok {
 			return ErrNotFound
 		}
@@ -162,7 +168,7 @@ func (h *Handler) nativeRoutes() {
 		inner.URL = &u
 		inner.URL.Path = "/" + rest
 		inner.URL.RawPath = ""
-		m.Handler().ServeHTTP(w, inner)
+		handler.ServeHTTP(w, inner)
 		return nil
 	}
 	h.route(base, serve)
@@ -243,6 +249,10 @@ func (h *Handler) grantRoutes() {
 		id := newID("grant_")
 		err := h.store.write(r.Context(), func(tx *sql.Tx) error {
 			if _, err := projectRole(r.Context(), tx, b.UserID, b.TenantID, b.ProjectID); err != nil {
+				return err
+			}
+			// Archived projects keep their grants but accept no new ones.
+			if err := requireActiveProject(r.Context(), tx, b.TenantID, b.ProjectID); err != nil {
 				return err
 			}
 			var existing string

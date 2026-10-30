@@ -290,7 +290,7 @@ func (h *Handler) machineRequest(w http.ResponseWriter, r *http.Request) {
 		respondError(w, err)
 		return
 	}
-	module, ok := h.modules[app]
+	handler, ok := h.moduleHandlers[app]
 	if !ok {
 		respondError(w, ErrNotFound)
 		return
@@ -342,7 +342,7 @@ func (h *Handler) machineRequest(w http.ResponseWriter, r *http.Request) {
 	inner.URL = &u
 	inner.URL.Path = rest
 	inner.URL.RawPath = ""
-	module.Handler().ServeHTTP(w, inner)
+	handler.ServeHTTP(w, inner)
 }
 
 type machineRoute struct{ app, method, path, permission string }

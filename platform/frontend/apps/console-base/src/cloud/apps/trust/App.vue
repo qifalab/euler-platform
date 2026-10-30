@@ -189,10 +189,14 @@ const labels: Record<string, string> = {
   resubmit: "重新提交",
   approve: "审核通过",
   reject: "审核拒绝",
+};
+// Notification records share "pending" with submissions but mean "not yet sent".
+const noticeLabels: Record<string, string> = {
+  pending: "待发送",
+  sending: "发送中",
   sent: "发送成功",
   failed: "发送失败",
   unknown: "结果待核实",
-  sending: "发送中",
 };
 const fieldTypes = [
   { id: "text", name: "文本" },
@@ -208,8 +212,17 @@ const fieldTypes = [
 function label(value: string) {
   return labels[value] ?? value;
 }
+function noticeLabel(value: string) {
+  return noticeLabels[value] ?? value;
+}
 function date(value?: string) {
   return value ? new Date(value).toLocaleString("zh-CN") : "—";
+}
+// <input type="datetime-local"> holds local wall-clock time without an offset.
+function localDateTime(ms: number) {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function size(n: number) {
   return n > 1048576
@@ -244,15 +257,24 @@ async function refresh() {
   ).items;
 }
 async function loadQueue() {
-  const q = new URLSearchParams({
-    page: String(queuePage.value),
-    limit: "20",
-    status: queueStatus.value,
-    schemeId: queueScheme.value,
-    search: queueSearch.value,
-    actorId: queueActor.value,
-  });
-  const data = await app.request<Page<Submission>>(`/review/submissions?${q}`);
+  const fetchPage = () =>
+    app.request<Page<Submission>>(
+      `/review/submissions?${new URLSearchParams({
+        page: String(queuePage.value),
+        limit: "20",
+        status: queueStatus.value,
+        schemeId: queueScheme.value,
+        search: queueSearch.value,
+        actorId: queueActor.value,
+      })}`,
+    );
+  let data = await fetchPage();
+  // Deciding the last item of a later page (or a smaller result after a
+  // refresh) leaves the current page past the end: show the last real page.
+  if (!data.items.length && data.total > 0 && queuePage.value > 0) {
+    queuePage.value = Math.ceil(data.total / 20) - 1;
+    data = await fetchPage();
+  }
   queue.value = data.items;
   queueTotal.value = data.total;
 }
@@ -277,16 +299,24 @@ async function loadNotices() {
   notices.value = data.items;
   channels.value = data.channels;
 }
+async function loadView(id: string) {
+  if (id === "queue") await loadQueue();
+  if (id === "insights") {
+    stats.value = await app.request<Record<string, number>>("/review/stats");
+    await loadUsers();
+  }
+  if (id === "keys") await loadKeys();
+  if (id === "notifications") await loadNotices();
+}
 async function changeView(id: string) {
   view.value = id;
+  await run(() => loadView(id));
+}
+// The header button refreshes the workspace and the tab the user is looking at.
+async function refreshAll() {
   await run(async () => {
-    if (id === "queue") await loadQueue();
-    if (id === "insights") {
-      stats.value = await app.request<Record<string, number>>("/review/stats");
-      await loadUsers();
-    }
-    if (id === "keys") await loadKeys();
-    if (id === "notifications") await loadNotices();
+    await refresh();
+    await loadView(view.value);
   });
 }
 onMounted(async () => {
@@ -336,20 +366,24 @@ function moveField(index: number, direction: number) {
   [fields[index], fields[next]] = [fields[next]!, fields[index]!];
 }
 function setOptions(field: Field, event: Event) {
-  field.options = (event.target as HTMLTextAreaElement).value
-    .split("\n")
-    .filter(Boolean);
+  // Keep the raw lines while typing: dropping the empty last line here would
+  // re-render the textarea without the newline the operator just entered.
+  // Blank lines are removed in saveScheme.
+  field.options = (event.target as HTMLTextAreaElement).value.split("\n");
 }
 async function saveScheme() {
   await run(async () => {
     const s = editor.value;
     if (!s) return;
-    for (const field of s.fields)
+    for (const field of s.fields) {
+      if (field.options)
+        field.options = field.options.filter((option) => option.trim() !== "");
       field.validations = Object.fromEntries(
         Object.entries(field.validations).filter(
           ([, value]) => value !== "" && value !== null && value !== undefined,
         ),
       ) as Rules;
+    }
     await app.request(s.id ? `/schemes/${s.id}` : "/schemes", {
       method: s.id ? "PUT" : "POST",
       body: s,
@@ -465,23 +499,6 @@ async function showSubmission(id: string, review = false) {
     reviewReason.value = "";
   });
 }
-async function applyReview(status: string) {
-  const sub = detail.value;
-  if (!sub) return;
-  await run(async () => {
-    detail.value = await app.request<Submission>(
-      `/review/submissions/${sub.id}`,
-      {
-        method: "POST",
-        body: { status, version: sub.version, reason: reviewReason.value },
-      },
-    );
-    await refresh();
-    await loadQueue();
-    reviewReason.value = "";
-    app.notify("审核结果已保存", "success");
-  });
-}
 function reviewConfirm(status: string) {
   if (status === "rejected" && !reviewReason.value.trim()) {
     error.value = "请填写拒绝原因";
@@ -541,9 +558,7 @@ async function openKeyDialog() {
   keyActors.value = [app.scope.actorId];
   keyDetails.value = false;
   issuedToken.value = "";
-  keyExpiry.value = new Date(Date.now() + 30 * 86400000)
-    .toISOString()
-    .slice(0, 16);
+  keyExpiry.value = localDateTime(Date.now() + 30 * 86400000);
   keyDialog.value = true;
   if (app.can("review")) await run(loadUsers);
 }
@@ -588,6 +603,7 @@ function retryNotice(n: Notice) {
 }
 async function testAPI() {
   await run(async () => {
+    apiResult.value = null;
     const q = new URLSearchParams({
       schemeId: apiScheme.value,
       actorId: apiActor.value,
@@ -615,7 +631,7 @@ async function testAPI() {
       <button
         class="secondary"
         :disabled="busy || loading"
-        @click="run(refresh)"
+        @click="refreshAll"
       >
         刷新
       </button>
@@ -1117,7 +1133,7 @@ async function testAPI() {
                 <td>{{ n.submissionId }}</td>
                 <td>{{ n.channel === "wecom" ? "企业微信" : "飞书" }}</td>
                 <td>
-                  {{ label(n.status) }}<small>{{ n.lastError }}</small>
+                  {{ noticeLabel(n.status) }}<small>{{ n.lastError }}</small>
                 </td>
                 <td>{{ n.attempts }}</td>
                 <td>

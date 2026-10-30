@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from "vue";
+import { safeExternalURL } from "../../api";
 import { useApp } from "../shared";
 import PackagesPanel from "./PackagesPanel.vue";
 const app = useApp();
@@ -83,13 +84,17 @@ async function act(fn: () => Promise<unknown>, message: string) {
   if (busy.value) return;
   busy.value = true;
   error.value = "";
+  let failure = "";
   try {
     await fn();
     app.notify(message);
-    await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "操作失败";
+    failure = e instanceof Error ? e.message : "操作失败";
   } finally {
+    // Reload after failures too: an unconfirmed engine result is persisted as
+    // a new state (需要核验) that the list must show instead of the old one.
+    await load();
+    if (failure) error.value = failure;
     busy.value = false;
   }
 }
@@ -300,7 +305,7 @@ onMounted(load);
       </p>
     </section>
     <section v-if="tab === 'packages'" class="panel">
-      <PackagesPanel kind="database" />
+      <PackagesPanel kind="database" @changed="load" />
     </section>
     <section v-if="tab === 'operations' && app.can('admin')" class="panel">
       <header>
@@ -441,7 +446,7 @@ onMounted(load);
           <a
             v-for="tool in connection.tools"
             :key="tool.name"
-            :href="tool.url"
+            :href="safeExternalURL(tool.url)"
             target="_blank"
             rel="noopener noreferrer"
             >打开 {{ tool.name }} ↗</a

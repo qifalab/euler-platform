@@ -221,6 +221,17 @@ func (c *receiptCache) ensureCapacity(required int64, replacingPath string, add 
 		if ownerErr != nil || uid != os.Geteuid() {
 			return errors.New("receipt cache contains a foreign-owned file")
 		}
+		if info.Size() == 0 {
+			// begin() lets the privileged Run start only after the marker content
+			// is fsynced, and save() publishes by rename. An empty receipt is
+			// therefore a start marker torn by a crash between its O_EXCL create and
+			// that fsync: its attempt never ran. Keeping it would stop the Helper
+			// from starting (and with it every action), so drop it.
+			if err = os.Remove(path); err != nil {
+				return err
+			}
+			continue
+		}
 		count++
 		total += info.Size()
 		if info.Size() > 4<<20 {

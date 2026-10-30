@@ -57,11 +57,14 @@ func fixture(t *testing.T) *testFixture {
 		return string(text), e
 	}, DeriveKey: func(purpose string) []byte { k := sha256.Sum256([]byte("test:" + purpose)); return k[:] }, ApplicationEnabled: func(context.Context, string, string, string) (bool, error) { return f.enabled, nil }}
 	f.open(t)
-	t.Cleanup(func() { f.rt.DB.Close() })
+	t.Cleanup(func() { f.m.Close(); f.rt.DB.Close() })
 	return f
 }
 func (f *testFixture) open(t *testing.T) {
 	t.Helper()
+	if f.m != nil {
+		f.m.Close() // as after a restart: no worker of the previous module remains
+	}
 	db, e := sql.Open("sqlite", f.path)
 	if e != nil {
 		t.Fatal(e)

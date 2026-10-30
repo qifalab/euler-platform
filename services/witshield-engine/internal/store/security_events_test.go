@@ -15,7 +15,8 @@ import (
 
 func putTestDefensePolicy(t *testing.T, s *Store, deviceID string, now time.Time, autoBan bool, threshold int, window time.Duration) {
 	t.Helper()
-	if err := s.PutDefensePolicy(context.Background(), domain.DefensePolicy{
+	// The administrator API stores policies through this production path.
+	if _, err := s.PutDefensePolicyAndCancelQueued(context.Background(), domain.DefensePolicy{
 		DeviceID: deviceID, Enabled: true, AutoBan: autoBan,
 		FailureThreshold: threshold, Window: window, BanDuration: 15 * time.Minute,
 		MaxBansPerHour: 10, Allowlist: []string{"1.1.1.10"}, UpdatedAt: now,

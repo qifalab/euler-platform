@@ -32,6 +32,7 @@ type fakeS3 struct {
 	access   map[string]string
 	copyHook func()
 	copyErr  error
+	signErr  error
 }
 
 func newFake() *fakeS3 {
@@ -160,6 +161,9 @@ func (f *fakeS3) Copy(_ context.Context, b, source, target, etag string) error {
 	return f.copyErr
 }
 func (f *fakeS3) UploadSignature(_ context.Context, b, k string, size int64, ct string, ttl time.Duration) (Signature, error) {
+	if f.signErr != nil {
+		return Signature{}, f.signErr
+	}
 	return Signature{URL: "https://s3.example.test/" + b, Method: "POST", Fields: map[string]string{"key": k}, ExpiresAt: time.Now().Add(ttl).Format(time.RFC3339Nano)}, nil
 }
 func (f *fakeS3) DownloadSignature(_ context.Context, b, k string, ttl time.Duration) (Signature, error) {

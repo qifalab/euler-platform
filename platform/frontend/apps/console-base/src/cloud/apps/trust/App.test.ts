@@ -187,4 +187,206 @@ describe("Trust native workflows", () => {
     expect(button(authorized.wrapper, "撤销").exists()).toBe(true);
     authorized.wrapper.unmount();
   });
+  it("keeps line breaks while an operator types select options one per line", async () => {
+    const { wrapper, request } = await mounted(["read", "admin"], (path, options) =>
+      path === "/schemes" && options?.method === "POST"
+        ? { ...structuredClone(scheme), id: "tsc_new" }
+        : undefined,
+    );
+    await button(wrapper, "认证方案").trigger("click");
+    await flushPromises();
+    await button(wrapper, "创建方案").trigger("click");
+    const dialog = wrapper.find("[aria-label='编辑认证方案']");
+    await dialog.find(".form-grid input").setValue("学籍认证");
+    await dialog.find(".field-editor input").setValue("年级");
+    await dialog.find("select[aria-label='字段类型']").setValue("select");
+    const options = dialog.find(".field-editor textarea");
+    await options.setValue("大一\n");
+    expect((options.element as HTMLTextAreaElement).value).toBe("大一\n");
+    await options.setValue("大一\n大二\n");
+    expect((options.element as HTMLTextAreaElement).value).toBe("大一\n大二\n");
+    await dialog.find("form").trigger("submit");
+    await flushPromises();
+    const saved = request.mock.calls.find(
+      ([path, init]) => path === "/schemes" && init?.method === "POST",
+    );
+    expect(saved?.[1]?.body.fields[0].options).toEqual(["大一", "大二"]);
+    wrapper.unmount();
+  });
+  it("clears an earlier API test result when a later status query fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: { verified: true, status: "approved" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({
+          error: { code: "forbidden", message: "查询超出密钥范围" },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { wrapper } = await mounted(["read", "admin"]);
+      await button(wrapper, "API 文档").trigger("click");
+      await flushPromises();
+      const form = wrapper.find(".docs form");
+      await form.find("input[type=password]").setValue("trust_token");
+      await form.find("select").setValue("tsc_one");
+      await form.trigger("submit");
+      await flushPromises();
+      expect(form.find("p.alert").text()).toContain("已验证");
+      await form.find("input:not([type=password])").setValue("bob");
+      await form.trigger("submit");
+      await flushPromises();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(wrapper.text()).toContain("查询超出密钥范围");
+      expect(form.find("p.alert").exists()).toBe(false);
+      wrapper.unmount();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("defaults a new key to expire 30 days from now in the operator's local time", async () => {
+    // console-base has no Node typings; vitest still runs in Node, where
+    // assigning TZ switches the process time zone for later Date calls.
+    const env = (
+      globalThis as unknown as {
+        process: { env: Record<string, string | undefined> };
+      }
+    ).process.env;
+    const previous = env.TZ;
+    env.TZ = "Asia/Shanghai";
+    try {
+      const { wrapper, request } = await mounted(["read", "admin", "secrets"]);
+      await button(wrapper, "查询密钥").trigger("click");
+      await flushPromises();
+      await button(wrapper, "签发密钥").trigger("click");
+      await flushPromises();
+      const input = wrapper.find("input[type=datetime-local]");
+      const expected = Date.now() + 30 * 86400000;
+      const shown = new Date((input.element as HTMLInputElement).value);
+      expect(Math.abs(shown.getTime() - expected)).toBeLessThan(120000);
+      await wrapper.find("[aria-label='签发查询密钥'] input").setValue("状态");
+      await wrapper
+        .find("[aria-label='签发查询密钥'] input[type=checkbox][value='tsc_one']")
+        .setValue(true);
+      await wrapper.find("[aria-label='签发查询密钥'] form").trigger("submit");
+      await flushPromises();
+      const issued = request.mock.calls.find(
+        ([path, init]) => path === "/keys" && init?.method === "POST",
+      );
+      const expiresAt = Date.parse(issued?.[1]?.body.expiresAt);
+      expect(Math.abs(expiresAt - expected)).toBeLessThan(120000);
+      wrapper.unmount();
+    } finally {
+      if (previous === undefined) delete env.TZ;
+      else env.TZ = previous;
+    }
+  });
+  it("labels lifecycle notifications with delivery states, not review states", async () => {
+    const { wrapper } = await mounted(["read", "admin"], (path) =>
+      path === "/notifications"
+        ? {
+            items: [
+              {
+                id: "tn_one",
+                submissionId: "tsu_one",
+                channel: "wecom",
+                status: "pending",
+                attempts: 0,
+                lastError: "",
+                createdAt: new Date().toISOString(),
+              },
+            ],
+            channels: { wecom: true, feishu: false },
+          }
+        : undefined,
+    );
+    await button(wrapper, "通知记录").trigger("click");
+    await flushPromises();
+    const row = wrapper.find("tbody tr");
+    expect(row.text()).toContain("待发送");
+    expect(row.text()).not.toContain("待审核");
+    wrapper.unmount();
+  });
+  function queueResponder(state: { pending: number }) {
+    const item = (i: number) => ({
+      id: `tsu_${i}`,
+      schemeId: scheme.id,
+      schemeName: scheme.name,
+      actorId: `user${i}`,
+      status: "pending",
+      version: 1,
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-01T00:00:00Z",
+    });
+    return (path: string, options?: any) => {
+      if (path.startsWith("/review/submissions?")) {
+        const page = Number(
+          new URLSearchParams(path.slice(path.indexOf("?") + 1)).get("page"),
+        );
+        const items = Array.from({ length: state.pending }, (_, i) =>
+          item(i),
+        ).slice(page * 20, page * 20 + 20);
+        return { items, total: state.pending, page, limit: 20 };
+      }
+      if (path === "/review/submissions/tsu_20") {
+        const decided = options?.method === "POST";
+        if (decided) state.pending = 20;
+        return {
+          ...item(20),
+          status: decided ? "approved" : "pending",
+          version: decided ? 2 : 1,
+          fields: scheme.fields,
+          data: { full_name: "申请人" },
+          materials: [],
+          history: [],
+        };
+      }
+      return undefined;
+    };
+  }
+  it("returns to the last non-empty queue page after the only item on a page is decided", async () => {
+    const state = { pending: 21 };
+    const { wrapper } = await mounted(["read", "review"], queueResponder(state));
+    await button(wrapper, "审核工作台").trigger("click");
+    await flushPromises();
+    await button(wrapper, "下一页").trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".table-wrap tbody tr")).toHaveLength(1);
+    await button(wrapper, "查看与审核").trigger("click");
+    await flushPromises();
+    await button(wrapper, "通过认证").trigger("click");
+    await button(wrapper, "确认").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("第 1 页");
+    expect(wrapper.findAll(".table-wrap tbody tr")).toHaveLength(20);
+    wrapper.unmount();
+  });
+  it("reloads the open review queue when the workspace refresh button is used", async () => {
+    const state = { pending: 1 };
+    const { wrapper, request } = await mounted(
+      ["read", "review"],
+      queueResponder(state),
+    );
+    await button(wrapper, "审核工作台").trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".table-wrap tbody tr")).toHaveLength(1);
+    state.pending = 2;
+    const before = request.mock.calls.length;
+    await button(wrapper, "刷新").trigger("click");
+    await flushPromises();
+    expect(
+      request.mock.calls
+        .slice(before)
+        .some(([path]) => String(path).startsWith("/review/submissions?")),
+    ).toBe(true);
+    expect(wrapper.findAll(".table-wrap tbody tr")).toHaveLength(2);
+    wrapper.unmount();
+  });
 });

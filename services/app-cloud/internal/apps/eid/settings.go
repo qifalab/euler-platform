@@ -149,8 +149,8 @@ func (m *Module) putSettings(w http.ResponseWriter, r *http.Request, s appkit.Sc
 	if e := appkit.Decode(w, r, &in); e != nil {
 		return e
 	}
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
+	unlock := m.lock(s)
+	defer unlock()
 	old, e := m.settings(r.Context(), s)
 	if e != nil {
 		return e

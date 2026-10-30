@@ -7,6 +7,7 @@ import {
   key,
   label,
   split,
+  utf8Length,
   when,
   type Defense,
   type Device,
@@ -142,6 +143,8 @@ watch(selected, () => {
 });
 async function enroll() {
   await run(async () => {
+    if (utf8Length(enrollment.name.trim()) > 100)
+      throw new Error("注册码用途最多 100 字节（约 33 个汉字）");
     const result = await app.request<{ token: string; enrollmentToken: Token }>(
       "/enrollment-tokens",
       { method: "POST", body: enrollment },
@@ -299,6 +302,11 @@ async function simulate() {
 }
 async function prepare() {
   await run(async () => {
+    if (
+      ["temporary_ip_ban", "temporary_process_suspend"].includes(action.type) &&
+      utf8Length(action.reason) > 256
+    )
+      throw new Error("操作原因最多 256 字节（约 85 个汉字）");
     let parameters: Record<string, unknown>;
     switch (action.type) {
       case "package_security_upgrade":

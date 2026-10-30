@@ -34,6 +34,10 @@ let linkSequence = 0;
 async function selectLinkContext() {
   const seq = ++linkSequence;
   linkError.value = "";
+  // Every navigation supersedes an in-flight switch. The superseded call's
+  // finally no longer owns selectingLink, so clear it here or the shell
+  // stays on its loading state after the user leaves the link.
+  selectingLink.value = false;
   if (!state.session?.authenticated || state.loading) return;
   const team =
     typeof route.query.tenantId === "string" ? route.query.tenantId : "";
@@ -84,7 +88,9 @@ const navigation = computed(() => [
         { to: "/project-settings", name: "项目设置", icon: "folder" },
       ]
     : []),
-  { to: "/audit", name: "操作审计", icon: "clock" },
+  ...(canManageTeam.value || canManageProject.value
+    ? [{ to: "/audit", name: "操作审计", icon: "clock" }]
+    : []),
 ]);
 function openCreate(type: "tenant" | "project") {
   name.value = "";

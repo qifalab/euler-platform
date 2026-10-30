@@ -14,9 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/action"
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/domain"
@@ -400,11 +402,110 @@ func (r *Runner) queueSecurityEvents(events []domain.SecurityEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
-	signature, err := identity.SignSecurityEventBatch(r.state.IdentityPrivateKey, identity.SecurityEventBatchProof{DeviceID: r.state.DeviceID, Events: events})
+	fitted := make([]domain.SecurityEvent, len(events))
+	for i, event := range events {
+		fitted[i] = fitSecurityEventForController(event)
+	}
+	signature, err := identity.SignSecurityEventBatch(r.state.IdentityPrivateKey, identity.SecurityEventBatchProof{DeviceID: r.state.DeviceID, Events: fitted})
 	if err != nil {
 		return fmt.Errorf("sign security events: %w", err)
 	}
-	return r.queue.Enqueue("events", "", map[string]any{"events": events, "identitySignature": signature})
+	return r.queue.Enqueue("events", "", map[string]any{"events": fitted, "identitySignature": signature})
+}
+
+// The Controller answers a batch with HTTP 400 when any event exceeds these
+// limits (httpapi agentEvents). The same signed body fails on every retry, so
+// one oversized event would block the durable FIFO and every report, event
+// and action result queued behind it.
+const (
+	maxControllerEventPayloadBytes = 4 << 10
+	maxControllerEventSourceIP     = 64
+)
+
+// fitSecurityEventForController keeps an event inside the Controller's
+// per-event contract. Watchers bound their fields in bytes, but JSON escaping
+// (`<`, `>`, `&` and invalid UTF-8 become 6-byte escapes) can still push
+// attacker-influenced values such as executable paths past the payload limit.
+// The result is deterministic, so a replay before the watcher commits carries
+// the same bytes under the same event ID.
+func fitSecurityEventForController(event domain.SecurityEvent) domain.SecurityEvent {
+	if len(event.SourceIP) > maxControllerEventSourceIP {
+		// No textual IP address is this long: the capture is not an address.
+		event.SourceIP = ""
+	}
+	if len(event.Payload) > maxControllerEventPayloadBytes {
+		event.Payload = boundedEventPayload(event.Payload)
+	}
+	return event
+}
+
+// boundedEventPayload halves the longest string value until the payload fits.
+// Shortened evidence is incomplete, so it can never authorize an automatic
+// action. It is encoded with json.Marshal like every watcher payload: the batch
+// encoder would rewrite any other escaping and break the batch signature.
+func boundedEventPayload(payload json.RawMessage) json.RawMessage {
+	fields := map[string]any{}
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder.UseNumber()
+	if decoder.Decode(&fields) != nil || fields == nil {
+		fields = map[string]any{}
+	}
+	fields["automaticActionEligible"] = false
+	fields["payloadTruncated"] = true
+	for {
+		encoded, err := json.Marshal(fields)
+		if err == nil && len(encoded) <= maxControllerEventPayloadBytes {
+			return encoded
+		}
+		keys := make([]string, 0, len(fields))
+		for key := range fields {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		longestKey, longestIndex, longest := "", -1, 0
+		for _, key := range keys {
+			switch value := fields[key].(type) {
+			case string:
+				if len(value) > longest {
+					longestKey, longestIndex, longest = key, -1, len(value)
+				}
+			case []any:
+				for index, item := range value {
+					if text, ok := item.(string); ok && len(text) > longest {
+						longestKey, longestIndex, longest = key, index, len(text)
+					}
+				}
+			}
+		}
+		if longest == 0 {
+			minimal := map[string]any{"automaticActionEligible": false, "payloadTruncated": true}
+			for _, key := range []string{"source", "trust"} {
+				if text, ok := fields[key].(string); ok && len(text) <= 64 {
+					minimal[key] = text
+				}
+			}
+			encoded, _ = json.Marshal(minimal)
+			return encoded
+		}
+		if longestIndex < 0 {
+			fields[longestKey] = truncateUTF8(fields[longestKey].(string), longest/2)
+		} else {
+			items := fields[longestKey].([]any)
+			items[longestIndex] = truncateUTF8(items[longestIndex].(string), longest/2)
+		}
+	}
+}
+
+// truncateUTF8 cuts value to at most limit bytes without splitting a rune.
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 func (r *Runner) localScan(ctx context.Context) error {
 	r.scanMu.Lock()
@@ -435,6 +536,18 @@ func resolveAuthLogPath(hostRoot, configured string) (string, error) {
 	return filepath.Join(filepath.Clean(hostRoot), "var", "log", "auth.log"), nil
 }
 func (r *Runner) handleCommand(ctx context.Context, cmd domain.DeviceCommand) error {
+	queued, err := r.queue.HasCommandResult(cmd.ID)
+	if err != nil {
+		return fmt.Errorf("check queued command result: %w", err)
+	}
+	if queued {
+		// The Controller offers a command again when its 2-minute claim lease
+		// ends before the result arrives. That result is already durable here.
+		// Running the command again would queue a second, different completion
+		// (a new scan has a new report ID) that the Controller rejects with 409,
+		// and the FIFO would retry it forever ahead of every newer entry.
+		return r.queue.Flush(ctx, r.client)
+	}
 	if (cmd.Type == domain.CommandExecuteAction || cmd.Type == domain.CommandRollback || cmd.Type == domain.CommandConfirm) && (cmd.CreatedAt.IsZero() || time.Since(cmd.CreatedAt) > domain.ActionCommandTTL || cmd.CreatedAt.After(time.Now().Add(5*time.Minute))) {
 		authorized, err := r.client.StartCommand(ctx, cmd.ID)
 		if err != nil {

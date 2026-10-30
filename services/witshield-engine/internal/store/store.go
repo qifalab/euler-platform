@@ -27,21 +27,32 @@ var (
 
 type Store struct{ db *sql.DB }
 
+// connectionPragmas is the modernc.org/sqlite DSN query that configures each
+// new connection. The driver runs busy_timeout first, then the others.
+const connectionPragmas = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("database path is required")
 	}
-	db, err := sql.Open("sqlite", dsn)
+	// The pragmas travel in the DSN, so the driver applies them to every
+	// connection database/sql opens, including one that replaces a connection
+	// discarded after driver.ErrBadConn. A one-off Exec would configure only the
+	// first connection. The driver reads the query after the first '?' and
+	// strips it from a plain path; SQLite ignores the _pragma keys in a file: URI.
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	db, err := sql.Open("sqlite", dsn+separator+connectionPragmas)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	for _, pragma := range []string{"PRAGMA foreign_keys = ON", "PRAGMA busy_timeout = 5000", "PRAGMA journal_mode = WAL", "PRAGMA synchronous = NORMAL"} {
-		if _, err := db.ExecContext(ctx, pragma); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
+	if err = verifyConnectionPragmas(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	s := &Store{db: db}
 	if err := s.migrate(ctx); err != nil {
@@ -53,6 +64,30 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() error                   { return s.db.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
+// verifyConnectionPragmas fails Open when the DSN settings did not take
+// effect, rather than serving without foreign-key cascades or a busy timeout.
+// journal_mode is reported but not required: as before, a filesystem that
+// cannot provide WAL keeps SQLite's rollback journal instead of failing startup.
+func verifyConnectionPragmas(ctx context.Context, db *sql.DB) error {
+	var foreignKeys, busyTimeout, synchronous int
+	var journalMode string
+	for _, check := range []struct {
+		query string
+		value any
+	}{
+		{"PRAGMA foreign_keys", &foreignKeys}, {"PRAGMA busy_timeout", &busyTimeout},
+		{"PRAGMA journal_mode", &journalMode}, {"PRAGMA synchronous", &synchronous},
+	} {
+		if err := db.QueryRowContext(ctx, check.query).Scan(check.value); err != nil {
+			return fmt.Errorf("sqlite %s: %w", check.query, err)
+		}
+	}
+	if foreignKeys != 1 || busyTimeout != 5000 || synchronous != 1 {
+		return fmt.Errorf("sqlite connection settings not applied: foreign_keys=%d busy_timeout=%d journal_mode=%s synchronous=%d", foreignKeys, busyTimeout, journalMode, synchronous)
+	}
+	return nil
+}
 
 func (s *Store) migrate(ctx context.Context) error {
 	const schema = `
@@ -144,12 +179,6 @@ CREATE TABLE IF NOT EXISTS device_commands (
   completion_digest TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS commands_pending_idx ON device_commands(device_id, completed_at, created_at);
-CREATE INDEX IF NOT EXISTS commands_unstarted_action_expiry_idx ON device_commands(created_at)
-  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
-CREATE INDEX IF NOT EXISTS commands_device_unstarted_action_expiry_idx ON device_commands(device_id,created_at)
-  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
-CREATE INDEX IF NOT EXISTS commands_started_action_expiry_idx ON device_commands(started_at)
-  WHERE completed_at IS NULL AND started_at IS NOT NULL AND type IN ('execute_action','rollback_action','confirm_action');
 CREATE TABLE IF NOT EXISTS ai_settings (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1), protocol TEXT NOT NULL, base_url TEXT NOT NULL,
   model TEXT NOT NULL, encrypted_api_key TEXT NOT NULL DEFAULT '', api_key_hint TEXT NOT NULL DEFAULT '',
@@ -232,7 +261,6 @@ CREATE TABLE IF NOT EXISTS security_event_windows (
   PRIMARY KEY(device_id,type,source_ip)
 );
 CREATE INDEX IF NOT EXISTS security_event_windows_lru_idx ON security_event_windows(device_id,last_seen_at DESC);
-CREATE INDEX IF NOT EXISTS security_event_windows_expiry_idx ON security_event_windows(device_id,window_ends_at);
 CREATE TABLE IF NOT EXISTS temporary_bans (
   id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   action_id TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL, reason TEXT NOT NULL,
@@ -329,6 +357,20 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_
 		if _, err = s.db.ExecContext(ctx, `ALTER TABLE device_commands ADD COLUMN started_at TEXT`); err != nil {
 			return fmt.Errorf("add device command start marker: %w", err)
 		}
+	}
+	// These partial indexes reference started_at, so they are created only after
+	// the upgrade above; in the base schema they would make a version-1
+	// database impossible to open. security_event_windows_expiry_idx is created
+	// by migrateSecurityEventRetentionV7 for the same reason.
+	if _, err = s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS commands_unstarted_action_expiry_idx ON device_commands(created_at)
+		  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
+		CREATE INDEX IF NOT EXISTS commands_device_unstarted_action_expiry_idx ON device_commands(device_id,created_at)
+		  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
+		CREATE INDEX IF NOT EXISTS commands_started_action_expiry_idx ON device_commands(started_at)
+		  WHERE completed_at IS NULL AND started_at IS NOT NULL AND type IN ('execute_action','rollback_action','confirm_action');
+	`); err != nil {
+		return fmt.Errorf("create action command expiry indexes: %w", err)
 	}
 	hasCommandCompletionDigest, err := s.tableHasColumn(ctx, "device_commands", "completion_digest")
 	if err != nil {

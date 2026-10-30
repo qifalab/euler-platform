@@ -25,7 +25,6 @@ type Engine interface {
 	Rotate(context.Context, string, string, string) error
 	Size(context.Context, string) (int64, error)
 	ReadOnly(context.Context, string, string, bool) error
-	Repair(context.Context, string, string) error
 }
 type engineConfig struct {
 	Engine  Engine
@@ -173,12 +172,28 @@ func (e *sqlEngine) Rotate(ctx context.Context, db, user, password string) error
 }
 func (e *sqlEngine) Size(ctx context.Context, db string) (int64, error) {
 	var size int64
-	var err error
-	if e.kind == "mysql" {
-		err = e.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(data_length+index_length),0) FROM information_schema.tables WHERE table_schema=?", db).Scan(&size)
-	} else {
-		err = e.db.QueryRowContext(ctx, "SELECT pg_database_size($1)", db).Scan(&size)
+	if e.kind != "mysql" {
+		err := e.db.QueryRowContext(ctx, "SELECT pg_database_size($1)", db).Scan(&size)
+		return size, err
 	}
+	// MySQL 8 serves TABLES sizes from a cache for information_schema_stats_expiry
+	// seconds (24 h by default), which would leave an over-quota database writable
+	// for up to a day. The setting is per session, so both statements share one
+	// pinned connection.
+	conn, err := e.db.Conn(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "SET SESSION information_schema_stats_expiry=0"); err != nil {
+		// 1193 (unknown system variable): MySQL before 8.0.3 and MariaDB, which
+		// read sizes directly and have no such cache.
+		var mysqlErr *mysql.MySQLError
+		if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1193 {
+			return 0, err
+		}
+	}
+	err = conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(data_length+index_length),0) FROM information_schema.tables WHERE table_schema=?", db).Scan(&size)
 	return size, err
 }
 func (e *sqlEngine) ReadOnly(ctx context.Context, db, user string, readOnly bool) error {
@@ -258,9 +273,6 @@ func (e *sqlEngine) ReadOnly(ctx context.Context, db, user string, readOnly bool
 		}
 	}
 	return e.disconnect(ctx, db, user)
-}
-func (e *sqlEngine) Repair(ctx context.Context, db, user string) error {
-	return e.ReadOnly(ctx, db, user, false)
 }
 
 func (e *sqlEngine) disconnect(ctx context.Context, db, user string) error {

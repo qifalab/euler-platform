@@ -34,7 +34,7 @@ chmod 600 .env
 | `EULER_STORAGE_S3_PUBLIC_ENDPOINT` | 浏览器实际可访问的签名上传/下载端点；通常与容器内地址不同。 |
 | `EULER_STORAGE_S3_CORS_MODE` | 默认 `bucket` 使用标准 S3 每桶 CORS。开源 MinIO 配置为 `external`，并在 MinIO 设置 `MINIO_API_CORS_ALLOW_ORIGIN` 为 Euler 来源；此模式 UI 明示 CORS 由部署者统一管理，不伪称支持每桶修改。 |
 | `EULER_STORAGE_CORS_ORIGINS` | 逗号分隔浏览器来源，默认采用 Euler Public URL 的来源。在 `external` 模式须与部署的数据面来源配置保持一致。 |
-| `EULER_WEAUTH_TRUSTED_PROXIES` | 允许转发真实客户端 IP 的反向代理 CIDR。只填实际受控代理地址；默认忽略客户端伪造的 XFF。 |
+| `EULER_WEAUTH_TRUSTED_PROXIES` | 允许转发真实客户端 IP 的反向代理 CIDR，WeAuth、统计采集、抽奖报名和 WitShield Agent 设备入口共用。只填实际受控代理地址（如 Compose 内部网络）；默认忽略客户端伪造的 XFF，`0.0.0.0/0`、`::/0` 会让服务拒绝启动。未配置时，经内置 Nginx 的所有访客共用代理 IP 的同一个每 IP 限额；同一 WitShield 安装的所有设备也共用一个来源额度，约 100 台以上设备或 10 分钟内接入超过 120 台时会收到 429。 |
 | `EULER_OPERATIONS_TOKEN` | 可选的独立只读监控令牌，用于受保护的 `/ops/diagnostics` 和 `/ops/metrics`；未配置时仅允许平台管理员会话访问。 |
 
 身份配置缺失时控制台会说明无法登录，不会建立演示管理员。业务模块配置和完整功能对应关系见 [独立应用架构](../../docs/unified-app-cloud/NATIVE-APPS.md) 及各产品文档。MySQL、PostgreSQL、S3、邮件和 AI 服务可分别配置；未配置的基础服务会明确报告不可用，不返回虚构资源。
@@ -50,7 +50,7 @@ curl --fail http://localhost:8080/api/v1/session
 
 访问 `http://localhost:8080`。本机样例显式启用 `EULER_ALLOW_INSECURE_LOOPBACK=true`；生产应改为 HTTPS 来源，并将该选项设为 `false`。Docker 容器里的 `localhost` 指容器本身，因此容器不能用 `http://localhost:<另一主机进程端口>` 连接主机测试 issuer；集成测试应使用项目测试工具或受控 HTTPS issuer。
 
-后端没有主机暴露端口，Nginx 在同一来源提供静态资源并代理 `/auth/`、`/api/`、`/public/`、`/ops/`、`/healthz`、`/readyz`。Cookie 与 CSRF 均保留同源规则。Nginx 访问日志不记录查询字符串，也不记录登录路径；不要在上层代理开启包含 OAuth 回调查询参数的日志。登录入口限流应放在能识别真实客户端地址的外层代理，避免内层把所有用户视为一个代理 IP 后共用过小限额。
+后端没有主机暴露端口，Nginx 在同一来源提供静态资源并代理 `/auth/`、`/api/`、`/public/`、`/ops/`、`/healthz`、`/readyz`。Cookie 与 CSRF 均保留同源规则。Nginx 访问日志不记录查询字符串，也不记录登录路径；不要在上层代理开启包含 OAuth 回调查询参数的日志。登录入口限流应放在能识别真实客户端地址的外层代理，避免内层把所有用户视为一个代理 IP 后共用过小限额。后端最多保留 10000 个未完成的登录流程，超出时最早发起的先失效，用户重新登录即可；它只限制存储增长，不能代替外层限流。控制台页面带有只允许同源脚本的 CSP（禁止内联脚本、eval、`javascript:` 链接与被嵌入），并统一发送 HSTS（仅在 HTTPS 下生效）与 Permissions-Policy；如需更严格的 `connect-src`/`img-src`，请在外层代理按实际 S3 公共地址追加。
 
 生产 HTTPS 可由主机上现有反向代理终止，然后转发到默认绑定的 `127.0.0.1:8080`。配置真实证书与 HTTPS `EULER_PUBLIC_URL` 后再开放访问。此模板不申请证书、不改 DNS、不执行生产部署。若前置代理运行在另一个容器，应按实际网络拓扑接入，不能将其 `localhost` 当作宿主机。
 

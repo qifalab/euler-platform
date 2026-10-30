@@ -384,6 +384,143 @@ describe("createSDK patch", () => {
   });
 });
 
+// Transport failures: the console user gets a Chinese message, not the
+// browser's own text, and a request the caller cancelled is not a failure.
+describe("createSDK — transport failures (status 0)", () => {
+  /** A fetch that never answers and rejects like the browser once aborted. */
+  function hangingFetch() {
+    return vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("signal is aborted without reason", "AbortError")),
+          );
+        }),
+    );
+  }
+
+  it("reports a network failure in Chinese, not as the browser's 'Failed to fetch'", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const onError = vi.fn();
+    await expect(createSDK({ onError }).get("/x")).rejects.toMatchObject({
+      code: "HTTP_0",
+      status: 0,
+      message: "请求失败,请检查网络后重试",
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a timeout as a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", hangingFetch());
+      const onError = vi.fn();
+      const settled = expect(createSDK({ timeout: 1000, onError }).get("/slow")).rejects.toMatchObject({
+        code: "HTTP_0",
+        status: 0,
+        message: "请求超时,请稍后重试",
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      await settled;
+      expect(onError).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a request the caller aborted without reporting it to onError", async () => {
+    vi.stubGlobal("fetch", hangingFetch());
+    const onError = vi.fn();
+    const ctrl = new AbortController();
+    const pending = createSDK({ onError }).get("/superseded", { signal: ctrl.signal });
+    ctrl.abort();
+    await expect(pending).rejects.toMatchObject({ status: 0, message: "请求已取消" });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("removes its abort listener from the caller's signal once the response is in", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ Code: "OK", Data: {} })));
+    const ctrl = new AbortController();
+    const add = vi.spyOn(ctrl.signal, "addEventListener");
+    const remove = vi.spyOn(ctrl.signal, "removeEventListener");
+    const sdk = createSDK();
+    await sdk.get("/a", { signal: ctrl.signal });
+    await sdk.get("/b", { signal: ctrl.signal });
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove.mock.calls[0][1]).toBe(add.mock.calls[0][1]);
+  });
+});
+
+describe("createSDK — 401 refresh edge cases", () => {
+  it("surfaces the 401 (and reports it) when onUnauthorized rejects", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ Code: "Auth.TokenExpired", Message: "token expired" }, { status: 401, requestId: "r-401" }),
+      ),
+    );
+    const onError = vi.fn();
+    const sdk = createSDK({ onUnauthorized: () => Promise.reject(new TypeError("Failed to fetch")), onError });
+    await expect(sdk.get("/me")).rejects.toMatchObject({ code: "Auth.TokenExpired", status: 401, requestId: "r-401" });
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent 401s share one refresh and both replay with the fresh token", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) =>
+      new Headers(init.headers).get("Authorization") === "Bearer FRESH"
+        ? jsonResponse({ Code: "OK", Data: { ok: true } })
+        : jsonResponse({ Code: "Auth.TokenExpired" }, { status: 401 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    // Resolves on a later macrotask, after both requests have seen their 401.
+    const onUnauthorized = vi.fn(() => new Promise<string>((r) => setTimeout(() => r("FRESH"), 0)));
+    const sdk = createSDK({ getToken: () => "STALE", onUnauthorized });
+
+    const [a, b] = await Promise.all([sdk.get("/a"), sdk.get("/b")]);
+    expect(a.data).toEqual({ ok: true });
+    expect(b.data).toEqual({ ok: true });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+// "requestId on all errors" (frontend notes, console-kit conventions): Go
+// services write it as RequestId in the body and X-Euler-TraceId in a header.
+describe("createSDK — requestId from platform services", () => {
+  it("reads the Go envelope's RequestId on a non-2xx answer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ RequestId: "rid-body", Code: "Order.NotPayable", Message: "订单不可支付" }, { status: 409 }),
+      ),
+    );
+    await expect(createSDK().post("/api/v1/orders/1/pay")).rejects.toMatchObject({
+      code: "Order.NotPayable",
+      status: 409,
+      requestId: "rid-body",
+    });
+  });
+
+  it("falls back to pkg-go's X-Euler-TraceId header when no gateway sets X-Request-Id", async () => {
+    const traced = (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json", "X-Euler-TraceId": "trace-1" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(traced({ Code: "OK", Data: { x: 1 } }, 200))
+        .mockResolvedValueOnce(traced({ RequestId: "", Code: "Common.InternalError", Message: "boom" }, 500)),
+    );
+    const sdk = createSDK();
+    await expect(sdk.get("/ok")).resolves.toMatchObject({ requestId: "trace-1" });
+    await expect(sdk.get("/fail")).rejects.toMatchObject({ requestId: "trace-1", status: 500 });
+  });
+});
+
 // The money wire contract: svc-order/svc-payment read amountMinor in 分, so the
 // yuan decimal a quote returns must be scaled by 100 — never rounded to yuan.
 // (Every BuyWizard did the latter and under-billed by 100×.)
@@ -402,5 +539,14 @@ describe("yuanToMinor", () => {
 
   it("is not a yuan passthrough (the 100× under-billing regression)", () => {
     expect(yuanToMinor("180.50")).not.toBe(181);
+  });
+
+  it("rounds half-up on the decimal digits, not on a binary float", () => {
+    // 1.005 * 100 === 100.49999999999999 in IEEE-754 doubles.
+    expect(yuanToMinor("1.005")).toBe(101);
+    expect(yuanToMinor("0.285")).toBe(29);
+    expect(yuanToMinor(2.675)).toBe(268);
+    expect(yuanToMinor("0.00007")).toBe(0);
+    expect(yuanToMinor("12")).toBe(1200);
   });
 });

@@ -50,7 +50,7 @@ pnpm install --frozen-lockfile
 pnpm --filter 'console-base^...' build
 pnpm --filter console-base dev
 
-# Go 1.27.1，另一个终端，从仓库根目录执行。
+# Go 1.27.3，另一个终端，从仓库根目录执行。
 cd services/app-cloud
 go run ./cmd/server
 ```

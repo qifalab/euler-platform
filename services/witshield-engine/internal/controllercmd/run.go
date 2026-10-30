@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,10 +26,6 @@ import (
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/secret"
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/store"
 )
-
-func Main(ctx context.Context, args []string) error {
-	return MainVersion(ctx, args, "dev")
-}
 
 func MainVersion(ctx context.Context, args []string, version string) error {
 	fs := flag.NewFlagSet("witshieldd", flag.ContinueOnError)
@@ -114,22 +111,31 @@ func MainVersion(ctx context.Context, args []string, version string) error {
 	}
 	sched := scheduler.New(db, slog.Default())
 	sched.SetObserver(func(err error) { api.MarkWorkerHealth("scheduler", err) })
-	go func() {
-		if err := sched.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("scheduler stopped", "error", err)
-		}
+	// Registered after db.Close, so this runs first on every return path: the
+	// workers stop and finish before the store closes, also when a listener
+	// fails to bind and ctx itself is still live.
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() {
+		stopWorkers()
+		workers.Wait()
 	}()
-	go func() {
-		if err := api.RunNotificationWorker(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("notification worker stopped", "error", err)
-		}
-	}()
-	go func() {
-		if err := api.RunSecurityEngineerWorker(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("AI security engineer worker stopped", "error", err)
-		}
-	}()
-	go runMaintenance(ctx, db, api, slog.Default())
+	startWorker := func(name string, run func(context.Context) error) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if err := run(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error(name+" stopped", "error", err)
+			}
+		}()
+	}
+	startWorker("scheduler", sched.Run)
+	startWorker("notification worker", api.RunNotificationWorker)
+	startWorker("AI security engineer worker", api.RunSecurityEngineerWorker)
+	startWorker("maintenance", func(ctx context.Context) error {
+		runMaintenance(ctx, db, api, slog.Default())
+		return nil
+	})
 	primaryHandler := api.Handler()
 	if loopbackListenAddress(*listen) {
 		primaryHandler = api.LocalHTTPHandler()
@@ -365,5 +371,10 @@ func isolatedLocalListenAddress(address string) bool {
 		return false
 	}
 	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
-	return host != "" && host != "0.0.0.0" && host != "::" && host != "[::]"
+	// Compare parsed addresses: "[::0]", "[0:0:0:0:0:0:0:0]" and
+	// "[::ffff:0.0.0.0]" are the same wildcard as "0.0.0.0" and "::".
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return false
+	}
+	return host != ""
 }

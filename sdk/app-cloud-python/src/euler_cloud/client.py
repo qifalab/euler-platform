@@ -5,6 +5,7 @@ browser sessions, elevate scopes, follow redirects, or retry mutations.
 """
 
 from dataclasses import dataclass, field
+import http.client
 import ipaddress
 import json
 import re
@@ -12,6 +13,8 @@ from typing import Any, Mapping
 import urllib.error
 import urllib.parse
 import urllib.request
+
+_MAX_RESPONSE = 16 * 1024 * 1024
 
 
 class APIError(Exception):
@@ -42,6 +45,25 @@ def _identifier(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", value):
         raise ValueError("tenant, project and application IDs must be URL-safe identifiers")
     return value
+
+
+def _query_string(query: Mapping[str, Any]) -> str:
+    """Encode like urlencode(doseq=True), with the server's value conventions.
+
+    Euler compares flags with the literal "true", so Python booleans are sent in
+    lower case, and None means "not set" (a first page has no ``after`` cursor)
+    instead of the string "None".
+    """
+    pairs = []
+    for key, value in query.items():
+        sequence = not isinstance(value, (str, bytes, bool)) and value is not None and hasattr(value, "__len__")
+        for item in (value if sequence else [value]):
+            if item is None:
+                continue
+            if isinstance(item, bool):
+                item = "true" if item else "false"
+            pairs.append((key, item))
+    return urllib.parse.urlencode(pairs)
 
 
 @dataclass(repr=False)
@@ -99,8 +121,9 @@ class Client:
             raise ValueError("path must be a normalized application-relative path; use query= separately")
         prefix = f"/api/v1/machine/tenants/{self.tenant_id}/projects/{self.project_id}/apps/{application}"
         url = self.base_url + prefix + path
-        if query:
-            url += "?" + urllib.parse.urlencode(query, doseq=True)
+        encoded = _query_string(query) if query else ""
+        if encoded:
+            url += "?" + encoded
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/json"}
         body = None
         if data is not None:
@@ -109,9 +132,15 @@ class Client:
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             with self._opener.open(request, timeout=self.timeout) as result:
-                payload = result.read(16 * 1024 * 1024 + 1)
-                if len(payload) > 16 * 1024 * 1024:
+                payload = result.read(_MAX_RESPONSE + 1)
+                if len(payload) > _MAX_RESPONSE:
                     raise APIError(result.status, "response_too_large", "Response exceeds SDK limit; use pagination or a signed download")
+                # A bounded read() returns whatever arrived before the peer closed
+                # the connection, so a cut-off body must be detected here rather
+                # than handed back as a successful (truncated) download.
+                declared = result.headers.get("Content-Length")
+                if method != "HEAD" and declared is not None and re.fullmatch(r"[0-9]+", declared.strip()) and len(payload) < int(declared):
+                    raise APIError(0, "transport_error", "Euler closed the connection before the full response arrived")
                 content_type = result.headers.get("Content-Type", "")
                 value = json.loads(payload) if payload and "json" in content_type else payload or None
                 return Response(result.status, value, result.headers.get("X-Request-ID", ""), content_type)
@@ -129,7 +158,7 @@ class Client:
             raise APIError(error.code, str(detail.get("code", "http_error")),
                            str(detail.get("message", "Euler request failed")),
                            error.headers.get("X-Request-ID", "")) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
             # Do not include transport representations, which may contain headers.
             raise APIError(0, "transport_error", "Unable to reach Euler within the configured timeout") from None
 

@@ -215,4 +215,36 @@ describe("useResourceTable", () => {
     await flushPromises();
     expect(api).toHaveBeenCalledTimes(3);
   });
+
+  it("skips a poll tick while a fetch is still in flight instead of aborting it", async () => {
+    // A backend slower than the poll interval (InstanceListView polls every
+    // 10 s; the SDK waits up to 15 s): each tick used to abort the request it
+    // was waiting for, so no poll ever landed.
+    let release!: () => void;
+    const signals: AbortSignal[] = [];
+    const api = vi.fn((_params: Record<string, unknown>, signal?: AbortSignal) => {
+      if (signal) signals.push(signal);
+      return new Promise<{ items: Row[]; total?: number }>((resolve) => {
+        release = () => resolve({ items: [{ id: "1", name: "one" }], total: 1 });
+      });
+    });
+    const { r } = mountWith(makeOpts(api, { polling: { interval: 1000, when: () => true } }));
+    await nextTick();
+    expect(api).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1000); // the tick comes due before the answer
+    await flushPromises();
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(signals[0].aborted).toBe(false);
+
+    release();
+    await flushPromises();
+    expect(r.rows.value).toHaveLength(1);
+    expect(r.loading.value).toBe(false);
+
+    // Once the answer is in, polling carries on.
+    vi.advanceTimersByTime(1000);
+    await flushPromises();
+    expect(api).toHaveBeenCalledTimes(2);
+  });
 });

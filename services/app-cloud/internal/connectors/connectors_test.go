@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -282,25 +283,43 @@ func TestOutboundPolicyAndRedirectAreEnforced(t *testing.T) {
 	}
 }
 
+func errorCode(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return ""
+}
+
 func TestTimeoutResponseLimitAndUnsupportedMutations(t *testing.T) {
-	m, base := fixtureManager(t, func(w http.ResponseWriter, r *http.Request) { _, _ = fmt.Fprint(w, strings.Repeat("x", (2<<20)+1)) })
-	if _, err := m.ValidateConnection("weauth", Connection{BaseURL: base, Credential: "token"}); err == nil {
-		t.Fatal("accepted oversized response")
+	// Well-formed JSON just over 2 MiB: only the size limit can reject it. A
+	// non-JSON body would be rejected by decoding even without the limit.
+	m, base := fixtureManager(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"id":7,"pad":%q}`, strings.Repeat("x", 2<<20))
+	})
+	if _, err := m.ValidateConnection("weauth", Connection{BaseURL: base, Credential: "token"}); errorCode(err) != "invalid_response" {
+		t.Fatalf("accepted oversized response: %v", err)
+	}
+	small, smallBase := fixtureManager(t, func(w http.ResponseWriter, r *http.Request) { _, _ = fmt.Fprint(w, `{"id":7,"pad":"x"}`) })
+	if _, err := small.ValidateConnection("weauth", Connection{BaseURL: smallBase, Credential: "token"}); err != nil {
+		t.Fatalf("same contract under the limit rejected: %v", err)
 	}
 	m2, base2 := fixtureManager(t, func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := m2.ValidateConnectionContext(ctx, "weauth", Connection{BaseURL: base2, Credential: "token"}); err == nil {
-		t.Fatal("ignored deadline")
+	if _, err := m2.ValidateConnectionContext(ctx, "weauth", Connection{BaseURL: base2, Credential: "token"}); errorCode(err) != "upstream_unavailable" {
+		t.Fatalf("ignored deadline: %v", err)
 	}
-	if _, err := m.Create(context.Background(), "database", Connection{}, CreateResource{Name: "fake"}); err == nil {
-		t.Fatal("simulated database create")
+	// Input checks run before any connection lookup: an empty connection would
+	// otherwise fail as "unconfigured" and hide a missing validation.
+	if _, err := m.Create(context.Background(), "database", Connection{}, CreateResource{Name: "fake"}); errorCode(err) != "unsupported" {
+		t.Fatalf("simulated database create: %v", err)
 	}
-	if err := m.Delete(context.Background(), "weauth", Connection{}, "../other"); err == nil {
-		t.Fatal("path injection accepted")
+	if err := m.Delete(context.Background(), "weauth", Connection{}, "../other"); errorCode(err) != "invalid_input" {
+		t.Fatalf("path injection accepted: %v", err)
 	}
-	if _, err := m.Create(context.Background(), "weauth", Connection{}, CreateResource{Name: "x", Domains: []string{"https://example.com"}}); err == nil {
-		t.Fatal("invalid domain accepted")
+	if _, err := m.Create(context.Background(), "weauth", Connection{}, CreateResource{Name: "x", Domains: []string{"https://example.com"}}); errorCode(err) != "invalid_input" {
+		t.Fatalf("invalid domain accepted: %v", err)
 	}
 }
 

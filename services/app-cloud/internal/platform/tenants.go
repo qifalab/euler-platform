@@ -99,11 +99,25 @@ func (s *Store) ChangeMember(ctx context.Context, user, tenant, target, role str
 			}
 		}
 		act := "member.role_changed"
+		// An invitation carries its creator's authority. Once the creator loses
+		// owner/admin, unused invitations they issued must not admit anyone,
+		// including the creator re-joining through a token kept from before.
+		if admin(old) && (remove || !admin(role)) {
+			if _, e = tx.ExecContext(ctx, "UPDATE invitations SET revoked_at=? WHERE tenant_id=? AND created_by=? AND used_at IS NULL AND revoked_at IS NULL", stamp(), tenant, target); e != nil {
+				return e
+			}
+		}
 		if remove {
 			act = "member.removed"
 			_, e = tx.ExecContext(ctx, "DELETE FROM members WHERE tenant_id=? AND user_id=?", tenant, target)
 		} else {
 			_, e = tx.ExecContext(ctx, "UPDATE members SET role=? WHERE tenant_id=? AND user_id=?", role, tenant, target)
+			// Team owner/admin reach every project implicitly. Without that role the
+			// user keeps only explicit project memberships, and product grants on the
+			// other projects end as they do for a member removed from a project.
+			if e == nil && admin(old) && !admin(role) {
+				_, e = tx.ExecContext(ctx, "DELETE FROM app_grants WHERE tenant_id=? AND user_id=? AND project_id NOT IN (SELECT project_id FROM project_members WHERE tenant_id=? AND user_id=?)", tenant, target, tenant, target)
+			}
 		}
 		if e != nil {
 			return e
@@ -185,7 +199,8 @@ func (s *Store) AcceptInvitation(ctx context.Context, user, token string) (Tenan
 	e := s.write(ctx, func(tx *sql.Tx) error {
 		var id, role, tenant string
 		var exp int64
-		e := tx.QueryRowContext(ctx, "SELECT id,tenant_id,role,expires_at FROM invitations WHERE token_hash=? AND used_at IS NULL AND revoked_at IS NULL", tokenHash(token)).Scan(&id, &tenant, &role, &exp)
+		// The creator must still hold owner/admin when the invitation is used.
+		e := tx.QueryRowContext(ctx, "SELECT i.id,i.tenant_id,i.role,i.expires_at FROM invitations i JOIN members m ON m.tenant_id=i.tenant_id AND m.user_id=i.created_by AND m.role IN ('owner','admin') WHERE i.token_hash=? AND i.used_at IS NULL AND i.revoked_at IS NULL", tokenHash(token)).Scan(&id, &tenant, &role, &exp)
 		if errors.Is(e, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -196,18 +211,29 @@ func (s *Store) AcceptInvitation(ctx context.Context, user, token string) (Tenan
 			return ErrNotFound
 		}
 		// An invitation grants initial membership only; it never elevates an existing member.
-		_, e = tx.ExecContext(ctx, "INSERT INTO members(tenant_id,user_id,role,joined_at) VALUES(?,?,?,?) ON CONFLICT(tenant_id,user_id) DO NOTHING", tenant, user, role, stamp())
+		res, e := tx.ExecContext(ctx, "INSERT INTO members(tenant_id,user_id,role,joined_at) VALUES(?,?,?,?) ON CONFLICT(tenant_id,user_id) DO NOTHING", tenant, user, role, stamp())
 		if e != nil {
 			return e
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE invitations SET used_at=? WHERE id=?", stamp(), id); e != nil {
+		// An existing member changes nothing, so the single-use invitation stays
+		// available to the person it was meant for.
+		joined, e := res.RowsAffected()
+		if e != nil {
 			return e
+		}
+		if joined == 1 {
+			if _, e = tx.ExecContext(ctx, "UPDATE invitations SET used_at=? WHERE id=?", stamp(), id); e != nil {
+				return e
+			}
 		}
 		var n int64
 		if e = tx.QueryRowContext(ctx, "SELECT t.id,t.name,m.role,t.created_at FROM tenants t JOIN members m ON m.tenant_id=t.id WHERE t.id=? AND m.user_id=?", tenant, user).Scan(&t.ID, &t.Name, &t.Role, &n); e != nil {
 			return e
 		}
 		t.CreatedAt = fromStamp(n)
+		if joined == 0 {
+			return nil
+		}
 		return audit(ctx, tx, user, tenant, "", "invitation.accepted", id, "Joined team by invitation")
 	})
 	return t, e
@@ -312,7 +338,8 @@ func (s *Store) Audit(ctx context.Context, user, tenant, project string, limit i
 		if project == "" {
 			return nil, ErrForbidden
 		}
-		if e = requireProject(ctx, s.db, user, tenant, project, "admin"); e != nil {
+		// Reading history is not new application work: archived projects keep it.
+		if e = projectAdministrator(ctx, s.db, user, tenant, project); e != nil {
 			return nil, e
 		}
 	} else if project != "" {

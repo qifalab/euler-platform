@@ -58,6 +58,56 @@ class DeploymentCheckTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             acceptance_checks("http://example.test")
 
+    def status(self, env, ident, production=True):
+        return next(check["status"] for check in config_checks(env, production) if check["id"] == ident)
+
+    def test_identity_settings_the_server_rejects_are_not_passed(self):
+        # identity.Config.validate always needs a client secret and knows only two methods;
+        # a rejected config disables login while the server keeps running.
+        env = self.configuration()
+        env.update(EULER_OIDC_TOKEN_AUTH_METHOD="none", EULER_OIDC_CLIENT_SECRET="")
+        self.assertEqual(self.status(env, "identity-client"), "failed")
+        env = self.configuration()
+        env["EULER_OIDC_TOKEN_AUTH_METHOD"] = ""  # compose and the server both default to client_secret_basic
+        self.assertEqual(self.status(env, "identity-client"), "passed")
+        env = self.configuration()
+        env["EULER_OAUTH2_SUBJECT_CLAIM"] = "id"  # "OIDC requires standard sub claims"
+        self.assertEqual(self.status(env, "identity-mode"), "failed")
+        env["EULER_IDENTITY_MODE"] = "oauth2_userinfo"
+        self.assertEqual(self.status(env, "identity-mode"), "passed")
+        env = self.configuration()
+        env["EULER_IDENTITY_MODE"] = ""
+        self.assertEqual(self.status(env, "identity-mode"), "passed")
+
+    def test_values_that_stop_server_startup_are_not_passed(self):
+        env = self.configuration()
+        for value in ("172.18.0.2", "172.18.0.0/255.255.0.0"):  # netip.ParsePrefix refuses both
+            env["EULER_WEAUTH_TRUSTED_PROXIES"] = value
+            self.assertEqual(self.status(env, "trusted-proxies"), "failed", value)
+        env["EULER_WEAUTH_TRUSTED_PROXIES"] = "172.18.0.0/16, fd00::/8"
+        self.assertEqual(self.status(env, "trusted-proxies"), "passed")
+        for token in (" " + "x" * 40 + " ", "x" * 4097):  # cmd/server: 32-4096 bytes, no surrounding space
+            env["EULER_OPERATIONS_TOKEN"] = token
+            self.assertEqual(self.status(env, "operations-token"), "failed", len(token))
+        env["EULER_OPERATIONS_TOKEN"] = "x" * 40
+        self.assertEqual(self.status(env, "operations-token"), "passed")
+
+    def test_loopback_flag_is_read_like_go_parse_bool(self):
+        env = self.configuration()
+        for value in ("1", "t", "T", "True"):
+            env["EULER_ALLOW_INSECURE_LOOPBACK"] = value
+            self.assertEqual(self.status(env, "loopback-policy"), "failed", value)
+        env["EULER_ALLOW_INSECURE_LOOPBACK"] = "yes"  # not a Go boolean: login is disabled
+        self.assertEqual(self.status(env, "loopback-policy", production=False), "failed")
+        preview = self.configuration()
+        preview.update(EULER_PUBLIC_URL="http://localhost:8080", EULER_OIDC_ISSUER="http://127.0.0.1:9000",
+                       EULER_ALLOW_INSECURE_LOOPBACK="false")
+        self.assertEqual(self.status(preview, "public-origin", production=False), "failed")
+        self.assertEqual(self.status(preview, "identity-provider", production=False), "failed")
+        preview["EULER_ALLOW_INSECURE_LOOPBACK"] = "1"
+        self.assertEqual(self.status(preview, "public-origin", production=False), "passed")
+        self.assertEqual(self.status(preview, "identity-provider", production=False), "passed")
+
 
 if __name__ == "__main__":
     unittest.main()

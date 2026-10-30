@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
@@ -26,16 +25,7 @@ type Module struct {
 
 func New(rt *appkit.Runtime) *Module {
 	m := &Module{rt: rt}
-	for _, value := range strings.Split(os.Getenv("EULER_WEAUTH_TRUSTED_PROXIES"), ",") {
-		if value = strings.TrimSpace(value); value != "" {
-			p, e := netip.ParsePrefix(value)
-			if e != nil {
-				m.configErr = e
-			} else {
-				m.trusted = append(m.trusted, p)
-			}
-		}
-	}
+	m.trusted, m.configErr = appkit.TrustedProxiesFromEnv()
 	return m
 }
 func (*Module) ID() string { return "weauth" }

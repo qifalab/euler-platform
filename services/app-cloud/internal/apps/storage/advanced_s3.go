@@ -115,8 +115,6 @@ func (p *s3Plane) SetVersioning(ctx context.Context, b, status string) error {
 	return p.client.SetBucketVersioning(ctx, b, minio.BucketVersioningConfiguration{Status: status})
 }
 func (p *s3Plane) Versions(ctx context.Context, b, prefix, cursor string, limit int) ([]ObjectVersion, string, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	out := []ObjectVersion{}
 	next := ""
 	passed := cursor == ""
@@ -127,7 +125,9 @@ func (p *s3Plane) Versions(ctx context.Context, b, prefix, cursor string, limit 
 			return nil, "", errors.New("invalid cursor")
 		}
 	}
-	for v := range p.client.ListObjects(ctx, b, minio.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true}) {
+	// The iterator stops cleanly on an early return; the channel form would
+	// leave its producer goroutine blocked for the life of the process.
+	for v := range p.client.ListObjectsIter(ctx, b, minio.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true}) {
 		if v.Err != nil {
 			return nil, "", v.Err
 		}
