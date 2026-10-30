@@ -144,12 +144,6 @@ CREATE TABLE IF NOT EXISTS device_commands (
   completion_digest TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS commands_pending_idx ON device_commands(device_id, completed_at, created_at);
-CREATE INDEX IF NOT EXISTS commands_unstarted_action_expiry_idx ON device_commands(created_at)
-  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
-CREATE INDEX IF NOT EXISTS commands_device_unstarted_action_expiry_idx ON device_commands(device_id,created_at)
-  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
-CREATE INDEX IF NOT EXISTS commands_started_action_expiry_idx ON device_commands(started_at)
-  WHERE completed_at IS NULL AND started_at IS NOT NULL AND type IN ('execute_action','rollback_action','confirm_action');
 CREATE TABLE IF NOT EXISTS ai_settings (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1), protocol TEXT NOT NULL, base_url TEXT NOT NULL,
   model TEXT NOT NULL, encrypted_api_key TEXT NOT NULL DEFAULT '', api_key_hint TEXT NOT NULL DEFAULT '',
@@ -232,7 +226,6 @@ CREATE TABLE IF NOT EXISTS security_event_windows (
   PRIMARY KEY(device_id,type,source_ip)
 );
 CREATE INDEX IF NOT EXISTS security_event_windows_lru_idx ON security_event_windows(device_id,last_seen_at DESC);
-CREATE INDEX IF NOT EXISTS security_event_windows_expiry_idx ON security_event_windows(device_id,window_ends_at);
 CREATE TABLE IF NOT EXISTS temporary_bans (
   id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   action_id TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL, reason TEXT NOT NULL,
@@ -329,6 +322,20 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_
 		if _, err = s.db.ExecContext(ctx, `ALTER TABLE device_commands ADD COLUMN started_at TEXT`); err != nil {
 			return fmt.Errorf("add device command start marker: %w", err)
 		}
+	}
+	// These partial indexes reference started_at, so they are created only after
+	// the upgrade above; in the base schema they would make a version-1
+	// database impossible to open. security_event_windows_expiry_idx is created
+	// by migrateSecurityEventRetentionV7 for the same reason.
+	if _, err = s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS commands_unstarted_action_expiry_idx ON device_commands(created_at)
+		  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
+		CREATE INDEX IF NOT EXISTS commands_device_unstarted_action_expiry_idx ON device_commands(device_id,created_at)
+		  WHERE completed_at IS NULL AND started_at IS NULL AND type IN ('execute_action','rollback_action','confirm_action');
+		CREATE INDEX IF NOT EXISTS commands_started_action_expiry_idx ON device_commands(started_at)
+		  WHERE completed_at IS NULL AND started_at IS NOT NULL AND type IN ('execute_action','rollback_action','confirm_action');
+	`); err != nil {
+		return fmt.Errorf("create action command expiry indexes: %w", err)
 	}
 	hasCommandCompletionDigest, err := s.tableHasColumn(ctx, "device_commands", "completion_digest")
 	if err != nil {

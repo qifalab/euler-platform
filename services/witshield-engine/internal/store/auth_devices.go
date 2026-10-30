@@ -679,6 +679,9 @@ func (s *Store) RevokeDevice(ctx context.Context, id string, now time.Time) erro
 			if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, meta.ActionID, "controller", event, string(details), timeText(now)); err != nil {
 				return err
 			}
+			if err = syncResponsePlanForActionTx(ctx, tx, meta.ActionID, now); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

@@ -168,6 +168,9 @@ func (s *Store) StartActionCommand(ctx context.Context, deviceID, commandID stri
 		if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, meta.ActionID, "controller", "observer_mode_cancelled", `{}`, timeText(now)); err != nil {
 			return false, err
 		}
+		if err = syncResponsePlanForActionTx(ctx, tx, meta.ActionID, now); err != nil {
+			return false, err
+		}
 		return false, tx.Commit()
 	}
 	if started.Valid {
@@ -186,6 +189,9 @@ func (s *Store) StartActionCommand(ctx context.Context, deviceID, commandID stri
 			return false, err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, meta.ActionID, "controller", "command_expired_before_execution", `{}`, timeText(now)); err != nil {
+			return false, err
+		}
+		if err = syncResponsePlanForActionTx(ctx, tx, meta.ActionID, now); err != nil {
 			return false, err
 		}
 		return false, tx.Commit()

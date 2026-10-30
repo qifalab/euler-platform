@@ -383,6 +383,9 @@ func (s *Store) ExpireActionConfirmations(ctx context.Context, now time.Time) er
 			if _, err = tx.ExecContext(ctx, `INSERT INTO action_audit(action_id,actor,event,details,created_at) VALUES(?,?,?,?,?)`, id, "controller", "confirmation_expired_safety_rollback_triggered", `{}`, timeText(now)); err != nil {
 				return err
 			}
+			if err = syncResponsePlanForActionTx(ctx, tx, id, now); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

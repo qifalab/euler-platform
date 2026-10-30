@@ -80,6 +80,10 @@ func (s *Store) Compact(ctx context.Context, now time.Time) error {
 	)`, timeText(now), maxTerminalBansPerDevice); err != nil {
 		errs = append(errs, err)
 	}
+	// Response-plan step bindings reference their action ON DELETE RESTRICT, so a
+	// bound action must be skipped: deleting it aborts this whole statement and
+	// stops action retention for every device. A bound action becomes eligible
+	// again once incident retention cascades its plan binding away.
 	if _, err := s.db.ExecContext(ctx, `WITH audit_sizes AS (
 		SELECT action_id,sum(length(CAST(details AS BLOB))+128) AS audit_bytes FROM action_audit GROUP BY action_id
 	), terminal AS (
@@ -89,6 +93,7 @@ func (s *Store) Compact(ctx context.Context, now time.Time) error {
 			OVER (PARTITION BY a.device_id ORDER BY CASE WHEN a.status='indeterminate' THEN 0 ELSE 1 END,a.updated_at DESC,a.rowid DESC) AS retained_bytes
 		FROM actions a LEFT JOIN audit_sizes s ON s.action_id=a.id WHERE a.status IN ('succeeded','failed','rolled_back','cancelled','indeterminate')
 			AND NOT EXISTS (SELECT 1 FROM temporary_bans b WHERE b.action_id=a.id AND (b.status='pending' OR (b.status IN ('active','indeterminate') AND b.expires_at>?)))
+			AND NOT EXISTS (SELECT 1 FROM response_plan_actions x WHERE x.action_id=a.id)
 	)
 	DELETE FROM actions WHERE id IN (SELECT id FROM terminal WHERE retained_rank>? OR retained_bytes>?)`, timeText(now), maxTerminalActionsPerDevice, maxTerminalActionBytesPerDevice); err != nil {
 		errs = append(errs, err)

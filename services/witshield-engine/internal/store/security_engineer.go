@@ -394,7 +394,11 @@ func (s *Store) ListIncidentTimeline(ctx context.Context, incidentID string, lim
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,incident_id,actor,type,summary,details,created_at FROM incident_timeline WHERE incident_id=? ORDER BY created_at,id LIMIT ?`, incidentID, limit)
+	// Retention keeps the newest entries per incident, so a bounded read must
+	// select the newest window as well, then present it chronologically.
+	rows, err := s.db.QueryContext(ctx, `SELECT id,incident_id,actor,type,summary,details,created_at FROM (
+		SELECT id,incident_id,actor,type,summary,details,created_at FROM incident_timeline WHERE incident_id=? ORDER BY created_at DESC,id DESC LIMIT ?
+	) ORDER BY created_at,id`, incidentID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +515,9 @@ func (s *Store) SetIncidentStatus(ctx context.Context, incidentID string, status
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `UPDATE incidents SET status=?,updated_at=? WHERE id=?`, string(status), timeText(now), incidentID)
 	if err != nil {
-		return err
+		// Reopening a closed case while a newer active case owns the same
+		// correlation key violates incidents_active_correlation_idx: a conflict.
+		return mapSQLError(err)
 	}
 	if changed, _ := result.RowsAffected(); changed != 1 {
 		return ErrNotFound
@@ -598,7 +604,11 @@ func (s *Store) CompleteInvestigation(ctx context.Context, item domain.Investiga
 		}
 		nextStatus = domain.IncidentAwaitingApproval
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE incidents SET status=?,summary=?,last_investigated_at=?,updated_at=? WHERE id=?`, string(nextStatus), item.Conclusion, timeText(completed), timeText(completed), item.IncidentID); err != nil {
+	// An administrator may resolve or dismiss the incident while the model call
+	// is in flight. Keep that decision (the investigation and any plan are still
+	// recorded); reactivating it could also collide with a newer active case on
+	// the unique active-correlation index.
+	if _, err = tx.ExecContext(ctx, `UPDATE incidents SET status=?,summary=?,last_investigated_at=?,updated_at=? WHERE id=? AND status NOT IN (?,?)`, string(nextStatus), item.Conclusion, timeText(completed), timeText(completed), item.IncidentID, string(domain.IncidentResolved), string(domain.IncidentDismissed)); err != nil {
 		return err
 	}
 	details, _ := json.Marshal(map[string]any{"confidence": item.Confidence, "responsePlanCreated": plan != nil && len(plan.Steps) > 0})
@@ -977,7 +987,11 @@ func syncResponsePlanForActionTx(ctx context.Context, tx *sql.Tx, actionID strin
 	if _, err = tx.ExecContext(ctx, `UPDATE response_plans SET status=?,updated_at=? WHERE id=?`, string(nextPlan), timeText(now), planID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE incidents SET status=?,updated_at=? WHERE id=?`, string(nextIncident), timeText(now), incidentID); err != nil {
+	// A resolved or dismissed incident is an administrator triage decision. A
+	// later action outcome must not move it back into an active state: a newer
+	// active case may already own the correlation key, and the unique index would
+	// then reject the device receipt (or a maintenance sweep) on every retry.
+	if _, err = tx.ExecContext(ctx, `UPDATE incidents SET status=?,updated_at=? WHERE id=? AND status NOT IN (?,?)`, string(nextIncident), timeText(now), incidentID, string(domain.IncidentResolved), string(domain.IncidentDismissed)); err != nil {
 		return err
 	}
 	summary := map[domain.ResponsePlanStatus]string{
