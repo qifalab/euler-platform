@@ -357,7 +357,7 @@ function send(item: Club, kind: string, resend = false) {
             version: item.version,
             idempotencyKey,
           },
-          // SMTP delivery and the bot flush can outlast the 20 s default.
+          // SMTP delivery can outlast the 20 s default.
           timeoutMs: 90_000,
         },
       );

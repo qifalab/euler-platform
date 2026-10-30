@@ -25,6 +25,7 @@ type Module struct {
 	mailer        func(context.Context, Settings, string, string, string) error
 	client        *http.Client
 	smtpTLSConfig func(string) *tls.Config
+	outbox        outbox
 }
 
 // lock serializes club, member, settings and mail operations of one EID
@@ -49,6 +50,8 @@ func (m *Module) lock(s appkit.Scope) func() {
 func New(rt *appkit.Runtime) *Module {
 	m := &Module{rt: rt, mux: http.NewServeMux(), client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect rejected") }}}
 	m.mailer = m.sendSMTP
+	m.outbox.wake = make(chan struct{}, 1)
+	m.outbox.grace = webhookCloseGrace
 	m.routes()
 	return m
 }
@@ -70,7 +73,11 @@ func (m *Module) Migrate(ctx context.Context) error {
  CREATE TABLE IF NOT EXISTS eid_query_keys(id TEXT PRIMARY KEY,installation_id TEXT NOT NULL,tenant_id TEXT NOT NULL,project_id TEXT NOT NULL,name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,actors TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at TEXT NOT NULL,revoked_at TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS eid_notifications(id TEXT PRIMARY KEY,installation_id TEXT NOT NULL,tenant_id TEXT NOT NULL,project_id TEXT NOT NULL,target_id TEXT NOT NULL,actor_id TEXT NOT NULL,kind TEXT NOT NULL,data BLOB NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',idempotency_key TEXT NOT NULL,created_at TEXT NOT NULL,completed_at TEXT NOT NULL DEFAULT '',UNIQUE(installation_id,idempotency_key));
  `)
-	return err
+	if err != nil {
+		return err
+	}
+	m.startWebhookWorker(ctx)
+	return nil
 }
 func (m *Module) routes() {
 	h := func(pattern, permission string, f appkit.Endpoint) {
@@ -80,7 +87,9 @@ func (m *Module) routes() {
 			}
 			err := f(w, r, s)
 			if err == nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
-				m.flushWebhooks(r.Context(), s)
+				// Bot notifications committed by this write are sent by the
+				// module's worker; the response never waits for an endpoint.
+				m.notifyWebhooks(s)
 			}
 			return err
 		})

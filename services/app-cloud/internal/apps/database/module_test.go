@@ -81,9 +81,6 @@ func (e *fakeEngine) ReadOnly(ctx context.Context, db, user string, ro bool) err
 	e.resources[db] = v
 	return nil
 }
-func (e *fakeEngine) Repair(ctx context.Context, db, user string) error {
-	return e.ReadOnly(ctx, db, user, false)
-}
 func (e *fakeEngine) state(db string) fakeDatabase {
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -124,7 +124,7 @@ SQLite、平台加密主密钥、真实数据库和 S3 数据必须一起纳入�
 
 真实服务验收以独立测试基础设施运行，不能把替身测试写成真实服务已通过：
 
-- `TestRealEngines`：设置 `EULER_TEST_MYSQL_DSN` 和 `EULER_TEST_POSTGRES_DSN`，实测创建、写入、大小、跨库隔离、现有/新会话只读拒写、PG 过程/函数权限、恢复 DDL、密码轮换、删除及操作审计。
+- `TestRealEngines`：设置 `EULER_TEST_MYSQL_DSN` 和 `EULER_TEST_POSTGRES_DSN`，实测创建、写入、大小（写入约 4 MB 后读数增长，MySQL 不读 24 小时统计缓存）、跨库隔离、现有/新会话只读拒写、PG 过程/函数权限、恢复 DDL、密码轮换、删除及操作审计。
 - `TestRealS3`：设置 `EULER_TEST_S3_ENDPOINT`、`EULER_TEST_S3_ACCESS_KEY`、`EULER_TEST_S3_SECRET_KEY`、`EULER_TEST_S3_SECURE`、`EULER_TEST_S3_CORS_MODE`，实测桶/策略、配置的 CORS 模式、带大小条件的签名 POST、确认发布、列表与读回、签名下载、拒绝匿名 S3 绕过、同步统计和删除。
 
 没有上述测试环境变量时，真实服务测试明确 skip；CI 配置提供隔离 MySQL 8.4、PostgreSQL 17 和 S3/MinIO 数据面。
