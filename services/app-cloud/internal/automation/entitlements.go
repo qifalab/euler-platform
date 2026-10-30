@@ -26,6 +26,11 @@ func template(ctx context.Context, tx *sql.Tx, r Rule) (name, quota string, days
 	}
 	var active bool
 	err = tx.QueryRowContext(ctx, "SELECT name,quota,days,active FROM "+prefix+"_templates WHERE id=? AND tenant_id=? AND project_id=?", r.TemplateID, r.TenantID, r.TargetProjectID).Scan(&name, &quota, &days, &active)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Typed: the platform turns a raw ErrNoRows into HTTP 500, and the worker
+		// treats a missing object as a deterministic failure.
+		err = appkit.NotFound()
+	}
 	if err != nil {
 		return
 	}
@@ -78,7 +83,10 @@ func (e *Engine) revoke(ctx context.Context, tx *sql.Tx, s appkit.Scope, r Rule,
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE "+prefix+"_grants SET expires_at=? WHERE id=? AND tenant_id=? AND project_id=?", appkit.Now(), id, r.TenantID, r.TargetProjectID)
+	// Revocation ends an active package now. An already expired package keeps its
+	// recorded expiry instead of being moved forward to the revocation time.
+	now := appkit.Now()
+	_, err = tx.ExecContext(ctx, "UPDATE "+prefix+"_grants SET expires_at=? WHERE id=? AND tenant_id=? AND project_id=? AND expires_at>?", now, id, r.TenantID, r.TargetProjectID, now)
 	if err != nil {
 		return err
 	}
