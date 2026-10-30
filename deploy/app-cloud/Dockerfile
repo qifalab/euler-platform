@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.27.1-bookworm AS go-build
+FROM golang:1.27.3-bookworm AS go-build
 WORKDIR /src/services/app-cloud
 COPY services/witshield-engine/ /src/services/witshield-engine/
 COPY services/app-cloud/go.mod services/app-cloud/go.sum ./
