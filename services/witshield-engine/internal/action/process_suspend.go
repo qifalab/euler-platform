@@ -112,10 +112,20 @@ func (p *TemporaryProcessSuspendPlaybook) inspect(params TemporaryProcessSuspend
 	if err != nil {
 		return identity, err
 	}
-	if identity.PID != params.PID || identity.StartTime != params.StartTime || strings.TrimSuffix(identity.Executable, " (deleted)") != params.Executable || identity.UID != 0 {
+	if identity.PID != params.PID || identity.StartTime != params.StartTime || strings.TrimSuffix(identity.Executable, deletedExecutableSuffix) != params.Executable || identity.UID != 0 {
 		return identity, errors.New("process identity changed or is not the expected privileged process")
 	}
 	return identity, nil
+}
+
+// deletedExecutableSuffix is appended by the kernel to /proc/<pid>/exe once the
+// running binary is unlinked; the process image itself is unchanged.
+const deletedExecutableSuffix = " (deleted)"
+
+// sameProcessExecutable compares two /proc/<pid>/exe readings of one process,
+// ignoring whether the binary was unlinked between them.
+func sameProcessExecutable(observed, recorded string) bool {
+	return strings.TrimSuffix(observed, deletedExecutableSuffix) == strings.TrimSuffix(recorded, deletedExecutableSuffix)
 }
 
 func (p *TemporaryProcessSuspendPlaybook) Precheck(_ context.Context, invocation Invocation) (Result, error) {
@@ -186,7 +196,7 @@ func (p *TemporaryProcessSuspendPlaybook) Verify(_ context.Context, invocation I
 		if err != nil {
 			return Result{}, err
 		}
-		if identity.StartTime != state.StartTime || identity.Executable != state.Executable {
+		if identity.StartTime != state.StartTime || !sameProcessExecutable(identity.Executable, state.Executable) {
 			return Result{}, errors.New("process identity changed before suspension could be verified")
 		}
 		if identity.Stopped {
@@ -234,7 +244,7 @@ func (p *TemporaryProcessSuspendPlaybook) resumeExact(state temporaryProcessSusp
 		}
 		return Result{}, err
 	}
-	if identity.StartTime != state.StartTime || identity.Executable != state.Executable {
+	if identity.StartTime != state.StartTime || !sameProcessExecutable(identity.Executable, state.Executable) {
 		return Result{Summary: "PID was reused; no signal sent to the replacement process"}, nil
 	}
 	if !identity.Stopped {

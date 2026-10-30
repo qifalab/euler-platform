@@ -41,6 +41,11 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		err := s.Tick(ctx)
+		if err != nil && ctx.Err() != nil {
+			// Shutdown or an installation disable cancelled this tick; that is
+			// not a scheduler failure and must not mark the worker degraded.
+			return ctx.Err()
+		}
 		if s.observer != nil {
 			s.observer(err)
 		}

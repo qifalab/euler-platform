@@ -434,7 +434,12 @@ func hardenSSHConfig(content []byte) ([]byte, int) {
 			continue
 		}
 		fields := strings.Fields(trimmed)
-		if len(fields) > 0 && !strings.HasPrefix(fields[0], "#") && strings.EqualFold(fields[0], "PasswordAuthentication") {
+		keyword := ""
+		if len(fields) > 0 {
+			// sshd also accepts "Keyword=value" as one token.
+			keyword, _, _ = strings.Cut(fields[0], "=")
+		}
+		if keyword != "" && !strings.HasPrefix(keyword, "#") && strings.EqualFold(keyword, "PasswordAuthentication") {
 			directiveSeen = true
 			if len(fields) != 2 || !strings.EqualFold(fields[1], "no") || strings.TrimSpace(line) != "PasswordAuthentication no" {
 				changed++

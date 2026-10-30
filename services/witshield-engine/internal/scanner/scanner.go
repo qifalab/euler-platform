@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/domain"
 	"github.com/qifalab/euler-platform/services/witshield-engine/internal/ids"
@@ -265,10 +267,17 @@ func checkSSH(ctx context.Context, h Host) ([]domain.Finding, error) {
 		if err != nil {
 			return nil, err
 		}
-		if strings.Contains(strings.ToLower(string(b)), "include ") {
+		if strings.Contains(strings.ToLower(string(b)), "include ") || sshdConfigIncludes(string(b)) {
 			return nil, errors.New("effective SSH configuration unavailable and sshd_config contains Include directives")
 		}
 		settings = parseSSHD(string(b))
+		// sshd -T prints compiled defaults for unset keywords; a parsed file
+		// does not, so supply them to report the same effective values.
+		for key, value := range sshdCompiledDefaults {
+			if _, ok := settings[key]; !ok {
+				settings[key] = value
+			}
+		}
 	}
 	var out []domain.Finding
 	if strings.EqualFold(settings["passwordauthentication"], "yes") {
@@ -282,23 +291,68 @@ func checkSSH(ctx context.Context, h Host) ([]domain.Finding, error) {
 	}
 	return out, nil
 }
+
+// sshdCompiledDefaults are the OpenSSH (>= 7.0) defaults of the keywords
+// checkSSH evaluates, used when sshd_config leaves them unset.
+var sshdCompiledDefaults = map[string]string{
+	"passwordauthentication": "yes",
+	"permitrootlogin":        "prohibit-password",
+}
+
+// parseSSHD returns the global settings, first value winning as in sshd.
 func parseSSHD(s string) map[string]string {
 	out := map[string]string{}
 	scanner := bufio.NewScanner(strings.NewReader(s))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(strings.ToLower(line), "match ") {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			key := strings.ToLower(fields[0])
+		keyword, value := sshdDirective(line)
+		if strings.EqualFold(keyword, "match") {
+			// Every line after the first Match belongs to a conditional block
+			// (there is no way back to the global section), so none of them is
+			// a global value.
+			break
+		}
+		if value != "" {
+			key := strings.ToLower(keyword)
 			if _, ok := out[key]; !ok {
-				out[key] = fields[1]
+				out[key] = value
 			}
 		}
 	}
 	return out
+}
+
+// sshdDirective splits a trimmed sshd_config line into its keyword and first
+// argument the way sshd does: whitespace or a single '=' separates them, and
+// the argument may be double-quoted.
+func sshdDirective(line string) (string, string) {
+	end := strings.IndexFunc(line, func(r rune) bool { return r == '=' || unicode.IsSpace(r) })
+	if end < 0 {
+		return line, ""
+	}
+	rest := strings.TrimLeftFunc(line[end:], unicode.IsSpace)
+	rest = strings.TrimLeftFunc(strings.TrimPrefix(rest, "="), unicode.IsSpace)
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return line[:end], ""
+	}
+	return line[:end], strings.Trim(fields[0], `"`)
+}
+
+func sshdConfigIncludes(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if keyword, _ := sshdDirective(line); strings.EqualFold(keyword, "include") {
+			return true
+		}
+	}
+	return false
 }
 
 func checkPasswd(_ context.Context, h Host) ([]domain.Finding, error) {
@@ -401,9 +455,20 @@ func checkPorts(_ context.Context, h Host) ([]domain.Finding, error) {
 	}
 	return findings, nil
 }
+
+// procLoopback reports whether a /proc/net/tcp{,6} local address is loopback
+// (all of 127.0.0.0/8, ::1 and IPv4-mapped loopback). The kernel prints each
+// 32-bit word of the network-order address as a native-endian integer.
 func procLoopback(hexAddr string) bool {
-	upper := strings.ToUpper(hexAddr)
-	return upper == "0100007F" || upper == "00000000000000000000000001000000"
+	raw, err := hex.DecodeString(hexAddr)
+	if err != nil || (len(raw) != net.IPv4len && len(raw) != net.IPv6len) {
+		return false
+	}
+	ip := make(net.IP, len(raw))
+	for word := 0; word < len(raw); word += 4 {
+		binary.NativeEndian.PutUint32(ip[word:], binary.BigEndian.Uint32(raw[word:]))
+	}
+	return ip.IsLoopback()
 }
 
 func checkFirewall(ctx context.Context, h Host) ([]domain.Finding, error) {
