@@ -5,6 +5,7 @@ import Evidence from "./Evidence.vue";
 import {
   key,
   label,
+  utf8Length,
   when,
   type Device,
   type SecurityIncident,
@@ -97,6 +98,10 @@ async function investigate() {
 async function setStatus(status: "open" | "resolved" | "dismissed") {
   if (!detail.value) return;
   const id = detail.value.incident.id;
+  if (utf8Length(statusNote.value.trim()) > 1000) {
+    error.value = "状态变更说明最多 1000 字节（约 333 个汉字），请精简后再提交";
+    return;
+  }
   if (
     status !== "open" &&
     !confirm(
@@ -115,6 +120,7 @@ async function setStatus(status: "open" | "resolved" | "dismissed") {
   }, "事件状态已更新");
 }
 async function prepare(planId: string, stepId: string) {
+  const id = detail.value?.incident.id;
   await run(async () => {
     emit(
       "prepared",
@@ -123,6 +129,13 @@ async function prepare(planId: string, stepId: string) {
         { method: "POST", body: {} },
       ),
     );
+    // The engine links the draft action to this step and moves the incident
+    // to awaiting approval in the same transaction; show that state instead
+    // of a stale "prepare" button that would now fail with a conflict.
+    if (id && detail.value?.incident.id === id)
+      detail.value = await app.request<IncidentDetail>(`/incidents/${key(id)}`);
+    await load();
+    emit("changed");
   });
 }
 async function savePolicy() {
@@ -150,6 +163,10 @@ async function savePolicy() {
 async function send() {
   const message = chat.message.trim();
   if (!message) return;
+  if (utf8Length(message) > 16384) {
+    error.value = "问题最多 16384 字节（约 5461 个汉字），请精简后再发送";
+    return;
+  }
   await run(async () => {
     messages.value.push({ role: "user", text: message });
     chat.message = "";
@@ -512,7 +529,7 @@ onMounted(load);
             >状态变更说明<textarea
               v-model="statusNote"
               rows="2"
-              maxlength="2000"
+              maxlength="1000"
             ></textarea>
           </label>
           <div class="actions">

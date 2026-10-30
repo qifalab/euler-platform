@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/qifalab/euler-platform/services/app-cloud/internal/appkit"
 	engine "github.com/qifalab/euler-platform/services/witshield-engine/integration"
@@ -158,10 +159,13 @@ func (m *Module) Handler() http.Handler {
 			// failed audit must never turn an unknown external outcome into success.
 			recorder := newResponse()
 			e.ServeManagement(recorder, clone, s.ActorID)
-			if mutates {
-				if err = m.rt.Audit(r.Context(), nil, s, "operation.completed", s.InstallationID, fmt.Sprintf("安全引擎操作结果：%s，HTTP %d", route.Pattern, recorder.statusCode())); err != nil {
-					return appkit.Unavailable("操作结果审计暂不可用，请查询当前状态后再决定是否重试")
-				}
+			// The engine has already acted. A browser timeout, navigation or project
+			// switch cancels r.Context(); the outcome must still be recorded.
+			auditCtx, cancelAudit := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+			err = m.rt.Audit(auditCtx, nil, s, "operation.completed", s.InstallationID, fmt.Sprintf("安全引擎操作结果：%s，HTTP %d", route.Pattern, recorder.statusCode()))
+			cancelAudit()
+			if err != nil {
+				return appkit.Unavailable("操作结果审计暂不可用，请查询当前状态后再决定是否重试")
 			}
 			recorder.writeTo(w)
 			return nil

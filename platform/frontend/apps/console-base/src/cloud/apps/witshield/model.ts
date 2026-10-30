@@ -141,12 +141,27 @@ export const statusNames: Record<string, string> = {
   info: "提示",
 };
 export const label = (value: string) => statusNames[value] ?? value;
+// Same states as the engine's RequestRollbackAndEnqueue. A failed or
+// indeterminate action keeps its recorded recovery state so an administrator
+// can still request a manual rollback after checking the device.
+const rollbackStatuses = [
+  "succeeded",
+  "awaiting_confirmation",
+  "failed",
+  "indeterminate",
+];
+export const canRequestRollback = (action: Action) =>
+  !!action.rollbackPayload && rollbackStatuses.includes(action.status);
 export function when(value?: string) {
   if (!value || value.startsWith("0001-")) return "尚无记录";
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString("zh-CN");
 }
 export const key = (value: string) => encodeURIComponent(value);
+// The engine bounds text fields in UTF-8 bytes (len() in Go), while maxlength
+// counts UTF-16 units; one Chinese character is three bytes.
+export const utf8Length = (value: string) =>
+  new TextEncoder().encode(value).length;
 export const split = (value: string) =>
   value
     .split(/[\n,，]/)

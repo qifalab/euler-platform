@@ -8,6 +8,7 @@ import Evidence from "./Evidence.vue";
 import ActionReview from "./ActionReview.vue";
 import {
   actionNames,
+  canRequestRollback,
   label,
   when,
   key,
@@ -92,6 +93,17 @@ const workerNames: Record<string, string> = {
 };
 const deviceName = (id: string) =>
   devices.value.find((d) => d.id === id)?.name ?? id;
+// GET /audit returns action_audit rows ({id, actionId, actor, event, details,
+// createdAt}); the device and operation come from the audited action.
+function auditTarget(event: Audit) {
+  const item = actions.value.find((a) => a.id === event.actionId);
+  const deviceId = event.deviceId ?? item?.deviceId;
+  const parts = [
+    item ? (actionNames[item.type] ?? item.type) : event.actionId,
+    deviceId ? deviceName(deviceId) : undefined,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "项目";
+}
 async function items<T>(path: string) {
   return (await app.request<{ items: T[] }>(path)).items ?? [];
 }
@@ -251,6 +263,10 @@ watch(selectedFinding, () => {
   aiExplanation.value = "";
 });
 watch(deviceFilter, () => {
+  // A cursor belongs to the filter that produced it; never page another
+  // device's observations with it.
+  events.value = [];
+  eventCursor.value = "";
   void run(async () => {
     if (deviceFilter.value)
       reports.value = await items<Report>(
@@ -549,8 +565,7 @@ onMounted(load);
           <div>
             <strong>{{ event.summary || event.event }}</strong>
             <p class="muted">
-              {{ event.actor }} ·
-              {{ event.deviceId ? deviceName(event.deviceId) : "项目" }} ·
+              {{ event.actor }} · {{ auditTarget(event) }} ·
               {{ when(event.createdAt) }}
             </p>
             <details v-if="event.details">
@@ -725,13 +740,7 @@ onMounted(load);
             提交连通确认
           </button></template
         ><button
-          v-if="
-            selectedAction.action.rollbackPayload &&
-            ['succeeded', 'awaiting_confirmation'].includes(
-              selectedAction.action.status,
-            ) &&
-            app.can('manage')
-          "
+          v-if="canRequestRollback(selectedAction.action) && app.can('manage')"
           :disabled="busy"
           @click="actionOperation('rollback')"
         >
