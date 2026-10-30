@@ -419,6 +419,13 @@ func (m *Module) directUpload(w http.ResponseWriter, r *http.Request, s appkit.S
 	if e != nil {
 		return e
 	}
+	// The proxy writes staging itself under the project lock and never issues
+	// a POST policy, so nothing outlives this request that a client could
+	// replay. End the row with the request: a failed write releases its
+	// reservation and the versioning guard waits only for real permits.
+	defer func() {
+		_, _ = m.rt.DB.ExecContext(context.Background(), "UPDATE storage_uploads SET expires_at=? WHERE id=? AND expires_at>?", appkit.Now(), id, appkit.Now())
+	}()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 120*time.Second)
 	defer cancel()
 	if e = m.plane.Put(ctx, b.Name, "staging/"+id, tmp, size, contentType); e != nil {

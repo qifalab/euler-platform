@@ -173,18 +173,24 @@ async function loadFiles() {
 async function act(
   fn: () => Promise<unknown>,
   message?: string,
-  reload = true,
+  reload: boolean | "always" = true,
 ) {
   if (busy.value) return;
   busy.value = true;
   error.value = "";
+  let failure = "";
   try {
     await fn();
     if (message) app.notify(message);
-    if (reload) await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "操作失败";
+    failure = e instanceof Error ? e.message : "操作失败";
+  }
+  try {
+    // "always": a multi-item action can fail after earlier items changed, so
+    // the list is re-read even then; the failure message is shown afterwards.
+    if (reload === "always" || (reload && !failure)) await load();
   } finally {
+    if (failure) error.value = failure;
     busy.value = false;
   }
 }
@@ -246,10 +252,26 @@ async function removeBucket(b: Bucket) {
   )
     return;
   await act(async () => {
-    await app.request(`/buckets/${b.id}?force=${force}`, {
-      method: "DELETE",
-      timeoutMs: 120000,
-    });
+    const remove = (all: boolean) =>
+      app.request(`/buckets/${b.id}?force=${all}`, {
+        method: "DELETE",
+        timeoutMs: 120000,
+      });
+    try {
+      await remove(force);
+    } catch (e) {
+      // Usage stats skip empty folder markers and unfinished uploads' staging
+      // files, so the server may refuse a plain delete and require force.
+      if (
+        force ||
+        (e as { status?: number }).status !== 409 ||
+        !confirm(
+          `存储桶“${b.displayName}”内仍有目录标记或未完成上传的临时文件。永久删除这些内容并删除存储桶？`,
+        )
+      )
+        throw e;
+      await remove(true);
+    }
     if (bucket.value?.id === b.id) bucket.value = null;
   }, "存储桶已删除");
 }
@@ -276,13 +298,13 @@ async function removeBatch() {
   await act(async () => {
     const value = await app.request<{ deleted: string[]; failed: string[] }>(
       `/buckets/${bucket.value!.id}/objects/delete-batch`,
-      { method: "POST", body: { keys: selected.value } },
+      { method: "POST", body: { keys: selected.value }, timeoutMs: 120000 },
     );
     if (value.failed.length)
       throw new Error(
         `已删除 ${value.deleted.length} 个，${value.failed.length} 个未完成，请刷新后核验。`,
       );
-  }, "选中对象已删除");
+  }, "选中对象已删除", "always");
 }
 async function signed(o: FileObject, copyLink = false) {
   if (!bucket.value) return;
@@ -402,7 +424,7 @@ async function upload(event: Event) {
       });
     }
     uploadProgress.value = "";
-  }, "文件上传完成");
+  }, "文件上传完成", "always");
   uploadProgress.value = "";
   if (fileInput.value) fileInput.value.value = "";
 }
@@ -722,7 +744,7 @@ onMounted(load);
       </div>
     </section>
     <section v-if="tab === 'packages'" class="panel">
-      <PackagesPanel kind="storage" />
+      <PackagesPanel kind="storage" @changed="load" />
     </section>
     <section v-if="tab === 'keys' && app.can('manage')" class="panel">
       <header>

@@ -50,11 +50,15 @@ func (m *Module) objects(w http.ResponseWriter, r *http.Request, s appkit.Scope)
 	next := ""
 	for _, v := range items {
 		v.Key = strings.TrimPrefix(v.Key, "files/")
+		// S3 adapters may return a page's folders after its files, so resume
+		// after the greatest key on the page rather than the last one.
+		if v.Key > next {
+			next = v.Key
+		}
 		if v.Key == prefix && v.Folder {
 			continue
 		}
 		out = append(out, v)
-		next = v.Key
 	}
 	appkit.JSON(w, 200, map[string]any{"items": out, "hasMore": more, "next": next, "prefix": prefix})
 	return nil
@@ -410,6 +414,15 @@ func (m *Module) publicURL(w http.ResponseWriter, r *http.Request, s appkit.Scop
 	return nil
 }
 func (m *Module) removeObject(ctx context.Context, s appkit.Scope, b Bucket, key string) error {
+	if e := m.deleteRecorded(ctx, s, b, key); e != nil {
+		return e
+	}
+	return m.syncProject(ctx, s)
+}
+
+// deleteRecorded deletes one object and records the outcome. The caller
+// reconciles project usage afterwards (once per request, not once per key).
+func (m *Module) deleteRecorded(ctx context.Context, s appkit.Scope, b Bucket, key string) error {
 	old, e := m.plane.Stat(ctx, b.Name, "files/"+key)
 	if absent(e) {
 		return appkit.NotFound()
@@ -438,7 +451,7 @@ func (m *Module) removeObject(ctx context.Context, s appkit.Scope, b Bucket, key
 	if externalErr != nil {
 		return appkit.Unavailable("删除对象结果未确认")
 	}
-	return m.syncProject(ctx, s)
+	return nil
 }
 func (m *Module) deleteObject(w http.ResponseWriter, r *http.Request, s appkit.Scope) error {
 	key := r.URL.Query().Get("key")
@@ -481,11 +494,17 @@ func (m *Module) deleteBatch(w http.ResponseWriter, r *http.Request, s appkit.Sc
 	deleted := []string{}
 	failed := []string{}
 	for _, key := range input.Keys {
-		if e = m.removeObject(r.Context(), s, b, key); e != nil {
+		if e = m.deleteRecorded(r.Context(), s, b, key); e != nil {
 			failed = append(failed, key)
 		} else {
 			deleted = append(deleted, key)
 		}
+	}
+	// Each delete already adjusted the recorded usage; re-measure once so
+	// versioned history is exact. A failed re-measure leaves the per-key result
+	// true, and every reservation re-measures before it checks capacity.
+	if len(deleted) > 0 {
+		_ = m.syncProject(r.Context(), s)
 	}
 	appkit.JSON(w, 200, map[string]any{"deleted": deleted, "failed": failed})
 	return nil
