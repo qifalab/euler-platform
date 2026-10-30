@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"hash/fnv"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -323,7 +324,7 @@ func (m *Module) credentials(w http.ResponseWriter, r *http.Request, s appkit.Sc
 		q := u.Query()
 		q.Set("username", v.Username)
 		q.Set("db", v.Database)
-		host := cfg.Host + ":" + strconv.Itoa(cfg.Port)
+		host := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 		if v.Type == "mysql" {
 			q.Set("mysql", "")
 			q.Set("server", host)

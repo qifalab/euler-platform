@@ -255,6 +255,20 @@ type period struct {
 	loc      *time.Location
 }
 
+// dayStart returns the first instant of the calendar day (a UTC date) in loc.
+// Where DST starts at 00:00 (America/Santiago, Africa/Cairo) local midnight does
+// not exist and time.Date may normalize into the previous day; that day then
+// begins at the transition that ends the previous zone period.
+func dayStart(day time.Time, loc *time.Location) time.Time {
+	t := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
+	if y, m, d := t.Date(); y != day.Year() || m != day.Month() || d != day.Day() {
+		if _, end := t.ZoneBounds(); !end.IsZero() {
+			return end
+		}
+	}
+	return t
+}
+
 func (m *Module) readPeriod(r *http.Request, id string, required bool) (period, error) {
 	settings, e := m.getSettings(r.Context(), id)
 	if e != nil {
@@ -285,20 +299,19 @@ func (m *Module) readPeriod(r *http.Request, id string, required bool) (period, 
 			p.From = now.In(loc).AddDate(0, 0, -29).Format(time.DateOnly)
 			p.To = now.In(loc).Format(time.DateOnly)
 		}
-		start, e = time.ParseInLocation(time.DateOnly, p.From, loc)
+		startCalendar, e := time.Parse(time.DateOnly, p.From)
 		if e != nil {
 			return p, appkit.Invalid("开始日期须为 YYYY-MM-DD")
 		}
-		end, e = time.ParseInLocation(time.DateOnly, p.To, loc)
+		endCalendar, e := time.Parse(time.DateOnly, p.To)
 		if e != nil {
 			return p, appkit.Invalid("结束日期须为 YYYY-MM-DD")
 		}
-		end = end.AddDate(0, 0, 1)
-		startCalendar, _ := time.Parse(time.DateOnly, p.From)
-		endCalendar, _ := time.Parse(time.DateOnly, p.To)
-		if !start.Before(end) || endCalendar.Sub(startCalendar) >= 366*24*time.Hour {
+		if endCalendar.Before(startCalendar) || endCalendar.Sub(startCalendar) >= 366*24*time.Hour {
 			return p, appkit.Invalid("日期范围须为 1–366 天")
 		}
+		start = dayStart(startCalendar, loc)
+		end = dayStart(endCalendar.AddDate(0, 0, 1), loc)
 		if start.Before(cutoff) {
 			start = cutoff
 		}
@@ -322,6 +335,7 @@ type dailyPoint struct {
 	PageViews      int    `json:"pageViews"`
 	UniqueVisitors int    `json:"uniqueVisitors"`
 	Events         int    `json:"events"`
+	eventVisitors  int    // CSV daily_events unique_visitors; not part of the JSON contract
 }
 type analysis struct {
 	Period         period       `json:"period"`
@@ -401,7 +415,7 @@ func (m *Module) analyze(ctx context.Context, id string, p period) (analysis, er
 	browsers := map[string]*accumulator{}
 	events := map[string]*accumulator{}
 	days := map[string]*accumulator{}
-	eventDays := map[string]int{}
+	eventDays := map[string]*accumulator{}
 	visitors := map[string]bool{}
 	rows, e := m.rt.DB.QueryContext(ctx, "SELECT visitor_hash,referrer,user_agent,visited_at,url FROM statistics_views WHERE site_id=? AND visited_at>=? AND visited_at<? ORDER BY visited_at,id LIMIT ?", id, p.Start, p.End, maxAnalysisRows+1)
 	if e != nil {
@@ -460,7 +474,7 @@ func (m *Module) analyze(ctx context.Context, id string, p period) (analysis, er
 			rows.Close()
 			return out, e
 		}
-		eventDays[t.In(p.loc).Format(time.DateOnly)]++
+		addGroup(eventDays, t.In(p.loc).Format(time.DateOnly), visitor)
 		addGroup(events, name, visitor)
 	}
 	e = rows.Err()
@@ -468,20 +482,26 @@ func (m *Module) analyze(ctx context.Context, id string, p period) (analysis, er
 	if e != nil {
 		return out, e
 	}
-	start, e := time.ParseInLocation(time.DateOnly, p.From, p.loc)
+	// Step calendar dates, not local midnights: where DST moves midnight,
+	// AddDate on a local time drifts to 23:00 or 01:00 and repeats or drops a day.
+	first, e := time.Parse(time.DateOnly, p.From)
 	if e != nil {
 		return out, e
 	}
-	end, e := time.ParseInLocation(time.DateOnly, p.To, p.loc)
+	last, e := time.Parse(time.DateOnly, p.To)
 	if e != nil {
 		return out, e
 	}
-	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+	for d := first; !d.After(last); d = d.AddDate(0, 0, 1) {
 		date := d.Format(time.DateOnly)
-		v := dailyPoint{Date: date, Events: eventDays[date]}
+		v := dailyPoint{Date: date}
 		if g := days[date]; g != nil {
 			v.PageViews = g.count
 			v.UniqueVisitors = len(g.visitors)
+		}
+		if g := eventDays[date]; g != nil {
+			v.Events = g.count
+			v.eventVisitors = len(g.visitors)
 		}
 		out.Trend = append(out.Trend, v)
 	}
@@ -544,7 +564,7 @@ func (m *Module) exportCSV(w http.ResponseWriter, r *http.Request, s appkit.Scop
 		if e = write("daily_page_views", d.Date, d.PageViews, d.UniqueVisitors); e != nil {
 			return e
 		}
-		if e = write("daily_events", d.Date, d.Events, 0); e != nil {
+		if e = write("daily_events", d.Date, d.Events, d.eventVisitors); e != nil {
 			return e
 		}
 	}
